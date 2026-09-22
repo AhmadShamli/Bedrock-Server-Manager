@@ -89,13 +89,18 @@ flowchart TD
 - **Circuit Breaker**: Auto-restart on unexpected exit with exponential backoff; halts auto-restart if 5 crashes occur within a 5-minute window.
 - **Resource Constraints**: Configurable per-server RAM and CPU limits (enforced via Docker container flags in Docker mode, or process monitoring alerts on bare-metal).
 
-### 5.2. Telemetry & Dedicated Metrics Storage
+### 5.2. Telemetry, Downsampling & Tiered Rollups
 - **Dedicated Metrics DB (`data/metrics.db`)**: High-write frequency time-series database isolated from relational metadata.
 - **WAL Mode (`PRAGMA journal_mode=WAL`)**: Non-blocking concurrent reads and writes; chart queries never block metric ingestion.
-- **In-Memory Batched Writes**: Ingests samples in-memory and flushes in a single batch transaction every 30 seconds to minimize disk I/O and prevent flash/SSD wear.
-- Records CPU %, RAM usage, and active player counts at regular intervals.
-- Automatic data retention policy prunes entries older than 24 hours to keep the database file compact (~2-4 MB).
-- Dashboard renders interactive time-series performance charts.
+- **Configurable Collection Interval (Admin Setting)**:
+  - Default: **Every 2 seconds** (`collection_interval_seconds = 2`).
+  - Configurable via Admin Settings (e.g. 1s, 2s, 5s, 10s).
+- **In-Memory Buffer & Batched Disk Flush**: Ingests high-frequency samples in an in-memory queue and flushes in bulk transactions (every 30s) to minimize disk I/O and prevent flash/SSD wear.
+- **Tiered Rollup & Downsampling Architecture**:
+  - **Raw Samples (High Resolution, e.g. 2s)**: Stored in `metrics_raw` for real-time live gauges and short-term 1-hour window. Pruned after 2–6 hours.
+  - **5-Minute Rollups (`metrics_5m`)**: Downsampled every 5 minutes (`AVG`, `MAX`, `MIN` for CPU %, RAM bytes, and player count). Retained for 7 days.
+  - **1-Hour Rollups (`metrics_1h`)**: Downsampled every hour from 5-minute data. Retained for 30–90 days for long-term capacity planning.
+- **Fast Dashboard Queries**: Charts automatically query the appropriate tier (e.g. "1h" view queries raw, "24h" view queries 5m rollups [only ~288 points], "30d" view queries 1h rollups), rendering in <1ms without lag.
 
 ### 5.3. Task Scheduler & Broadcast Automations
 - Unified cron-based scheduler supporting:

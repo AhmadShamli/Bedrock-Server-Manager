@@ -17,9 +17,13 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
     - AuditLogs table (id, user_id, action, details, timestamp)
   - **Telemetry DB (`data/metrics.db`)**:
     - SQLite configured in WAL mode (`PRAGMA journal_mode=WAL`)
+    - Configurable collection interval (Admin setting, default: 2 seconds)
     - In-memory collection buffer flushed in transactions every 30 seconds
-    - ServerMetrics table (server_id, timestamp, cpu_percent, ram_bytes, player_count)
-    - Pruning routine to automatically purge samples older than 24 hours
+    - `metrics_raw` table (server_id, timestamp, cpu_percent, ram_bytes, player_count)
+    - `metrics_5m` rollup table (server_id, timestamp, avg/max/min cpu, ram, player_count)
+    - `metrics_1h` rollup table (server_id, timestamp, avg/max/min cpu, ram, player_count)
+    - Background rollup worker (aggregates raw into 5m every 5 minutes, 5m into 1h every hour)
+    - Tiered data retention pruner (raw: 6h, 5m: 7d, 1h: 30d)
 - [ ] Implement JWT Authentication & User management (`internal/auth`, `internal/api/auth.go`):
   - Password hashing via Argon2id
   - Login / refresh / me endpoints
