@@ -65,8 +65,10 @@ flowchart TD
 - **Update Banner with 1-Click Upgrade**: Periodically checks for new upstream BDS releases, displaying an upgrade notification banner in the web UI. 1-click upgrade automatically triggers a safety hot-backup of the server prior to pulling the new image and recreating the container.
 - **1-Click Server Cloning**: Duplicates an existing server instance (configs, world, behavior/resource packs) into a new server with an automatically allocated, non-conflicting port.
 - **Full Server Export**: Downloads the entire server instance as a single portable `.zip` bundle (including configs, packs, and world) for straightforward migration, disaster recovery, or sharing between hosts.
+- **Auto-Start on Boot**: Per-server configurable toggle (`autostart_on_boot: boolean`). When the manager daemon initializes (e.g. host restart or container start), designated server instances automatically launch without manual intervention.
 
-### 4.2. Configuration Management (Configuration-Only Editor)
+### 4.2. Configuration Management (GUI-Managed & Configuration-Only)
+- **Strictly GUI-Managed Settings**: All server and container settings are managed via validated form inputs (no arbitrary environment variable injection or unvalidated text blobs), ensuring security and preventing container launch failures.
 - Visual form editors and structured JSON/properties editors restricted to designated server files:
   - `server.properties` (Gamemode, difficulty, max players, allow-cheats, level-seed, tick-distance, etc.).
   - `allowlist.json` (`[{"name": "...", "xuid": "...", "ignoresPlayerLimit": false}]`).

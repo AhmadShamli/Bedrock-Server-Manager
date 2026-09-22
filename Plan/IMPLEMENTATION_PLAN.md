@@ -11,7 +11,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - **Primary DB (`data/manager.db`)**:
     - Users table (id, username, password_hash, role, created_at)
     - UserServerAccess table (user_id, server_id) for granular per-server Operator access control
-    - Servers table (id, name, version, port, portv6, status, mode, created_at, memory_limit, cpu_limit)
+    - Servers table (id, name, version, port, portv6, status, mode, autostart_on_boot, created_at, memory_limit, cpu_limit)
     - Backups table (id, server_id, filename, size, type, status, created_at)
     - Tasks table (id, server_id, cron_expr, action, payload, last_run, next_run, enabled)
     - AuditLogs table (id, user_id, action, details, timestamp)
@@ -42,6 +42,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
     - CPU quota & limit (`Resources.NanoCPUs`)
   - Volume binding: maps host `./data/servers/{id}` into container `/data`
   - Container lifecycle: `Start`, `Stop` (graceful BDS stop with timeout fallback), `Restart`, `Remove`
+  - Boot Manager: queries servers with `autostart_on_boot = true` on daemon launch and starts them cleanly
   - Live console streaming via `ContainerAttach` (stdin/stdout WebSockets with 1,000-line ring buffer)
   - Real-time hardware telemetry sampling via `ContainerStats` (CPU %, RAM RSS/usage, network I/O)
   - Crash-loop circuit breaker (stops auto-restarting if 5 crashes occur within 5 mins) and exponential backoff
