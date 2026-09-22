@@ -5,9 +5,9 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 ---
 
 ## Phase 1: Project Scaffolding & Foundation
-- [ ] Initialize Go module (`go.mod`).
-- [ ] Set up project directory structure (`cmd/`, `internal/`, `web/`, `Plan/`).
-- [ ] Implement dual embedded SQLite databases (`internal/database`) with schema migrations:
+- [x] Initialize Go module (`go.mod`).
+- [x] Set up project directory structure (`cmd/`, `internal/`, `web/`, `Plan/`).
+- [x] Implement dual embedded SQLite databases (`internal/database`) with schema migrations:
   - **Primary DB (`data/manager.db`)**:
     - Users table (id, username, password_hash, role, created_at)
     - UserServerAccess table (user_id, server_id) for granular per-server Operator access control
@@ -26,7 +26,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
     - `metrics_1h` rollup table (server_id, timestamp, avg/max/min cpu, ram, player_count)
     - Background rollup worker (aggregates raw into 5m every 5 minutes, 5m into 1h every hour)
     - Tiered data retention pruner (raw: 6h, 5m: 7d, 1h: 30d)
-- [ ] Implement JWT Authentication & User management (`internal/auth`, `internal/api/auth.go`):
+- [x] Implement JWT Authentication & User management (`internal/auth`, `internal/api/auth.go`):
   - Password hashing via bcrypt (matching `../Funnel`)
   - Keyed HMAC-SHA256 with constant-time verification for knock passphrases (<0.01ms CPU, 0 MB RAM)
   - Login / refresh / me endpoints with 24-hour sliding session and 30-day "Remember Me"

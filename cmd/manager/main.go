@@ -1,0 +1,134 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/api"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/config"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/web"
+)
+
+func main() {
+	cfg := config.LoadConfig()
+
+	log.Println("======================================================")
+	log.Println("     BEDROCK SERVER MANAGER (BSM) - DAEMON START      ")
+	log.Println("======================================================")
+
+	// 1. Open Primary Database
+	mgrDB, err := database.OpenManagerDB(cfg.ManagerDBPath)
+	if err != nil {
+		log.Fatalf("[FATAL] Failed to open manager database at %s: %v", cfg.ManagerDBPath, err)
+	}
+	defer mgrDB.Close()
+	log.Printf("[DB] Manager database initialized at %s", cfg.ManagerDBPath)
+
+	// 2. Open Telemetry Database
+	metricsDB, err := database.OpenMetricsDB(cfg.MetricsDBPath)
+	if err != nil {
+		log.Fatalf("[FATAL] Failed to open metrics database at %s: %v", cfg.MetricsDBPath, err)
+	}
+	defer metricsDB.Close()
+	log.Printf("[DB] Metrics database initialized at %s", cfg.MetricsDBPath)
+
+	ctx := context.Background()
+
+	// 3. Resolve JWT Secret
+	jwtSecretStr := cfg.JWTSecret
+	if jwtSecretStr == "" {
+		stored, err := mgrDB.GetSetting(ctx, "jwt_secret")
+		if err == nil && stored != "" {
+			jwtSecretStr = stored
+		} else {
+			generated, _ := auth.GenerateRandomToken(32)
+			jwtSecretStr = generated
+			_ = mgrDB.SetSetting(ctx, "jwt_secret", jwtSecretStr)
+			log.Println("[Security] Generated and stored persistent JWT secret")
+		}
+	}
+
+	// 4. Resolve Server Pepper for HMAC-SHA256 Knock Keys
+	pepperStr := cfg.Pepper
+	if pepperStr == "" {
+		stored, err := mgrDB.GetSetting(ctx, "pepper")
+		if err == nil && stored != "" {
+			pepperStr = stored
+		} else {
+			generated, _ := auth.GenerateRandomToken(32)
+			pepperStr = generated
+			_ = mgrDB.SetSetting(ctx, "pepper", pepperStr)
+			log.Println("[Security] Generated and stored persistent HMAC pepper")
+		}
+	}
+
+	// 5. Ensure Heartbeat Interval Setting exists (default: 10s)
+	if _, err := mgrDB.GetSetting(ctx, "heartbeat_interval_seconds"); err != nil {
+		_ = mgrDB.SetSetting(ctx, "heartbeat_interval_seconds", strconv.Itoa(int(cfg.HeartbeatInterval.Seconds())))
+	}
+
+	// 6. Initialize IP Resolver & Rate Limiter
+	resolver := ipresolver.NewResolver(cfg.ProxyMode, cfg.TrustedProxies)
+	log.Printf("[Network] Client IP Resolver initialized (Mode: %s)", cfg.ProxyMode)
+
+	// Two-tier rate limiter: Level 1: 5 attempts/5m; Level 2: 10 distinct failed IPs/5m -> 15m circuit breaker
+	rateLimiter := auth.NewRateLimiter(5, 5*time.Minute, 10, 5*time.Minute, 15*time.Minute)
+
+	// 7. Initialize Telemetry Collector
+	telemetryCollector := telemetry.NewTelemetryCollector(metricsDB)
+	telemetryCollector.Start(30*time.Second, 5*time.Minute, 1*time.Hour)
+	defer telemetryCollector.Stop()
+
+	// 8. Build Router
+	router := api.NewRouter(api.RouterOptions{
+		DB:          mgrDB,
+		IPResolver:  resolver,
+		RateLimiter: rateLimiter,
+		JWTSecret:   []byte(jwtSecretStr),
+		Pepper:      pepperStr,
+		WebFS:       web.DistFS(),
+	})
+
+	// 9. Start HTTP Server
+	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
+	srv := &http.Server{
+		Addr:         serverAddr,
+		Handler:      router,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	go func() {
+		log.Printf("[HTTP] Web Dashboard & API listening on http://%s", serverAddr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("[FATAL] HTTP server error: %v", err)
+		}
+	}()
+
+	// 10. Graceful Shutdown
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("[SHUTDOWN] Terminating Bedrock Server Manager gracefully...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("[WARN] Server forced to shutdown: %v", err)
+	}
+
+	log.Println("[SHUTDOWN] Exited cleanly.")
+}
