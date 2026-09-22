@@ -105,6 +105,38 @@ flowchart TD
   2. **Direct BDS Stop**: Immediately issues `stop` command to server stdin and waits for clean process exit without broadcast countdowns.
   3. **Emergency Force Kill**: Forcefully stops container immediately if BDS hangs or deadlocks.
 
+### 4.7. Comprehensive Parameter Taxonomy (Configurable Settings)
+
+All server configuration is organized into structured, validated UI tabs:
+
+| Category | Parameter | Target Mapping | Type / Valid Values | Default |
+| :--- | :--- | :--- | :--- | :--- |
+| **Resources** | Memory Limit (RAM) | Docker `--memory` | Number (MB/GB) | `2048 MB` |
+| | Memory Swap Limit | Docker `--memory-swap` | Number (MB/GB, `0` = disabled) | `0 MB` |
+| | CPU Core Quota | Docker `--cpus` | Number (0.5 to host cores) | `2.0` |
+| | Worker Threads | `MAX_THREADS` | Integer (`0` = auto, 1–16) | `0` |
+| **Networking** | Server IPv4 Port | `server-port` / Docker port | UDP Port (1024–65535) | `19132` |
+| | Server IPv6 Port | `server-portv6` / Docker port | UDP Port (1024–65535) | `19133` |
+| | Online Mode (Xbox Auth) | `online-mode` | Boolean (`true` / `false`) | `true` |
+| **Identity** | Server Display Name | `server-name` (MOTD) | String (max 64 chars) | `Bedrock Server` |
+| | Version Tag | Container Image tag | `LATEST`, `PREVIEW`, or version string | `LATEST` |
+| **Gameplay** | Game Mode | `gamemode` | `survival`, `creative`, `adventure` | `survival` |
+| | Difficulty | `difficulty` | `peaceful`, `easy`, `normal`, `hard` | `normal` |
+| | World Seed | `level-seed` | String / Numeric seed | `""` (Random) |
+| | Allow Cheats | `allow-cheats` | Boolean (`true` / `false`) | `false` |
+| | Default Permission | `default-player-permission-level` | `visitor`, `member`, `operator` | `member` |
+| | Force Texture Pack | `texturepack-required` | Boolean (`true` / `false`) | `false` |
+| **Simulation** | Max Players | `max-players` | Integer (1–100) | `10` |
+| | View Distance | `view-distance` | Integer (8–32 chunks) | `16` |
+| | Tick Distance | `tick-distance` | Integer (4–12 chunks) | `4` |
+| | Player Idle Timeout | `player-idle-timeout` | Integer minutes (`0` = disabled) | `30` |
+| **Security** | Allowlist Enforced | `white-list` / `allow-list` | Boolean (`true` / `false`) | `false` |
+| | Allowlist Ignores Limit | `allow-list-ignores-player-limit` | Boolean (`true` / `false`) | `false` |
+| **Movement** | Server Authoritative Movement | `server-authoritative-movement` | `client-auth`, `server-auth`, `server-auth-with-rewind` | `server-auth` |
+| | Movement Threshold | `player-movement-score-threshold` | Integer | `20` |
+| **Lifecycle** | Auto-Start on Boot | Database `autostart_on_boot` | Boolean (`true` / `false`) | `false` |
+| | Crash Circuit Breaker | Database restart policy | 5 crashes / 5 min circuit breaker | Enabled |
+
 ---
 
 ## 5. Reliability, Telemetry & Automation
