@@ -1096,6 +1096,143 @@ func (db *ManagerDB) UpdateTaskRun(ctx context.Context, id int64, lastRun time.T
 	return err
 }
 
+// --- Global Player Access Operations ---
+
+func (db *ManagerDB) ListGlobalPlayers(ctx context.Context) ([]*models.GlobalPlayer, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, name, xuid, is_allowlisted, permission, ignores_player_limit, created_at, updated_at
+		FROM global_players
+		ORDER BY name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var players []*models.GlobalPlayer
+	for rows.Next() {
+		var (
+			p               models.GlobalPlayer
+			allowlistedInt  int
+			ignoresLimitInt int
+			createdAtStr    string
+			updatedAtStr    string
+		)
+		if err := rows.Scan(&p.ID, &p.Name, &p.XUID, &allowlistedInt, &p.Permission, &ignoresLimitInt, &createdAtStr, &updatedAtStr); err != nil {
+			return nil, err
+		}
+		p.IsAllowlisted = allowlistedInt == 1
+		p.IgnoresPlayerLimit = ignoresLimitInt == 1
+		p.CreatedAt, _ = ParseTime(createdAtStr)
+		p.UpdatedAt, _ = ParseTime(updatedAtStr)
+		players = append(players, &p)
+	}
+	return players, rows.Err()
+}
+
+func (db *ManagerDB) GetGlobalPlayer(ctx context.Context, id int64) (*models.GlobalPlayer, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT id, name, xuid, is_allowlisted, permission, ignores_player_limit, created_at, updated_at
+		FROM global_players
+		WHERE id = ?`, id)
+
+	var (
+		p               models.GlobalPlayer
+		allowlistedInt  int
+		ignoresLimitInt int
+		createdAtStr    string
+		updatedAtStr    string
+	)
+	if err := row.Scan(&p.ID, &p.Name, &p.XUID, &allowlistedInt, &p.Permission, &ignoresLimitInt, &createdAtStr, &updatedAtStr); err != nil {
+		return nil, err
+	}
+	p.IsAllowlisted = allowlistedInt == 1
+	p.IgnoresPlayerLimit = ignoresLimitInt == 1
+	p.CreatedAt, _ = ParseTime(createdAtStr)
+	p.UpdatedAt, _ = ParseTime(updatedAtStr)
+	return &p, nil
+}
+
+func (db *ManagerDB) GetGlobalPlayerByName(ctx context.Context, name string) (*models.GlobalPlayer, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT id, name, xuid, is_allowlisted, permission, ignores_player_limit, created_at, updated_at
+		FROM global_players
+		WHERE LOWER(name) = LOWER(?)`, name)
+
+	var (
+		p               models.GlobalPlayer
+		allowlistedInt  int
+		ignoresLimitInt int
+		createdAtStr    string
+		updatedAtStr    string
+	)
+	if err := row.Scan(&p.ID, &p.Name, &p.XUID, &allowlistedInt, &p.Permission, &ignoresLimitInt, &createdAtStr, &updatedAtStr); err != nil {
+		return nil, err
+	}
+	p.IsAllowlisted = allowlistedInt == 1
+	p.IgnoresPlayerLimit = ignoresLimitInt == 1
+	p.CreatedAt, _ = ParseTime(createdAtStr)
+	p.UpdatedAt, _ = ParseTime(updatedAtStr)
+	return &p, nil
+}
+
+func (db *ManagerDB) UpsertGlobalPlayer(ctx context.Context, gp *models.GlobalPlayer) (*models.GlobalPlayer, error) {
+	now := time.Now().UTC()
+	if gp.CreatedAt.IsZero() {
+		gp.CreatedAt = now
+	}
+	gp.UpdatedAt = now
+
+	allowlistedInt := 0
+	if gp.IsAllowlisted {
+		allowlistedInt = 1
+	}
+	ignoresLimitInt := 0
+	if gp.IgnoresPlayerLimit {
+		ignoresLimitInt = 1
+	}
+	if gp.Permission == "" {
+		gp.Permission = "member"
+	}
+
+	query := `
+		INSERT INTO global_players (name, xuid, is_allowlisted, permission, ignores_player_limit, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET
+			xuid = CASE WHEN excluded.xuid != '' THEN excluded.xuid ELSE global_players.xuid END,
+			is_allowlisted = excluded.is_allowlisted,
+			permission = excluded.permission,
+			ignores_player_limit = excluded.ignores_player_limit,
+			updated_at = excluded.updated_at
+		RETURNING id, created_at, updated_at`
+
+	var createdAtStr, updatedAtStr string
+	err := db.QueryRowContext(ctx, query,
+		gp.Name,
+		gp.XUID,
+		allowlistedInt,
+		gp.Permission,
+		ignoresLimitInt,
+		FormatTime(gp.CreatedAt),
+		FormatTime(gp.UpdatedAt),
+	).Scan(&gp.ID, &createdAtStr, &updatedAtStr)
+	if err != nil {
+		return nil, err
+	}
+
+	gp.CreatedAt, _ = ParseTime(createdAtStr)
+	gp.UpdatedAt, _ = ParseTime(updatedAtStr)
+	return gp, nil
+}
+
+func (db *ManagerDB) DeleteGlobalPlayer(ctx context.Context, id int64) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM global_players WHERE id = ?", id)
+	return err
+}
+
+func (db *ManagerDB) DeleteGlobalPlayerByName(ctx context.Context, name string) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM global_players WHERE LOWER(name) = LOWER(?)", name)
+	return err
+}
 
 // --- MetricsDB Operations ---
 

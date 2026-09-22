@@ -10,6 +10,7 @@ import { Setup } from './pages/Setup';
 import { KnockPortal } from './pages/KnockPortal';
 import { Tasks } from './pages/Tasks';
 import { AuditLogs } from './pages/AuditLogs';
+import { GlobalPlayers } from './pages/GlobalPlayers';
 import { Loader2 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -107,6 +108,10 @@ export const App: React.FC = () => {
           <Route
             path="/audit"
             element={user && user.role === 'admin' ? <AuditLogs /> : <Navigate to="/" replace />}
+          />
+          <Route
+            path="/global-players"
+            element={user && user.role === 'admin' ? <GlobalPlayers /> : <Navigate to="/" replace />}
           />
 
           {/* Fallback */}

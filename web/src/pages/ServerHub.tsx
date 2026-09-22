@@ -4,10 +4,10 @@ import {
   ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink,
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
-  Upload, Trash2, Share2, Crown
+  Upload, Trash2, Share2, Crown, Globe, UserMinus
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, PortGateLease } from '../types';
+import { Server, User, Backup, AddonPack, PortGateLease, GlobalPlayer } from '../types';
 
 interface ServerHubProps {
   user: User;
@@ -63,6 +63,9 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
   const [newPermRole, setNewPermRole] = useState<'operator' | 'member' | 'visitor'>('operator');
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
+  const [globalPlayers, setGlobalPlayers] = useState<GlobalPlayer[]>([]);
+  const [syncingGlobal, setSyncingGlobal] = useState(false);
+  const [syncReportMsg, setSyncReportMsg] = useState<string | null>(null);
 
   // Clone & Export & Sync state
   const [cloneId, setCloneId] = useState('');
@@ -162,6 +165,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       }).catch(() => {});
       api.getAllowlist(id).then((res) => setAllowlist(res)).catch(() => {});
       api.getPermissions(id).then((res) => setPermissions(res)).catch(() => {});
+      api.listGlobalPlayers().then(setGlobalPlayers).catch(() => {});
     } else if (activeTab === 'actions') {
       api.checkUpdates(server?.version || 'latest').then((res) => setUpdateInfo(res)).catch(() => {});
       api.listServers().then((servers) => setAllServers(servers)).catch(() => {});
@@ -312,6 +316,59 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       setPermissions(updated);
     } catch (err: any) {
       alert(err.message || 'Failed to update permissions');
+    }
+  };
+
+  const handleSyncGlobalNow = async () => {
+    if (!id) return;
+    setSyncingGlobal(true);
+    setSyncReportMsg(null);
+    try {
+      const rep = await api.syncServerGlobal(id);
+      setSyncReportMsg(`Synced with Global: Added ${rep.allowlist_added.length} players to allowlist, updated ${rep.permissions_updated.length} permissions.`);
+      setTimeout(() => setSyncReportMsg(null), 5000);
+      const [newAl, newPerms, newGps] = await Promise.all([
+        api.getAllowlist(id),
+        api.getPermissions(id),
+        api.listGlobalPlayers(),
+      ]);
+      setAllowlist(newAl);
+      setPermissions(newPerms);
+      setGlobalPlayers(newGps);
+    } catch (err: any) {
+      alert(err.message || 'Failed to sync with global');
+    } finally {
+      setSyncingGlobal(false);
+    }
+  };
+
+  const handlePromoteToGlobal = async (playerName: string, playerXuid?: string, role = 'member', isAllowlisted = true) => {
+    if (!id) return;
+    try {
+      await api.promotePlayerToGlobal(id, {
+        name: playerName,
+        xuid: playerXuid || '',
+        permission: role,
+        is_allowlisted: isAllowlisted,
+      });
+      alert(`Player '${playerName}' successfully promoted to Global access list!`);
+      const newGps = await api.listGlobalPlayers();
+      setGlobalPlayers(newGps);
+    } catch (err: any) {
+      alert(err.message || 'Failed to promote player to global');
+    }
+  };
+
+  const handleRemoveFromGlobal = async (playerName: string) => {
+    if (!confirm(`Remove '${playerName}' from Global list? They will remain on this server as a local-only entry.`)) {
+      return;
+    }
+    try {
+      await api.removeGlobalPlayerByName(playerName);
+      const newGps = await api.listGlobalPlayers();
+      setGlobalPlayers(newGps);
+    } catch (err: any) {
+      alert(err.message || 'Failed to remove player from global');
     }
   };
 
@@ -1270,12 +1327,37 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
             </div>
           </div>
 
+          {/* Multi-level Global Sync Notification */}
+          {syncReportMsg && (
+            <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 font-mono text-xs flex items-center space-x-2">
+              <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{syncReportMsg}</span>
+            </div>
+          )}
+
           {/* allowlist.json manager */}
           <div>
-            <h3 className="font-mono text-base font-bold text-slate-100 mb-3 flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-cyber-cyan" />
-              <span>Allowlist Manager (allowlist.json)</span>
-            </h3>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+              <div>
+                <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-cyber-cyan" />
+                  <span>Allowlist Manager (allowlist.json)</span>
+                </h3>
+                <p className="text-xs text-slate-400 font-mono mt-0.5">
+                  Merge and manage players permitted on this server. Global entries sync automatically across instances.
+                </p>
+              </div>
+
+              <button
+                onClick={handleSyncGlobalNow}
+                disabled={syncingGlobal}
+                title="Pull and merge global allowlist and permissions"
+                className="px-3 py-1.5 rounded-lg bg-obsidian-950 hover:bg-obsidian-850 border border-obsidian-700 text-slate-300 hover:text-emerald-400 font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors disabled:opacity-50 shrink-0"
+              >
+                {syncingGlobal ? <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" /> : <Globe className="w-3.5 h-3.5 text-emerald-400" />}
+                <span>Sync from Global</span>
+              </button>
+            </div>
 
             <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-3 font-mono text-xs">
               <div className="flex gap-2">
@@ -1299,17 +1381,58 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                 {allowlist.length === 0 ? (
                   <p className="text-slate-600 italic">No players in allowlist.</p>
                 ) : (
-                  allowlist.map((p) => (
-                    <div key={p.name} className="flex items-center justify-between p-2 rounded bg-obsidian-900 border border-obsidian-800">
-                      <span className="text-slate-200 font-bold">{p.name}</span>
-                      <button
-                        onClick={() => handleRemoveAllowlistPlayer(p.name)}
-                        className="text-rose-400 hover:underline text-[11px]"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))
+                  allowlist.map((p) => {
+                    const isGlobal = globalPlayers.some(
+                      (gp) => gp.name.toLowerCase() === p.name.toLowerCase() && gp.is_allowlisted
+                    );
+                    return (
+                      <div key={p.name} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded bg-obsidian-900 border border-obsidian-800">
+                        <div className="flex items-center space-x-2.5">
+                          <span className="text-slate-200 font-bold">{p.name}</span>
+                          {isGlobal ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                              <Globe className="w-2.5 h-2.5" /> GLOBAL
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-obsidian-950 border border-obsidian-800">
+                              LOCAL ONLY
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center space-x-3 text-xs">
+                          {isGlobal ? (
+                            <button
+                              onClick={() => handleRemoveFromGlobal(p.name)}
+                              title="Remove from Global Access List (remains on this server)"
+                              className="text-amber-400 hover:text-amber-300 hover:underline text-[11px] flex items-center gap-1"
+                            >
+                              <UserMinus className="w-3 h-3" />
+                              <span>Demote to Local</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handlePromoteToGlobal(p.name, p.xuid, 'member', true)}
+                              title="Promote to Global Access List (syncs across all servers)"
+                              className="text-emerald-400 hover:text-emerald-300 hover:underline text-[11px] flex items-center gap-1"
+                            >
+                              <Globe className="w-3 h-3" />
+                              <span>Promote to Global</span>
+                            </button>
+                          )}
+
+                          <span className="text-obsidian-700">|</span>
+
+                          <button
+                            onClick={() => handleRemoveAllowlistPlayer(p.name)}
+                            className="text-rose-400 hover:underline text-[11px]"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -1356,30 +1479,70 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                 {permissions.length === 0 ? (
                   <p className="text-slate-600 italic">No custom permissions configured (all players use default member permission).</p>
                 ) : (
-                  permissions.map((p) => (
-                    <div key={p.xuid} className="flex items-center justify-between p-2 rounded bg-obsidian-900 border border-obsidian-800">
-                      <div className="flex items-center space-x-2">
-                        <span
-                          className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded font-bold border ${
-                            p.permission === 'operator'
-                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                              : p.permission === 'member'
-                              ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
-                              : 'bg-slate-500/10 text-slate-400 border-slate-500/30'
-                          }`}
-                        >
-                          {p.permission}
-                        </span>
-                        <span className="text-slate-200 font-bold">{p.xuid}</span>
+                  permissions.map((p) => {
+                    const isGlobalOp = globalPlayers.some(
+                      (gp) => (gp.xuid === p.xuid || gp.name.toLowerCase() === p.xuid.toLowerCase()) && gp.permission === p.permission
+                    );
+                    return (
+                      <div key={p.xuid} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded bg-obsidian-900 border border-obsidian-800">
+                        <div className="flex items-center space-x-2.5">
+                          <span
+                            className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded font-bold border flex items-center gap-1 ${
+                              p.permission === 'operator'
+                                ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                                : p.permission === 'member'
+                                ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                                : 'bg-slate-500/10 text-slate-400 border-slate-500/30'
+                            }`}
+                          >
+                            {p.permission === 'operator' && <Crown className="w-3 h-3" />}
+                            <span>{p.permission}</span>
+                          </span>
+                          <span className="text-slate-200 font-bold">{p.xuid}</span>
+                          {isGlobalOp ? (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                              <Globe className="w-2.5 h-2.5" /> GLOBAL
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-obsidian-950 border border-obsidian-800">
+                              LOCAL ONLY
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center space-x-3 text-xs">
+                          {isGlobalOp ? (
+                            <button
+                              onClick={() => handleRemoveFromGlobal(p.xuid)}
+                              title="Demote from Global role"
+                              className="text-amber-400 hover:text-amber-300 hover:underline text-[11px] flex items-center gap-1"
+                            >
+                              <UserMinus className="w-3 h-3" />
+                              <span>Demote from Global</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handlePromoteToGlobal(p.xuid, p.xuid, p.permission, true)}
+                              title="Promote this operator role to Global"
+                              className="text-emerald-400 hover:text-emerald-300 hover:underline text-[11px] flex items-center gap-1"
+                            >
+                              <Globe className="w-3 h-3" />
+                              <span>Promote to Global Op</span>
+                            </button>
+                          )}
+
+                          <span className="text-obsidian-700">|</span>
+
+                          <button
+                            onClick={() => handleRemovePermission(p.xuid)}
+                            className="text-rose-400 hover:underline text-[11px]"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
-                      <button
-                        onClick={() => handleRemovePermission(p.xuid)}
-                        className="text-rose-400 hover:underline text-[11px]"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </div>

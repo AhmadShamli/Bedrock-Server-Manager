@@ -139,6 +139,46 @@ func TestManagerDB(t *testing.T) {
 	if err != nil || val != "supersecret" {
 		t.Errorf("expected 'supersecret', got '%s' (err: %v)", val, err)
 	}
+
+	// 7. Global Player Access test
+	gp := &models.GlobalPlayer{
+		Name:          "GlobalAlex",
+		XUID:          "2535400000000001",
+		IsAllowlisted: true,
+		Permission:    "operator",
+	}
+	createdGP, err := db.UpsertGlobalPlayer(ctx, gp)
+	if err != nil {
+		t.Fatalf("UpsertGlobalPlayer failed: %v", err)
+	}
+	if createdGP.ID == 0 || createdGP.Name != "GlobalAlex" {
+		t.Errorf("unexpected created global player: %+v", createdGP)
+	}
+
+	byName, err := db.GetGlobalPlayerByName(ctx, "globalalex")
+	if err != nil || byName.Permission != "operator" {
+		t.Fatalf("GetGlobalPlayerByName failed: %v, player: %+v", err, byName)
+	}
+
+	// Upsert update role
+	byName.Permission = "member"
+	updatedGP, err := db.UpsertGlobalPlayer(ctx, byName)
+	if err != nil || updatedGP.Permission != "member" {
+		t.Fatalf("Upsert update failed: %v, player: %+v", err, updatedGP)
+	}
+
+	listGPs, err := db.ListGlobalPlayers(ctx)
+	if err != nil || len(listGPs) != 1 {
+		t.Fatalf("ListGlobalPlayers failed: %v, count: %d", err, len(listGPs))
+	}
+
+	if err := db.DeleteGlobalPlayerByName(ctx, "globalalex"); err != nil {
+		t.Fatalf("DeleteGlobalPlayerByName failed: %v", err)
+	}
+	countGPs, _ := db.ListGlobalPlayers(ctx)
+	if len(countGPs) != 0 {
+		t.Errorf("expected 0 global players after delete, got %d", len(countGPs))
+	}
 }
 
 func TestMetricsDB(t *testing.T) {

@@ -105,3 +105,14 @@ export interface AuditLog {
   timestamp: string;
 }
 
+export interface GlobalPlayer {
+  id: number;
+  name: string;
+  xuid: string;
+  is_allowlisted: boolean;
+  permission: 'operator' | 'member' | 'visitor' | 'none';
+  ignores_player_limit: boolean;
+  created_at: string;
+  updated_at: string;
+}
+

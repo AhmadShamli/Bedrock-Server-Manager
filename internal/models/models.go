@@ -156,3 +156,15 @@ type MetricRollup struct {
 	MaxPlayers  int       `json:"max_players"`
 	SampleCount int       `json:"sample_count"`
 }
+
+// GlobalPlayer represents a player registered in the global access control list.
+type GlobalPlayer struct {
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	XUID               string    `json:"xuid"`
+	IsAllowlisted      bool      `json:"is_allowlisted"`
+	Permission         string    `json:"permission"` // operator, member, visitor, none
+	IgnoresPlayerLimit bool      `json:"ignores_player_limit"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}

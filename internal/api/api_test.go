@@ -352,3 +352,108 @@ func TestAPICopyConfigs(t *testing.T) {
 		t.Fatalf("expected target allowlist to contain Steve, got %s", string(data))
 	}
 }
+
+func TestAPIGlobalPlayers(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	ctx := t.Context()
+
+	// 1. Create admin user and token
+	adminUser, err := db.CreateUser(ctx, "admin_gp", "hashed", models.RoleAdmin)
+	if err != nil {
+		t.Fatalf("failed to create admin: %v", err)
+	}
+	token, _ := auth.GenerateJWT(jwtSecret, adminUser.ID, adminUser.Username, adminUser.Role, 1*time.Hour)
+
+	// 2. Create a server
+	server := &models.Server{
+		ID:     "srv-sync-test",
+		Name:   "Sync Test Realm",
+		Port:   19132,
+		PortV6: 19133,
+		Status: models.ServerStatusStopped,
+	}
+	_ = db.CreateServer(ctx, server)
+
+	serverDir := "data_test/servers/srv-sync-test"
+	_ = os.MkdirAll(serverDir, 0755)
+	defer os.RemoveAll("data_test")
+
+	// 3. Create Global Player via POST /api/global-players
+	createBody := []byte(`{"name":"UniversalPlayer","xuid":"999999999","is_allowlisted":true,"permission":"operator"}`)
+	req := httptest.NewRequest("POST", "/api/global-players", bytes.NewReader(createBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create global player failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// 4. List Global Players
+	req = httptest.NewRequest("GET", "/api/global-players", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("list global players failed: %d", w.Code)
+	}
+	var gps []*models.GlobalPlayer
+	_ = json.NewDecoder(w.Body).Decode(&gps)
+	if len(gps) != 1 || gps[0].Name != "UniversalPlayer" {
+		t.Fatalf("unexpected global players list: %+v", gps)
+	}
+
+	// 5. Trigger Sync on server via POST /api/servers/srv-sync-test/sync-global
+	req = httptest.NewRequest("POST", "/api/servers/srv-sync-test/sync-global", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("sync-global failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify server disk allowlist now contains UniversalPlayer
+	alData, err := os.ReadFile(serverDir + "/allowlist.json")
+	if err != nil || !bytes.Contains(alData, []byte("UniversalPlayer")) {
+		t.Fatalf("expected server allowlist to contain UniversalPlayer: %v", err)
+	}
+
+	// 6. Promote local player to global via POST /api/servers/srv-sync-test/players/promote-global
+	promoteBody := []byte(`{"name":"LocalPromoted","xuid":"888888","is_allowlisted":true,"permission":"member"}`)
+	req = httptest.NewRequest("POST", "/api/servers/srv-sync-test/players/promote-global", bytes.NewReader(promoteBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("promote player failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify player is now in global list
+	promoted, err := db.GetGlobalPlayerByName(ctx, "LocalPromoted")
+	if err != nil || promoted.Name != "LocalPromoted" {
+		t.Fatalf("expected LocalPromoted in DB: %v", err)
+	}
+
+	// 7. Remove from global via POST /api/global-players/remove-by-name
+	removeBody := []byte(`{"name":"LocalPromoted"}`)
+	req = httptest.NewRequest("POST", "/api/global-players/remove-by-name", bytes.NewReader(removeBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("remove-by-name failed: %d", w.Code)
+	}
+
+	afterRemove, _ := db.GetGlobalPlayerByName(ctx, "LocalPromoted")
+	if afterRemove != nil {
+		t.Fatalf("expected LocalPromoted to be removed from global")
+	}
+}

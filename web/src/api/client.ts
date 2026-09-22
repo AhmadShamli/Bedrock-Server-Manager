@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, GlobalPlayer } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -471,6 +471,67 @@ class APIClient {
     return this.request('/api/system/settings', {
       method: 'POST',
       body: JSON.stringify({ key, value }),
+    });
+  }
+
+  // --- Multi-Level Global Player Access Control ---
+  async listGlobalPlayers(): Promise<GlobalPlayer[]> {
+    return this.request('/api/global-players');
+  }
+
+  async getGlobalPlayer(id: number): Promise<GlobalPlayer> {
+    return this.request(`/api/global-players/${id}`);
+  }
+
+  async createGlobalPlayer(payload: Partial<GlobalPlayer>): Promise<GlobalPlayer> {
+    return this.request('/api/global-players', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateGlobalPlayer(id: number, payload: Partial<GlobalPlayer>): Promise<GlobalPlayer> {
+    return this.request(`/api/global-players/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteGlobalPlayer(id: number): Promise<{ status: string }> {
+    return this.request(`/api/global-players/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async removeGlobalPlayerByName(name: string): Promise<{ status: string }> {
+    return this.request('/api/global-players/remove-by-name', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async syncAllServersGlobal(): Promise<Record<string, { server_id: string; allowlist_added: string[]; permissions_updated: string[] }>> {
+    return this.request('/api/global-players/sync-all', {
+      method: 'POST',
+    });
+  }
+
+  async syncServerGlobal(serverId: string): Promise<{ server_id: string; allowlist_added: string[]; permissions_updated: string[] }> {
+    return this.request(`/api/servers/${serverId}/sync-global`, {
+      method: 'POST',
+    });
+  }
+
+  async promotePlayerToGlobal(serverId: string, payload: {
+    name: string;
+    xuid?: string;
+    permission?: string;
+    is_allowlisted?: boolean;
+    ignores_player_limit?: boolean;
+  }): Promise<GlobalPlayer> {
+    return this.request(`/api/servers/${serverId}/players/promote-global`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 }

@@ -150,7 +150,10 @@ func main() {
 	}()
 
 	// 11. Boot Manager (auto-start servers marked autostart_on_boot = 1)
-	bootMgr := engine.NewBootManager(mgrDB, serverEngine)
+	bootMgr := engine.NewBootManager(mgrDB, serverEngine, func(ctx context.Context, serverID string) error {
+		_, err := player.SyncServerWithGlobal(ctx, cfg.DataDir, serverID, mgrDB, nil)
+		return err
+	})
 	go func() {
 		time.Sleep(1 * time.Second) // Brief pause to let HTTP initialize
 		if started, err := bootMgr.AutostartServers(context.Background()); err == nil && len(started) > 0 {

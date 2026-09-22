@@ -10,6 +10,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -171,6 +172,9 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Automatically merge global allowlist and permissions on deploy/create
+	_, _ = player.SyncServerWithGlobal(r.Context(), h.dataDir, s.ID, h.db, nil)
+
 	claims := GetUserClaims(r)
 	actorName := "admin"
 	var userID *int64
@@ -202,6 +206,9 @@ func (h *ServerHandler) Start(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
 		return
 	}
+
+	// Automatically update and merge from global and server list on start
+	_, _ = player.SyncServerWithGlobal(r.Context(), h.dataDir, server.ID, h.db, nil)
 
 	if err := h.engine.StartServer(r.Context(), server); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to start server: %s"}`, err.Error()), http.StatusInternalServerError)

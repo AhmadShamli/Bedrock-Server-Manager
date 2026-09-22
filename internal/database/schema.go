@@ -118,6 +118,21 @@ CREATE TABLE IF NOT EXISTS system_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS global_players (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    xuid TEXT NOT NULL DEFAULT '',
+    is_allowlisted INTEGER NOT NULL DEFAULT 1,
+    permission TEXT NOT NULL DEFAULT 'member',
+    ignores_player_limit INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(name)
+);
+CREATE INDEX IF NOT EXISTS idx_global_players_xuid ON global_players(xuid);
+CREATE INDEX IF NOT EXISTS idx_global_players_allowlisted ON global_players(is_allowlisted);
+CREATE INDEX IF NOT EXISTS idx_global_players_permission ON global_players(permission);
 `
 
 // MetricsSchemaSQL contains table definitions and indices for the high-frequency telemetry database.

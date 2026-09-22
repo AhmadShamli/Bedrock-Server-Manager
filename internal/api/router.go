@@ -49,6 +49,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	backupHandler := NewBackupHandler(opts.DB, opts.Engine, opts.DataDir)
 	addonHandler := NewAddonHandler(opts.DB, opts.DataDir)
 	taskHandler := NewTaskHandler(opts.DB, opts.Scheduler)
+	globalPlayerHandler := NewGlobalPlayerHandler(opts.DB, opts.Engine, opts.DataDir)
 
 	// Global Middlewares
 	r.Use(chimiddleware.RequestID)
@@ -139,6 +140,10 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				srvGroup.Get("/servers/{id}/addons", addonHandler.List)
 				srvGroup.Post("/servers/{id}/addons", addonHandler.Install)
 				srvGroup.Delete("/servers/{id}/addons/{type}/{folder}", addonHandler.Delete)
+
+				// Multi-level Player Sync & Promotion
+				srvGroup.Post("/servers/{id}/sync-global", globalPlayerHandler.SyncServer)
+				srvGroup.Post("/servers/{id}/players/promote-global", globalPlayerHandler.PromotePlayer)
 			})
 
 			// Admin-only operations
@@ -152,6 +157,15 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Post("/servers/{id}/clone", serverHandler.Clone)
 				adminGroup.Post("/servers/{id}/copy-configs", serverHandler.CopyConfigs)
 				adminGroup.Get("/servers/{id}/export", serverHandler.Export)
+
+				// Global Player Access Control
+				adminGroup.Get("/global-players", globalPlayerHandler.List)
+				adminGroup.Post("/global-players", globalPlayerHandler.Create)
+				adminGroup.Get("/global-players/{id}", globalPlayerHandler.Get)
+				adminGroup.Put("/global-players/{id}", globalPlayerHandler.Update)
+				adminGroup.Delete("/global-players/{id}", globalPlayerHandler.Delete)
+				adminGroup.Post("/global-players/remove-by-name", globalPlayerHandler.RemoveByName)
+				adminGroup.Post("/global-players/sync-all", globalPlayerHandler.SyncAll)
 
 				// Task Scheduler
 				adminGroup.Get("/tasks", taskHandler.List)

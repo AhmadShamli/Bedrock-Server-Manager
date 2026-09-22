@@ -13,6 +13,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 )
 
 // CopyDir recursively copies directory content from src to dst.
@@ -123,6 +124,9 @@ func CloneServer(
 		_ = eng.RemoveServer(ctx, clonedServer, true)
 		return nil, fmt.Errorf("failed to save cloned server record: %w", err)
 	}
+
+	// Merge global allowlist and permissions into the new cloned server instance
+	_, _ = player.SyncServerWithGlobal(ctx, dataDir, newServerID, db, nil)
 
 	return clonedServer, nil
 }
