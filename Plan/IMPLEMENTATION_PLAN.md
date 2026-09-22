@@ -11,7 +11,8 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - **Primary DB (`data/manager.db`)**:
     - Users table (id, username, password_hash, role, created_at)
     - UserServerAccess table (user_id, server_id) for granular per-server Operator access control
-    - Servers table (id, name, version, port, portv6, status, mode, autostart_on_boot, created_at, memory_limit, cpu_limit)
+    - Servers table (id, name, version, port, portv6, status, mode, autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout, port_gate_passphrase, created_at, memory_limit, cpu_limit)
+    - PortGateLeases table (id, server_id, ip_address, gamertag, knock_method, granted_at, expires_at, comment)
     - Backups table (id, server_id, filename, size, type, status, created_at)
     - Tasks table (id, server_id, cron_expr, action, payload, last_run, next_run, enabled)
     - AuditLogs table (id, user_id, action, details, timestamp)
@@ -80,6 +81,13 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - Start/stop notifications
   - Player join/leave broadcasts
   - Backup result notifications
+- [ ] Pluggable Dynamic Firewall Engine (`internal/firewall`):
+  - `FirewallDriver` interface (`AllowIP(ip, port, comment)`, `RevokeIP(ip, port, comment)`, `ListRules()`)
+  - `UFWDriver` (default, executes `ufw allow proto udp from ...`)
+  - `IPTablesDriver` (manages dedicated `BEDROCK_PORT_GATE` chain)
+  - `CustomScriptDriver` (configurable shell hooks for custom environments)
+  - Public Port-Knock handler (`/api/knock/:id` with Gamertag / Passphrase validation)
+  - Background Lease Auditor (purges expired IP rules every 30s)
 
 ---
 
@@ -117,6 +125,8 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - **Shutdown Action Modal**: Admin choice between Graceful Stop (with countdown) and Direct Stop
   - **Interactive Terminal**: `xterm.js` console with real-time WebSocket log streaming, ANSI coloring, auto-scroll, command history, and quick command buttons
   - **Player Hub & Live Chat**: Active player list, Allowlist editor, Operator editor, kick/ban/op modals, real-time in-game chat feed panel, and broadcast/DM modal
+  - **Port Gate & IP Leases**: Dynamic firewall toggle, active IP leases table with countdowns, manual IP allowlist modal, QR code generator, and shareable link
+  - **Player Knock Portal (`/knock/:id`)**: Lightweight public web portal for players to enter Gamertag/passphrase and unlock their IP address
   - **Server Settings**: GUI form editor for `server.properties`, `allowlist.json`, and `permissions.json`
   - **Backups & Worlds**: Hot backup triggers, retention settings, pin/lock toggle, restore, world upload/export
   - **Server Cloning & Export**: 1-click Clone modal and Full Server Export download button

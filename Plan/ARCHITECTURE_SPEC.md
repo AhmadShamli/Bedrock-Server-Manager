@@ -178,6 +178,29 @@ All server configuration is organized into structured, validated UI tabs:
 - **Port Allocation**: Automatic suggestion and assignment of unused UDP ports starting at `19132` (IPv4) and `19133` (IPv6), with collision checks against host interfaces and existing servers.
 - **RakNet UDP Ping Poller**: Periodically sends Bedrock Unconnected Ping packets to verify server responsiveness, retrieve real-time MOTD, latency, player count, and version.
 
+### 5.5. Optional Port Gating / Web Port-Knocker (Dynamic Firewall Engine)
+- **Concept & Purpose**:
+  - Keep game UDP ports blocked to the public internet by default to eliminate malicious port scanning, bot probes, and unauthorized traffic.
+  - Requires players to visit a lightweight web unlock portal (`/knock/:server_id`) to dynamically grant their client IP access to the server's specific UDP port.
+- **Verification Modes (Configurable per-server by Admin)**:
+  1. **Gamertag Verification**: Player enters their Minecraft Gamertag; the manager validates that the Gamertag exists in `allowlist.json`.
+  2. **Knock Passphrase**: Player enters a secret shared passphrase or invite key configured by the administrator.
+  3. **Combined**: Requires both a valid allowlisted Gamertag and the secret passphrase.
+- **Lease Duration & Expiration**:
+  - Configurable lease timeout stored in seconds (e.g. `7200` for 2h, `21600` for 6h, `86400` for 24h).
+  - Admin UI provides a user-friendly dropdown selector (1h, 3h, 6h, 12h, 24h, Custom).
+  - A background lease manager worker audits active leases every 30s and automatically purges expired IP rules from the firewall and database.
+  - Active countdown timer displayed on the player's `/knock` screen.
+- **Pluggable Firewall Engine (`internal/firewall`)**:
+  - **UFW Driver (Default)**: Automatically runs `ufw allow proto udp from <ip> to any port <port> comment "BSM_<server_id>_<ip>"`, and cleans up on lease expiry or server stop.
+  - **iptables / nftables Driver**: Manages an isolated `BEDROCK_PORT_GATE` chain inserted into `DOCKER-USER` or `INPUT` tables with dynamic IP set matching.
+  - **Custom Command Driver**: Allows administrators to specify custom shell commands/hooks for environment-specific firewalls (e.g. `firewalld`, pfSense/OPNsense webhook, or router scripts):
+    - `AddCommand`: `ufw allow proto udp from {{IP}} to any port {{PORT}}`
+    - `RemoveCommand`: `ufw delete allow proto udp from {{IP}} to any port {{PORT}}`
+- **Dashboard Management**:
+  - Dedicated **Port Gate** tab in Server Hub showing active IP leases, client IPs, Gamertags, countdowns, manual IP allowlist button, and instant "Revoke Access" controls.
+  - Shareable Knock Link & QR Code generation for convenient mobile device access.
+
 ---
 
 ## 6. Notifications, Webhooks & Onboarding
@@ -240,6 +263,7 @@ All server configuration is organized into structured, validated UI tabs:
       - 👥 **Players & Chat**: Active players list, Allowlist, Ops, and dedicated live In-Game Chat Feed & Broadcaster.
       - 📈 **Telemetry**: CPU %, RAM, and player count charts (1h raw, 24h/7d 5m rollups, 30d 1h rollups).
       - ⚙️ **Configuration**: Form editors for `server.properties`, `allowlist.json`, and `permissions.json`.
+      - 🛡️ **Port Gate**: Dynamic firewall gating, active IP leases, countdowns, manual allowlist, and shareable QR code link.
       - 💾 **Backups & Worlds**: Zero-downtime hot backups, retention settings, pin/lock toggle, world import/export.
       - 🧩 **Addons & Packs**: Behavior & Resource pack drag-and-drop installer.
       - ⏰ **Scheduled Tasks**: Cron-based auto-restarts with warnings, scheduled backups, and commands.
@@ -249,11 +273,13 @@ All server configuration is organized into structured, validated UI tabs:
 - **Client Route Structure**:
   - `/setup` (Setup Wizard)
   - `/login` (Authentication)
+  - `/knock/:id` (Public/Player Web Port-Knock Portal with countdown)
   - `/servers` (Server List Overview)
   - `/servers/new` (Guided Server Creation Modal)
   - `/servers/:id/console` (Console View)
   - `/servers/:id/players` (Player Hub & Chat)
   - `/servers/:id/telemetry` (Performance Charts)
+  - `/servers/:id/gate` (Port Gating & IP Leases)
   - `/servers/:id/config` (Server Configuration)
   - `/servers/:id/backups` (Backups & Worlds)
   - `/servers/:id/addons` (Addon Manager)
@@ -284,14 +310,18 @@ Bedrock-Server-Manager/
 │   ├── database/                 # SQLite setup and migrations
 │   │   ├── db.go
 │   │   └── models.go
-│   ├── driver/                   # Server execution drivers
-│   │   ├── driver.go             # ServerDriver interface
-│   │   ├── process_driver.go     # Bare-metal child process supervisor
-│   │   └── docker_driver.go      # Docker SDK container driver
+│   ├── engine/                   # Docker Engine orchestrator
+│   │   ├── docker.go             # Docker SDK container lifecycle & limits
+│   │   └── stats.go              # ContainerStats telemetry collector
+│   ├── firewall/                 # Pluggable Dynamic Firewall Engine
+│   │   ├── firewall.go           # FirewallDriver interface
+│   │   ├── ufw.go                # UFW driver (default)
+│   │   ├── iptables.go           # iptables / nftables driver
+│   │   └── custom.go             # Custom command shell driver
 │   ├── raknet/                   # Bedrock UDP ping client
 │   ├── backup/                   # Hot backup and world export engine
 │   ├── webhook/                  # Discord webhook dispatcher
-│   └── downloader/               # Mojang BDS zip downloader and updater
+│   └── updater/                  # BDS upstream release checker and 1-click updater
 ├── web/                          # Embedded Frontend (React + Vite + Tailwind)
 │   ├── src/
 │   │   ├── components/
