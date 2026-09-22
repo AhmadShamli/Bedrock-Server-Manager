@@ -1,6 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink, HardDrive, Cpu, AlertTriangle, Loader2, Send } from 'lucide-react';
+import {
+  ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink,
+  HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
+  Download, UserPlus, ShieldAlert, Check
+} from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User } from '../types';
 
@@ -12,7 +16,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
   const { id } = useParams<{ id: string }>();
   const [server, setServer] = useState<Server | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'portgate' | 'settings'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'players' | 'portgate' | 'settings' | 'actions'>('overview');
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -25,6 +29,28 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
 
   // Live Stats state
   const [stats, setStats] = useState<{ cpu_percent: number; ram_bytes: number; player_count: number } | null>(null);
+
+  // Player Hub & Chat state
+  const [onlinePlayers, setOnlinePlayers] = useState<Array<{ gamertag: string; xuid: string; joined_at: string }>>([]);
+  const [chatFeed, setChatFeed] = useState<Array<{ gamertag: string; message: string; timestamp: string }>>([]);
+  const [broadcastMsg, setBroadcastMsg] = useState('');
+  const [broadcastTarget, setBroadcastTarget] = useState('');
+
+  // Configuration state
+  const [properties, setProperties] = useState<Record<string, string>>({});
+  const [propKeys, setPropKeys] = useState<string[]>([]);
+  const [allowlist, setAllowlist] = useState<Array<{ name: string; xuid?: string; ignoresPlayerLimit: boolean }>>([]);
+  const [newAllowlistPlayer, setNewAllowlistPlayer] = useState('');
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configSaved, setConfigSaved] = useState(false);
+
+  // Clone & Export state
+  const [cloneId, setCloneId] = useState('');
+  const [cloneName, setCloneName] = useState('');
+  const [cloning, setCloning] = useState(false);
+
+  // Version update info
+  const [updateInfo, setUpdateInfo] = useState<{ current_version: string; latest_version: string; update_available: boolean; release_url: string } | null>(null);
 
   const fetchServer = async () => {
     if (!id) return;
@@ -53,10 +79,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => {
-      setWsConnected(true);
-    };
-
+    ws.onopen = () => setWsConnected(true);
     ws.onmessage = (evt) => {
       try {
         const msg = JSON.parse(evt.data);
@@ -67,10 +90,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
         setLogs((prev) => [...prev, evt.data]);
       }
     };
-
-    ws.onclose = () => {
-      setWsConnected(false);
-    };
+    ws.onclose = () => setWsConnected(false);
 
     return () => {
       ws.close();
@@ -94,6 +114,23 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
     }, 2000);
     return () => clearInterval(interval);
   }, [id, server?.status]);
+
+  // Fetch tab data when active tab switches
+  useEffect(() => {
+    if (!id) return;
+    if (activeTab === 'players') {
+      api.getPlayers(id).then((res) => setOnlinePlayers(res.online_players)).catch(() => {});
+      api.getChat(id).then((res) => setChatFeed(res)).catch(() => {});
+    } else if (activeTab === 'settings') {
+      api.getProperties(id).then((res) => {
+        setProperties(res.properties);
+        setPropKeys(res.keys);
+      }).catch(() => {});
+      api.getAllowlist(id).then((res) => setAllowlist(res)).catch(() => {});
+    } else if (activeTab === 'actions') {
+      api.checkUpdates(server?.version || 'latest').then((res) => setUpdateInfo(res)).catch(() => {});
+    }
+  }, [id, activeTab, server?.version]);
 
   const handleStart = async () => {
     if (!id) return;
@@ -144,6 +181,94 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       api.sendCommand(id, command.trim()).catch(() => {});
     }
     setCommand('');
+  };
+
+  const handleBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !broadcastMsg.trim()) return;
+    try {
+      await api.broadcast(id, broadcastMsg.trim(), broadcastTarget.trim() || undefined);
+      setBroadcastMsg('');
+      setBroadcastTarget('');
+      alert('Message broadcasted to server!');
+    } catch (err: any) {
+      alert(err.message || 'Failed to broadcast');
+    }
+  };
+
+  const handleKick = async (gt: string) => {
+    if (!id) return;
+    if (!confirm(`Are you sure you want to kick ${gt}?`)) return;
+    try {
+      await api.kickPlayer(id, gt);
+      const res = await api.getPlayers(id);
+      setOnlinePlayers(res.online_players);
+    } catch (err: any) {
+      alert(err.message || 'Failed to kick player');
+    }
+  };
+
+  const handleOp = async (gt: string) => {
+    if (!id) return;
+    try {
+      await api.opPlayer(id, gt);
+      alert(`Granted operator status to ${gt}`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to op player');
+    }
+  };
+
+  const handleSaveProperties = async () => {
+    if (!id) return;
+    setConfigSaving(true);
+    try {
+      await api.updateProperties(id, properties, propKeys);
+      setConfigSaved(true);
+      setTimeout(() => setConfigSaved(false), 2500);
+    } catch (err: any) {
+      alert(err.message || 'Failed to save properties');
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
+  const handleAddAllowlistPlayer = async () => {
+    if (!id || !newAllowlistPlayer.trim()) return;
+    const updated = [...allowlist, { name: newAllowlistPlayer.trim(), ignoresPlayerLimit: false }];
+    try {
+      await api.updateAllowlist(id, updated);
+      setAllowlist(updated);
+      setNewAllowlistPlayer('');
+    } catch (err: any) {
+      alert(err.message || 'Failed to update allowlist');
+    }
+  };
+
+  const handleRemoveAllowlistPlayer = async (name: string) => {
+    if (!id) return;
+    const updated = allowlist.filter((p) => p.name !== name);
+    try {
+      await api.updateAllowlist(id, updated);
+      setAllowlist(updated);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update allowlist');
+    }
+  };
+
+  const handleClone = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !cloneId || !cloneName) return;
+    setCloning(true);
+    try {
+      await api.cloneServer(id, cloneId, cloneName);
+      alert(`Successfully cloned server to ${cloneName} (${cloneId})!`);
+      setCloneId('');
+      setCloneName('');
+    } catch (err: any) {
+      alert(err.message || 'Failed to clone server');
+    } finally {
+      setCloning(false);
+    }
   };
 
   if (loading) {
@@ -248,22 +373,34 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-obsidian-700/80 mb-6 font-mono text-xs">
+      <div className="flex border-b border-obsidian-700/80 mb-6 font-mono text-xs overflow-x-auto">
         <button
           onClick={() => setActiveTab('overview')}
-          className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 transition-colors ${
+          className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 whitespace-nowrap transition-colors ${
             activeTab === 'overview'
               ? 'border-emerald-500 text-emerald-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
           <Terminal className="w-3.5 h-3.5" />
-          <span>Overview & Console</span>
+          <span>Console & Overview</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('players')}
+          className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 whitespace-nowrap transition-colors ${
+            activeTab === 'players'
+              ? 'border-emerald-500 text-emerald-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Users className="w-3.5 h-3.5" />
+          <span>Players & Chat</span>
         </button>
 
         <button
           onClick={() => setActiveTab('portgate')}
-          className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 transition-colors ${
+          className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 whitespace-nowrap transition-colors ${
             activeTab === 'portgate'
               ? 'border-emerald-500 text-emerald-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -275,21 +412,32 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
 
         <button
           onClick={() => setActiveTab('settings')}
-          className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 transition-colors ${
+          className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 whitespace-nowrap transition-colors ${
             activeTab === 'settings'
               ? 'border-emerald-500 text-emerald-400'
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
           <Settings className="w-3.5 h-3.5" />
-          <span>Configuration</span>
+          <span>Configuration Editor</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('actions')}
+          className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 whitespace-nowrap transition-colors ${
+            activeTab === 'actions'
+              ? 'border-emerald-500 text-emerald-400'
+              : 'border-transparent text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Copy className="w-3.5 h-3.5" />
+          <span>Clone & Export</span>
         </button>
       </div>
 
-      {/* Tab Contents */}
+      {/* OVERVIEW TAB */}
       {activeTab === 'overview' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Interactive Console */}
           <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 md:col-span-2 flex flex-col h-[520px]">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
@@ -302,7 +450,6 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
               </div>
             </div>
 
-            {/* Console Log Area */}
             <div className="flex-1 bg-obsidian-950 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto border border-obsidian-800 space-y-1">
               {logs.length === 0 ? (
                 <p className="text-slate-600 italic">No console logs received yet...</p>
@@ -316,7 +463,6 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
               <div ref={consoleBottomRef} />
             </div>
 
-            {/* Command Input Bar */}
             <form onSubmit={handleSendCommand} className="mt-3 flex items-center gap-2">
               <input
                 type="text"
@@ -335,7 +481,6 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
             </form>
           </div>
 
-          {/* Right Column: Resource Limits & Live Telemetry */}
           <div className="space-y-6">
             <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
               <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Hardware Limits</h3>
@@ -376,30 +521,99 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
 
-            <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
-              <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Port Gating</h3>
-              <div className="font-mono text-xs space-y-2">
-                <div className="flex justify-between text-slate-400">
-                  <span>Status:</span>
-                  <span className={server.port_gate_enabled ? 'text-emerald-400 font-bold' : 'text-slate-500'}>
-                    {server.port_gate_enabled ? 'ENABLED' : 'DISABLED'}
-                  </span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Verification:</span>
-                  <span className="text-slate-200">{server.port_gate_mode}</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Lease Timeout:</span>
-                  <span className="text-slate-200">{server.port_gate_timeout / 3600} hours</span>
-                </div>
+      {/* PLAYERS & CHAT TAB */}
+      {activeTab === 'players' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Online Players */}
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 flex flex-col h-[520px]">
+            <h3 className="font-mono text-sm font-bold text-slate-200 mb-3 flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-emerald-400" />
+                <span>Online Players ({onlinePlayers.length})</span>
+              </span>
+            </h3>
+
+            <div className="flex-1 bg-obsidian-950 rounded-lg p-3 overflow-y-auto border border-obsidian-800 space-y-2 font-mono text-xs">
+              {onlinePlayers.length === 0 ? (
+                <p className="text-slate-600 italic">No players online right now.</p>
+              ) : (
+                onlinePlayers.map((p) => (
+                  <div key={p.gamertag} className="p-2.5 bg-obsidian-900 border border-obsidian-700/80 rounded-lg flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-slate-100">{p.gamertag}</div>
+                      <div className="text-[10px] text-slate-500">XUID: {p.xuid}</div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => handleOp(p.gamertag)}
+                        title="Promote to Operator"
+                        className="px-2 py-1 bg-obsidian-800 hover:bg-emerald-950 hover:text-emerald-400 rounded text-[11px]"
+                      >
+                        OP
+                      </button>
+                      <button
+                        onClick={() => handleKick(p.gamertag)}
+                        title="Kick Player"
+                        className="px-2 py-1 bg-obsidian-800 hover:bg-rose-950 hover:text-rose-400 rounded text-[11px]"
+                      >
+                        Kick
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Broadcast Box */}
+            <form onSubmit={handleBroadcast} className="mt-4 pt-3 border-t border-obsidian-800 space-y-2">
+              <label className="block text-[11px] font-mono text-slate-400 uppercase">In-Game Broadcast</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={broadcastMsg}
+                  onChange={(e) => setBroadcastMsg(e.target.value)}
+                  placeholder="Broadcast message to server chat..."
+                  className="flex-1 px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-100 font-mono text-xs focus:border-emerald-500"
+                />
+                <button
+                  type="submit"
+                  className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Send</span>
+                </button>
               </div>
+            </form>
+          </div>
+
+          {/* Live In-Game Chat Feed */}
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 flex flex-col h-[520px]">
+            <h3 className="font-mono text-sm font-bold text-slate-200 mb-3 flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-cyber-cyan" />
+              <span>In-Game Chat Feed</span>
+            </h3>
+
+            <div className="flex-1 bg-obsidian-950 rounded-lg p-3 overflow-y-auto border border-obsidian-800 space-y-2 font-mono text-xs">
+              {chatFeed.length === 0 ? (
+                <p className="text-slate-600 italic">No chat messages captured yet.</p>
+              ) : (
+                chatFeed.map((msg, i) => (
+                  <div key={i} className="p-2 rounded bg-obsidian-900/60 border border-obsidian-800 flex items-start space-x-2">
+                    <span className="text-emerald-400 font-bold">&lt;{msg.gamertag}&gt;</span>
+                    <span className="text-slate-200">{msg.message}</span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
       )}
 
+      {/* PORT GATE TAB */}
       {activeTab === 'portgate' && (
         <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6">
           <div className="flex items-center justify-between mb-4">
@@ -432,49 +646,185 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
         </div>
       )}
 
+      {/* CONFIGURATION EDITOR TAB */}
       {activeTab === 'settings' && (
-        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 max-w-2xl">
-          <h3 className="font-mono text-base font-bold text-slate-100 mb-4 flex items-center gap-2">
-            <Settings className="w-4 h-4 text-emerald-400" />
-            <span>Server Properties & Settings</span>
-          </h3>
+        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 max-w-4xl space-y-8">
+          {/* server.properties form */}
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
+                <Settings className="w-4 h-4 text-emerald-400" />
+                <span>server.properties Editor</span>
+              </h3>
 
-          <div className="space-y-4 font-mono text-xs">
-            <div>
-              <label className="block text-slate-400 mb-1">Server Name</label>
-              <input
-                type="text"
-                defaultValue={server.name}
-                className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 text-sm"
-              />
+              <button
+                onClick={handleSaveProperties}
+                disabled={configSaving}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5"
+              >
+                {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : configSaved ? <Check className="w-3.5 h-3.5" /> : null}
+                <span>{configSaved ? 'Saved!' : 'Save Properties'}</span>
+              </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-slate-400 mb-1">Default Game Mode</label>
-                <select
-                  defaultValue={server.mode}
-                  className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 text-sm"
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs bg-obsidian-950 p-4 rounded-xl border border-obsidian-800">
+              {propKeys.slice(0, 12).map((key) => (
+                <div key={key}>
+                  <label className="block text-slate-400 mb-1 text-[11px]">{key}</label>
+                  <input
+                    type="text"
+                    value={properties[key] || ''}
+                    onChange={(e) => setProperties({ ...properties, [key]: e.target.value })}
+                    className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* allowlist.json manager */}
+          <div>
+            <h3 className="font-mono text-base font-bold text-slate-100 mb-3 flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-cyber-cyan" />
+              <span>Allowlist Manager (allowlist.json)</span>
+            </h3>
+
+            <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-3 font-mono text-xs">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newAllowlistPlayer}
+                  onChange={(e) => setNewAllowlistPlayer(e.target.value)}
+                  placeholder="Enter player Gamertag..."
+                  className="flex-1 px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs"
+                />
+                <button
+                  onClick={handleAddAllowlistPlayer}
+                  className="px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center space-x-1"
                 >
-                  <option value="survival">Survival</option>
-                  <option value="creative">Creative</option>
-                  <option value="adventure">Adventure</option>
-                </select>
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Add Player</span>
+                </button>
+              </div>
+
+              <div className="space-y-1.5 pt-2">
+                {allowlist.length === 0 ? (
+                  <p className="text-slate-600 italic">No players in allowlist.</p>
+                ) : (
+                  allowlist.map((p) => (
+                    <div key={p.name} className="flex items-center justify-between p-2 rounded bg-obsidian-900 border border-obsidian-800">
+                      <span className="text-slate-200 font-bold">{p.name}</span>
+                      <button
+                        onClick={() => handleRemoveAllowlistPlayer(p.name)}
+                        className="text-rose-400 hover:underline text-[11px]"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CLONE & EXPORT TAB */}
+      {activeTab === 'actions' && (
+        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 max-w-2xl space-y-8">
+          {/* Update Banner */}
+          {updateInfo && (
+            <div className="p-4 bg-obsidian-950 border border-obsidian-800 rounded-xl font-mono text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Current BDS Version:</span>
+                <span className="text-slate-200 font-bold">{updateInfo.current_version}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Latest Available:</span>
+                <span className="text-emerald-400 font-bold">{updateInfo.latest_version}</span>
+              </div>
+              {updateInfo.update_available && (
+                <div className="pt-2">
+                  <a
+                    href={updateInfo.release_url}
+                    target="_blank"
+                    className="inline-flex items-center space-x-1 text-emerald-400 hover:underline text-xs"
+                  >
+                    <span>View Release Notes</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 1-Click Clone Form */}
+          <div>
+            <h3 className="font-mono text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
+              <Copy className="w-4 h-4 text-emerald-400" />
+              <span>1-Click Server Cloning</span>
+            </h3>
+            <p className="text-xs text-slate-400 font-mono mb-4">
+              Duplicate all worlds, configurations, and packs. An unused UDP port is automatically assigned.
+            </p>
+
+            <form onSubmit={handleClone} className="space-y-3 font-mono text-xs">
+              <div>
+                <label className="block text-slate-400 mb-1">Cloned Server Name</label>
+                <input
+                  type="text"
+                  required
+                  value={cloneName}
+                  onChange={(e) => {
+                    setCloneName(e.target.value);
+                    if (!cloneId) setCloneId(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '-'));
+                  }}
+                  placeholder="Survival Clone"
+                  className="w-full px-3 py-2 rounded bg-obsidian-950 border border-obsidian-700 text-slate-100 text-xs"
+                />
               </div>
 
               <div>
-                <label className="block text-slate-400 mb-1">Difficulty</label>
-                <select
-                  defaultValue={server.difficulty}
-                  className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 text-sm"
-                >
-                  <option value="peaceful">Peaceful</option>
-                  <option value="easy">Easy</option>
-                  <option value="normal">Normal</option>
-                  <option value="hard">Hard</option>
-                </select>
+                <label className="block text-slate-400 mb-1">Cloned Server ID</label>
+                <input
+                  type="text"
+                  required
+                  value={cloneId}
+                  onChange={(e) => setCloneId(e.target.value)}
+                  placeholder="survival-clone"
+                  className="w-full px-3 py-2 rounded bg-obsidian-950 border border-obsidian-700 text-slate-100 text-xs"
+                />
               </div>
-            </div>
+
+              <button
+                type="submit"
+                disabled={cloning}
+                className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-2"
+              >
+                {cloning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>Clone Instance</span>
+              </button>
+            </form>
+          </div>
+
+          {/* Export Bundle */}
+          <div className="pt-6 border-t border-obsidian-800">
+            <h3 className="font-mono text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
+              <Download className="w-4 h-4 text-cyber-cyan" />
+              <span>Full Server Export</span>
+            </h3>
+            <p className="text-xs text-slate-400 font-mono mb-4">
+              Download a complete .zip archive containing all worlds, packs, and configuration files for migration or safe-keeping.
+            </p>
+
+            <a
+              href={api.getExportUrl(server.id)}
+              download
+              className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-750 border border-obsidian-700 text-slate-200 hover:text-emerald-400 font-mono text-xs font-bold transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              <span>Download .zip Bundle</span>
+            </a>
           </div>
         </div>
       )}

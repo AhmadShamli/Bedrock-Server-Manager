@@ -19,7 +19,9 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/webhook"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/web"
 )
 
@@ -81,7 +83,28 @@ func main() {
 		_ = mgrDB.SetSetting(ctx, "heartbeat_interval_seconds", strconv.Itoa(int(cfg.HeartbeatInterval.Seconds())))
 	}
 
-	// 6. Initialize Container Orchestration Engine
+	// 6. Initialize Webhook Dispatcher
+	webhookDispatcher := webhook.NewDispatcher()
+
+	// 7. Initialize Player Manager
+	playerMgr := player.NewManager(
+		func(serverID, gamertag, xuid string) {
+			log.Printf("[PlayerHub] Player '%s' (XUID: %s) joined %s", gamertag, xuid, serverID)
+			webhookURL, _ := mgrDB.GetSetting(context.Background(), "discord_webhook_url")
+			if webhookURL != "" {
+				_ = webhookDispatcher.NotifyPlayerJoined(context.Background(), webhookURL, serverID, gamertag, 1)
+			}
+		},
+		func(serverID, gamertag, xuid string) {
+			log.Printf("[PlayerHub] Player '%s' (XUID: %s) left %s", gamertag, xuid, serverID)
+			webhookURL, _ := mgrDB.GetSetting(context.Background(), "discord_webhook_url")
+			if webhookURL != "" {
+				_ = webhookDispatcher.NotifyPlayerLeft(context.Background(), webhookURL, serverID, gamertag, 0)
+			}
+		},
+	)
+
+	// 8. Initialize Container Orchestration Engine
 	var serverEngine engine.ServerEngine
 	dockerEng, err := engine.NewDockerEngine(cfg.DockerHost)
 	if err == nil {
@@ -92,7 +115,7 @@ func main() {
 		serverEngine = engine.NewMockEngine()
 	}
 
-	// 7. Initialize Port Allocator & IP Resolver
+	// 9. Initialize Port Allocator & IP Resolver
 	portAlloc := allocator.NewPortAllocator()
 	resolver := ipresolver.NewResolver(cfg.ProxyMode, cfg.TrustedProxies)
 	log.Printf("[Network] Client IP Resolver initialized (Mode: %s)", cfg.ProxyMode)
@@ -100,7 +123,7 @@ func main() {
 	// Two-tier rate limiter: Level 1: 5 attempts/5m; Level 2: 10 distinct failed IPs/5m -> 15m circuit breaker
 	rateLimiter := auth.NewRateLimiter(5, 5*time.Minute, 10, 5*time.Minute, 15*time.Minute)
 
-	// 8. Initialize Telemetry Collector & Poller
+	// 10. Initialize Telemetry Collector & Poller
 	telemetryCollector := telemetry.NewTelemetryCollector(metricsDB)
 	telemetryCollector.Start(30*time.Second, 5*time.Minute, 1*time.Hour)
 	defer telemetryCollector.Stop()
@@ -124,7 +147,7 @@ func main() {
 		}
 	}()
 
-	// 9. Boot Manager (auto-start servers marked autostart_on_boot = 1)
+	// 11. Boot Manager (auto-start servers marked autostart_on_boot = 1)
 	bootMgr := engine.NewBootManager(mgrDB, serverEngine)
 	go func() {
 		time.Sleep(1 * time.Second) // Brief pause to let HTTP initialize
@@ -133,20 +156,21 @@ func main() {
 		}
 	}()
 
-	// 10. Build Router
+	// 12. Build Router
 	router := api.NewRouter(api.RouterOptions{
 		DB:            mgrDB,
 		IPResolver:    resolver,
 		RateLimiter:   rateLimiter,
 		Engine:        serverEngine,
 		PortAllocator: portAlloc,
+		PlayerManager: playerMgr,
 		DataDir:       cfg.DataDir,
 		JWTSecret:     []byte(jwtSecretStr),
 		Pepper:        pepperStr,
 		WebFS:         web.DistFS(),
 	})
 
-	// 11. Start HTTP Server
+	// 13. Start HTTP Server
 	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv := &http.Server{
 		Addr:         serverAddr,
@@ -163,7 +187,7 @@ func main() {
 		}
 	}()
 
-	// 12. Graceful Shutdown
+	// 14. Graceful Shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit

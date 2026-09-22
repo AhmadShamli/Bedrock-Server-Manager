@@ -58,28 +58,28 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 ---
 
 ## Phase 3: Bedrock Installation, Configuration, Cloning & Player Hub
-- [ ] BDS Version Checker & 1-Click Update (`internal/updater`):
+- [x] BDS Version Checker & 1-Click Update (`internal/updater`):
   - Queries upstream Bedrock release metadata
   - Displays update banner when a newer version is available
   - 1-click update with automated pre-upgrade safety backup
-- [ ] Server Creation Presets (`internal/preset`):
+- [x] Server Creation Presets (`internal/preset`):
   - Preset templates (Vanilla Survival, Creative Building, Hardcore Challenge, Custom)
-- [ ] Server Cloning, Full Export & Safe Deletion:
+- [x] Server Cloning, Full Export & Safe Deletion:
   - 1-click Server Cloning (copies data/configs and auto-allocates free UDP port)
   - Full Server Export (.zip bundle containing world, configs, and packs for migration)
   - Safe Deletion (requires matching server name verification, optional pre-deletion archive, and audit logging)
-- [ ] Configuration-Only Editor:
+- [x] Configuration-Only Editor:
   - Type-safe reader/writer for `server.properties`
   - JSON sync for `allowlist.json` and `permissions.json`
   - Path-traversal proof security (no arbitrary filesystem browsing)
-- [ ] Player Hub Engine (`internal/player`):
+- [x] Player Hub Engine (`internal/player`):
   - Real-time player detection via stdout log parsing
   - Dedicated in-game chat feed parser (streams player chat into isolated chat UI feed)
   - Broadcaster API: send global styled alerts (`say`/`tellraw`) or private direct messages (`tell`)
   - RakNet UDP Ping poller (`internal/raknet`) for latency, MOTD, and online player counts
   - Player quick actions (`kick`, `ban`, `op`, `deop`, `teleport`, `say`)
   - XUID / Gamertag resolution and persistence
-- [ ] Discord Webhook Dispatcher (`internal/webhook`):
+- [x] Discord Webhook Dispatcher (`internal/webhook`):
   - Crash alerts with log context
   - Start/stop notifications
   - Player join/leave broadcasts

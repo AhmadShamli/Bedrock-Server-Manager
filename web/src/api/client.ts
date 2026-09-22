@@ -140,6 +140,101 @@ class APIClient {
     });
   }
 
+  // Properties, Allowlist & Permissions
+  async getProperties(id: string): Promise<{ properties: Record<string, string>; keys: string[] }> {
+    return this.request(`/api/servers/${id}/properties`);
+  }
+
+  async updateProperties(id: string, properties: Record<string, string>, keys: string[]): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/properties`, {
+      method: 'PUT',
+      body: JSON.stringify({ properties, keys }),
+    });
+  }
+
+  async getAllowlist(id: string): Promise<Array<{ name: string; xuid?: string; ignoresPlayerLimit: boolean }>> {
+    return this.request(`/api/servers/${id}/allowlist`);
+  }
+
+  async updateAllowlist(id: string, list: Array<{ name: string; xuid?: string; ignoresPlayerLimit: boolean }>): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/allowlist`, {
+      method: 'PUT',
+      body: JSON.stringify(list),
+    });
+  }
+
+  async getPermissions(id: string): Promise<Array<{ permission: string; xuid: string }>> {
+    return this.request(`/api/servers/${id}/permissions`);
+  }
+
+  async updatePermissions(id: string, list: Array<{ permission: string; xuid: string }>): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify(list),
+    });
+  }
+
+  // Player Hub & Live Chat
+  async getPlayers(id: string): Promise<{
+    online_players: Array<{ server_id: string; gamertag: string; xuid: string; joined_at: string }>;
+    online_count: number;
+  }> {
+    return this.request(`/api/servers/${id}/players`);
+  }
+
+  async getChat(id: string, limit = 50): Promise<Array<{ server_id: string; gamertag: string; message: string; timestamp: string }>> {
+    return this.request(`/api/servers/${id}/chat?limit=${limit}`);
+  }
+
+  async broadcast(id: string, message: string, target?: string): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/broadcast`, {
+      method: 'POST',
+      body: JSON.stringify({ message, target }),
+    });
+  }
+
+  async kickPlayer(id: string, gamertag: string, reason = 'Kicked by administrator'): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/players/kick`, {
+      method: 'POST',
+      body: JSON.stringify({ gamertag, reason }),
+    });
+  }
+
+  async opPlayer(id: string, gamertag: string): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/players/op`, {
+      method: 'POST',
+      body: JSON.stringify({ gamertag }),
+    });
+  }
+
+  async deopPlayer(id: string, gamertag: string): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/players/deop`, {
+      method: 'POST',
+      body: JSON.stringify({ gamertag }),
+    });
+  }
+
+  // Clone & Export
+  async cloneServer(id: string, newId: string, newName: string): Promise<Server> {
+    return this.request(`/api/servers/${id}/clone`, {
+      method: 'POST',
+      body: JSON.stringify({ new_id: newId, new_name: newName }),
+    });
+  }
+
+  getExportUrl(id: string): string {
+    return `/api/servers/${id}/export`;
+  }
+
+  // Presets & Updates
+  async getPresets(): Promise<Array<{ id: string; name: string; description: string; mode: string; difficulty: string; properties: Record<string, string> }>> {
+    return this.request('/api/presets');
+  }
+
+  async checkUpdates(version = 'latest'): Promise<{ current_version: string; latest_version: string; update_available: boolean; release_url: string }> {
+    return this.request(`/api/updater/check?version=${encodeURIComponent(version)}`);
+  }
+
   // Knock Portal
   async getKnockConfig(serverId: string): Promise<KnockConfig> {
     return this.request(`/api/knock/${serverId}/config`);
