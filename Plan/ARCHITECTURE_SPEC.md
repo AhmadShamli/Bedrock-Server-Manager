@@ -15,7 +15,7 @@ The **Manager itself** supports two deployment models:
 | Domain | Technology / Design Choice | Rationale |
 | :--- | :--- | :--- |
 | **Backend Language** | **Go (Golang 1.22+)** | Zero-dependency static compilation, low RAM/CPU footprint, strong concurrency model for Docker SDK and WebSocket handling. |
-| **Frontend Framework** | **React 18 + Vite + Tailwind CSS + Lucide Icons** | Fast, responsive SPA with clean modern UI; built and embedded directly into the Go binary using `embed.FS`. |
+| **Frontend Framework & UI** | **React 18 + Vite + Tailwind CSS + Lucide Icons** | Fast, responsive SPA embedded via `embed.FS`. Styled exclusively in a **Dark Mode Only** sleek obsidian/cyberpunk aesthetic with Minecraft emerald accents, optimized for desktop and mobile devices. |
 | **Server Runtime Engine** | **Docker Engine API via Go SDK (`itzg/minecraft-bedrock-server`)** | Bedrock server natively lacks CPU/RAM limits. Orchestrating instances as Docker containers guarantees strict memory/CPU caps, port bindings, and safe isolation. |
 | **Data Persistence** | **Dual Embedded SQLite (`modernc.org/sqlite`)** | Clean architectural separation: Primary DB (`data/manager.db`) for relational metadata & configuration; Dedicated Telemetry DB (`data/metrics.db`) in WAL mode for time-series metrics with automated 24h rolling retention. |
 | **Authentication & Scope** | **JWT with Argon2id + Internal-Only API** | RBAC supporting `Admin` (full system access) and `Server Operator` with **Per-Server Access Control** (restricted to assigned instances only). No external API/remote keys; API is strictly internal to the Web UI. |
@@ -76,19 +76,30 @@ flowchart TD
 - **Gamertag & XUID Synchronization**: Automatically resolves and stores player XUIDs for allowlist and operator permissions.
 - **Quick Player Actions**: Kick, ban, teleport, change permission level (`operator`, `member`, `visitor`), and broadcast in-game messages.
 
-### 4.4. Zero-Downtime Hot Backups & World Management
+### 4.4. Zero-Downtime Hot Backups, World Management & Retention
 - **Hot Backup Protocol**:
   1. Sends `save hold` to server stdin.
   2. Polls `save query` until BDS reports files are ready for copying.
   3. Copies snapshot files and world data to a compressed zip archive in `data/backups/{server_id}/`.
   4. Issues `save resume` to resume disk writes without stopping gameplay.
 - **World Management**: Import and export `.mcworld` or `.zip` archives, reset world, seed customization.
+- **Comprehensive Retention & Disk Quotas**:
+  - **Count Retention**: Retains the last N backups (default: 10, configurable per server).
+  - **Age Retention**: Automatically purges unpinned backups older than X days (default: 14 days).
+  - **Disk Quota Limit**: Sets an optional maximum disk quota per server (e.g. 10 GB); oldest unpinned backups are purged when quota is reached.
+  - **Pin / Lock Protection**: Allows administrators to lock/bookmark milestone backups to protect them from automated retention cleanup.
 - **Automated Scheduling**: Cron-based triggers for recurring backups and scheduled restarts.
 
 ### 4.5. Addons & Packs (Vanilla BDS Focus)
 - Dedicated support for official Vanilla Bedrock Dedicated Server (BDS).
 - Upload and install `.mcpack` and `.mcaddon` archives into `behavior_packs` and `resource_packs`.
 - Automatic extraction and registration in `world_behavior_packs.json` and `world_resource_packs.json`.
+
+### 4.6. Shutdown & Restart Workflows (Admin Choice)
+- The administrator can trigger:
+  1. **Graceful Stop**: Broadcasts a countdown warning (`say Server shutting down in X...`), disconnects active players with a clean maintenance reason (`Server Maintenance/Restarting`), issues `stop` to BDS console to flush LevelDB chunks, and waits up to 20 seconds before container termination.
+  2. **Direct BDS Stop**: Immediately issues `stop` command to server stdin and waits for clean process exit without broadcast countdowns.
+  3. **Emergency Force Kill**: Forcefully stops container immediately if BDS hangs or deadlocks.
 
 ---
 

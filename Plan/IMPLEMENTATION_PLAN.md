@@ -73,34 +73,45 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 
 ---
 
-## Phase 4: Hot Backups, World Management & Addons
+## Phase 4: Hot Backups, World Management, Retention & Lifecycle
 - [ ] Hot Backup Engine (`internal/backup`):
   - Bedrock `save hold` -> `save query` -> snapshot file copy -> `save resume` workflow
   - Zip compression of world state without taking server offline
   - Backup restore and download endpoints
   - Scheduled backup cron (`robfig/cron/v3`)
+- [ ] Comprehensive Backup Retention & Disk Quotas:
+  - Count retention (retain last N backups, default: 10)
+  - Age retention (purge unpinned backups older than X days, default: 14 days)
+  - Disk quota enforcement (purge oldest unpinned backups when quota exceeded)
+  - Pin / Lock protection flag for milestone backups
 - [ ] World Import / Export:
   - Upload `.mcworld` or `.zip` and extract into `worlds/`
   - Export current world as downloadable `.mcworld`
 - [ ] Addon / Pack Manager:
   - Upload and extract `.mcpack` / `.mcaddon` into `behavior_packs` / `resource_packs`
   - Update `world_behavior_packs.json` and `world_resource_packs.json`
+- [ ] Shutdown & Restart Workflows:
+  - Graceful stop: countdown broadcast (`say ...`), disconnect active players with maintenance reason, issue `stop`, await LevelDB flush
+  - Direct BDS stop: instant `stop` to stdin without broadcasts
+  - Emergency force kill: immediate container termination fallback
 
 ---
 
 ## Phase 5: Modern Web Dashboard (React + Vite + Tailwind)
 - [ ] Frontend setup in `web/`:
   - Vite + React + TypeScript + Tailwind CSS + Lucide Icons + React Query
+  - **Dark Mode Only UI**: Sleek obsidian/cyberpunk aesthetic with Minecraft emerald accents, optimized for desktop and mobile devices
 - [ ] Core Views:
   - **Setup Wizard**: Onboarding screen for new installations (`/setup`)
   - **Dashboard / Server List**: Cards displaying live server status, players online, CPU/RAM, quick start/stop
+  - **Shutdown Action Modal**: Admin choice between Graceful Stop (with countdown) and Direct Stop
   - **Interactive Terminal**: `xterm.js` console with real-time WebSocket log streaming, ANSI coloring, auto-scroll, command history, and quick command buttons
   - **Player Hub**: Active player list, Allowlist management, Operator management, kick/ban/op modals
   - **Server Settings**: GUI form editor for `server.properties`, `allowlist.json`, and `permissions.json`
-  - **Backups & Worlds**: Hot backup triggers, backup history, restore, world upload/export
+  - **Backups & Worlds**: Hot backup triggers, retention settings, pin/lock toggle, restore, world upload/export
   - **Addon Manager**: Drag-and-drop `.mcpack`/`.mcaddon` installer
   - **Notifications & Webhooks**: Discord webhook configuration and in-app toast alerts
-  - **User & Role Management**: Admin user creation and role assignments
+  - **User & Role Management**: Admin user creation, per-server Operator access assignments
 - [ ] Embedding:
   - Embed Vite production `dist/` into Go binary via `//go:embed all:dist`
 
