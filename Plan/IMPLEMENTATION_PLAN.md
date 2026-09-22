@@ -27,7 +27,8 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
     - Background rollup worker (aggregates raw into 5m every 5 minutes, 5m into 1h every hour)
     - Tiered data retention pruner (raw: 6h, 5m: 7d, 1h: 30d)
 - [ ] Implement JWT Authentication & User management (`internal/auth`, `internal/api/auth.go`):
-  - Password hashing via Argon2id
+  - Password hashing via bcrypt (matching `../Funnel`)
+  - Keyed HMAC-SHA256 with constant-time verification for knock passphrases (<0.01ms CPU, 0 MB RAM)
   - Login / refresh / me endpoints with 24-hour sliding session and 30-day "Remember Me"
   - RBAC middleware (`Admin` vs `Server Operator` with per-server instance authorization)
   - Strict internal-only API scope (no remote API keys / bot tokens)

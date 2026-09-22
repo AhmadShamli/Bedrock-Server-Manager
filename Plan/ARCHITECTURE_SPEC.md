@@ -18,7 +18,7 @@ The **Manager itself** supports two deployment models:
 | **Frontend Framework & UI** | **React 18 + Vite + Tailwind CSS + Lucide Icons** | Fast, responsive SPA embedded via `embed.FS`. Styled exclusively in a **Dark Mode Only** sleek obsidian/cyberpunk aesthetic with Minecraft emerald accents, optimized for desktop and mobile devices. |
 | **Server Runtime Engine** | **Docker Engine API via Go SDK (`itzg/minecraft-bedrock-server`)** | Bedrock server natively lacks CPU/RAM limits. Orchestrating instances as Docker containers guarantees strict memory/CPU caps, port bindings, and safe isolation. |
 | **Data Persistence** | **Dual Embedded SQLite (`modernc.org/sqlite`)** | Clean architectural separation: Primary DB (`data/manager.db`) for relational metadata & configuration; Dedicated Telemetry DB (`data/metrics.db`) in WAL mode for time-series metrics with automated 24h rolling retention. |
-| **Authentication & Scope** | **JWT with Argon2id + Internal-Only API** | RBAC supporting `Admin` (full system access) and `Server Operator` with **Per-Server Access Control** (restricted to assigned instances only). No external API/remote keys; API is strictly internal to the Web UI. |
+| **Authentication & Hashing** | **Bcrypt (Admin) & Keyed HMAC-SHA256 (Knock Keys)** | Lightweight security matching `../Funnel`: `bcrypt` for user accounts; fast keyed `HMAC-SHA256` with constant-time comparison for knock keys (<0.01ms CPU, 0 MB RAM) to prevent CPU exhaustion. |
 | **Real-time Comms** | **WebSockets (`gorilla/websocket` or `coder/websocket`)** | Low-latency bi-directional communication for interactive BDS console streams, real-time player events, and system metrics. |
 | **Terminal Emulator** | **xterm.js + fit-addon** | Browser-based interactive console with 1,000-line ring buffer, ANSI coloring, and command history. |
 
@@ -192,7 +192,7 @@ All server configuration is organized into structured, validated UI tabs:
     * **Global Keys (`server_id IS NULL`)**: Master keys configured in Global Settings that are valid across all port-gated servers.
   - Each key includes rich operational attributes:
     * **Label**: Human-readable name (e.g. "Discord Community", "VIP Supporters", "Family & Friends").
-    * **Passphrase**: Stored securely using Argon2id hashing.
+    * **Passphrase**: Stored securely using keyed HMAC-SHA256 with server pepper and constant-time comparison (matching `../Funnel`: <0.01ms CPU, 0 MB RAM) to prevent CPU starvation attacks.
     * **Max Uses / Quota**: Optional limit on how many times the key can be redeemed (`0` = unlimited, or fixed e.g. 10 uses).
     * **Expiration Date**: Optional validity timestamp (e.g. valid for a weekend event).
     * **Lease Duration Override**: Optional custom lease time for players using this key (e.g. VIP key grants 24h lease, Guest key grants 2h).
@@ -241,7 +241,7 @@ All server configuration is organized into structured, validated UI tabs:
 ### 6.2. First-Launch Setup Wizard
 - Automatically detects fresh installation (empty database).
 - Directs initial browser request to an onboarding wizard at `/setup`:
-  - Create primary Admin username & password (hashed with Argon2id).
+  - Create primary Admin username & password (hashed with standard bcrypt).
   - Set manager title / branding.
   - Configure optional global Discord webhook.
   - Generates secure cryptographic JWT signing secret.
