@@ -205,6 +205,12 @@ All server configuration is organized into structured, validated UI tabs:
     2. Validates against that specific server's `allowlist.json` (for Gamertag mode) or its specific `port_gate_passphrase` in the database.
     3. Applies the firewall rule strictly for **that server's specific port** (e.g. UDP 19132), leaving all other server ports isolated and protected.
     4. Inserts the active lease into `PortGateLeases` in `data/manager.db`.
+- **Post-Unlock Direct Game Launch & Quick Add**:
+  - Once verified, the player unlock screen displays an active lease countdown badge, granted IP, and two instant connection buttons:
+    1. **"🎮 Open & Add to Minecraft" Button**: Uses the official Minecraft Bedrock deep link protocol:
+       `minecraft://?addExternalServer=<ServerName>|<ServerHost>:<ServerPort>`
+       Clicking this automatically launches the Minecraft app on Windows, iOS, or Android and opens the "Add Server" screen with name, host, and port pre-populated!
+    2. **"📋 Copy Server Address" Button**: One-click copies `host:port` to the clipboard for manual entry on consoles (Xbox, PlayStation, Nintendo Switch).
 - **Dashboard Management**:
   - Dedicated **Port Gate** tab in Server Hub showing active IP leases, client IPs, Gamertags, countdowns, manual IP allowlist button, and instant "Revoke Access" controls.
   - Shareable Knock Link & QR Code generation for convenient mobile device access.
