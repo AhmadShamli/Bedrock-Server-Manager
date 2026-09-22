@@ -51,11 +51,14 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 
 ---
 
-## Phase 3: Bedrock Installation, Configuration & Player Hub
-- [ ] BDS Downloader & Version Selector (`internal/downloader`):
-  - Queries and downloads official Mojang BDS Linux archives
-  - Unzips and installs into server instance directory
-  - Preserves user configs (`server.properties`, `allowlist.json`, `permissions.json`, `worlds/`) on update
+## Phase 3: Bedrock Installation, Configuration, Cloning & Player Hub
+- [ ] BDS Version Checker & 1-Click Update (`internal/updater`):
+  - Queries upstream Bedrock release metadata
+  - Displays update banner when a newer version is available
+  - 1-click update with automated pre-upgrade safety backup
+- [ ] Server Cloning & Full Export:
+  - 1-click Server Cloning (copies data/configs and auto-allocates free UDP port)
+  - Full Server Export (.zip bundle containing world, configs, and packs for migration)
 - [ ] Configuration-Only Editor:
   - Type-safe reader/writer for `server.properties`
   - JSON sync for `allowlist.json` and `permissions.json`
@@ -109,7 +112,9 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - **Player Hub**: Active player list, Allowlist management, Operator management, kick/ban/op modals
   - **Server Settings**: GUI form editor for `server.properties`, `allowlist.json`, and `permissions.json`
   - **Backups & Worlds**: Hot backup triggers, retention settings, pin/lock toggle, restore, world upload/export
+  - **Server Cloning & Export**: 1-click Clone modal and Full Server Export download button
   - **Addon Manager**: Drag-and-drop `.mcpack`/`.mcaddon` installer
+  - **Audit Log Viewer**: Dedicated audit dashboard with user/action/server filtering, date picker, and CSV/JSON export
   - **Notifications & Webhooks**: Discord webhook configuration and in-app toast alerts
   - **User & Role Management**: Admin user creation, per-server Operator access assignments
 - [ ] Embedding:

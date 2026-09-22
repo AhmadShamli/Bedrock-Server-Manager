@@ -59,10 +59,12 @@ flowchart TD
 
 ## 4. Bedrock Server Management & Lifecycle
 
-### 4.1. Server Installation, Creation & Updates
+### 4.1. Server Creation, Updates, Cloning & Migration
 - **Guided Creation with Presets**: One-click configuration presets ('Vanilla Survival', 'Creative Building', 'Hardcore') pre-populating recommended game rules, difficulty, view distance, and tick-distance, alongside advanced custom mode.
 - **Image Hub & Version Tags**: Automatically pulls and configures `itzg/minecraft-bedrock-server` with configurable version tags (`VERSION=LATEST`, `VERSION=PREVIEW`, or specific BDS version string like `1.21.20.03`).
-- **Updates**: Seamless image pull and container recreation preserving all world data, configuration files, and player allowlists in the persistent volume.
+- **Update Banner with 1-Click Upgrade**: Periodically checks for new upstream BDS releases, displaying an upgrade notification banner in the web UI. 1-click upgrade automatically triggers a safety hot-backup of the server prior to pulling the new image and recreating the container.
+- **1-Click Server Cloning**: Duplicates an existing server instance (configs, world, behavior/resource packs) into a new server with an automatically allocated, non-conflicting port.
+- **Full Server Export**: Downloads the entire server instance as a single portable `.zip` bundle (including configs, packs, and world) for straightforward migration, disaster recovery, or sharing between hosts.
 
 ### 4.2. Configuration Management (Configuration-Only Editor)
 - Visual form editors and structured JSON/properties editors restricted to designated server files:
@@ -152,6 +154,15 @@ flowchart TD
   - Configure optional global Discord webhook.
   - Generates secure cryptographic JWT signing secret.
 - Supports optional environment variable overrides (`ADMIN_USER`, `ADMIN_PASSWORD`, `JWT_SECRET`) for headless/automated infrastructure deployments.
+
+### 6.3. Full Web Audit Log Viewer
+- Dedicated in-app audit dashboard tracking all administrative and operator actions:
+  - Server lifecycle events (start, graceful stop, direct stop, force kill, restart).
+  - Player moderation (kicks, bans, permission level changes, op/deop).
+  - Server configuration alterations (`server.properties`, `allowlist.json`, `permissions.json`).
+  - Hot backups (manual triggers, restores, pin/lock changes, deletions).
+  - Authentication events (successful logins, failed attempts, password changes).
+- Includes multi-filter search (by user, action category, server ID, date range) and CSV/JSON export capability.
 
 ---
 
