@@ -58,9 +58,12 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - Queries upstream Bedrock release metadata
   - Displays update banner when a newer version is available
   - 1-click update with automated pre-upgrade safety backup
-- [ ] Server Cloning & Full Export:
+- [ ] Server Creation Presets (`internal/preset`):
+  - Preset templates (Vanilla Survival, Creative Building, Hardcore Challenge, Custom)
+- [ ] Server Cloning, Full Export & Safe Deletion:
   - 1-click Server Cloning (copies data/configs and auto-allocates free UDP port)
   - Full Server Export (.zip bundle containing world, configs, and packs for migration)
+  - Safe Deletion (requires matching server name verification, optional pre-deletion archive, and audit logging)
 - [ ] Configuration-Only Editor:
   - Type-safe reader/writer for `server.properties`
   - JSON sync for `allowlist.json` and `permissions.json`
