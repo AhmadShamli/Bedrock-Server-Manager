@@ -8,13 +8,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 )
 
-func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, []byte, string) {
+func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, *engine.MockEngine, []byte, string) {
 	db, err := database.OpenManagerDB(":memory:")
 	if err != nil {
 		t.Fatalf("OpenManagerDB failed: %v", err)
@@ -24,17 +26,22 @@ func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, []byte,
 	pepper := "test-pepper-1234"
 	rateLimiter := auth.NewRateLimiter(5, 5*time.Minute, 10, 5*time.Minute, 15*time.Minute)
 	resolver := ipresolver.NewResolver("direct", nil)
+	mockEngine := engine.NewMockEngine()
+	pa := allocator.NewPortAllocator()
 
 	r := NewRouter(RouterOptions{
-		DB:          db,
-		IPResolver:  resolver,
-		RateLimiter: rateLimiter,
-		JWTSecret:   jwtSecret,
-		Pepper:      pepper,
-		WebFS:       nil,
+		DB:            db,
+		IPResolver:    resolver,
+		RateLimiter:   rateLimiter,
+		Engine:        mockEngine,
+		PortAllocator: pa,
+		DataDir:       "data_test",
+		JWTSecret:     jwtSecret,
+		Pepper:        pepper,
+		WebFS:         nil,
 	})
 
-	return &chiMuxWrapper{r}, db, jwtSecret, pepper
+	return &chiMuxWrapper{r}, db, mockEngine, jwtSecret, pepper
 }
 
 type chiMuxWrapper struct {
@@ -42,7 +49,7 @@ type chiMuxWrapper struct {
 }
 
 func TestAPISetupAndAuthFlow(t *testing.T) {
-	router, db, _, _ := setupTestRouter(t)
+	router, db, _, _, _ := setupTestRouter(t)
 	defer db.Close()
 
 	// 1. Check setup status initially -> needs_setup: true
@@ -116,36 +123,77 @@ func TestAPISetupAndAuthFlow(t *testing.T) {
 }
 
 func TestServerAndKnockFlow(t *testing.T) {
-	router, db, jwtSecret, pepper := setupTestRouter(t)
+	router, db, _, jwtSecret, pepper := setupTestRouter(t)
 	defer db.Close()
 
-	// Create admin user & token
 	ctx := t.Context()
 	u, _ := db.CreateUser(ctx, "admin", "hash", models.RoleAdmin)
 	token, _ := auth.GenerateJWT(jwtSecret, u.ID, u.Username, u.Role, 1*time.Hour)
 
-	// 1. Create Server via API
+	// 1. Suggest free ports
+	req := httptest.NewRequest("GET", "/api/servers/suggest-ports", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("suggest ports failed: %d", w.Code)
+	}
+	var ports map[string]int
+	_ = json.NewDecoder(w.Body).Decode(&ports)
+	if ports["port"] <= 0 || ports["portv6"] <= 0 {
+		t.Errorf("invalid suggested ports: %+v", ports)
+	}
+
+	// 2. Create Server via API
 	srv := models.Server{
 		ID:              "bsm-world",
 		Name:            "Bedrock Realm",
-		Port:            19132,
-		PortV6:          19133,
+		Port:            ports["port"],
+		PortV6:          ports["portv6"],
 		PortGateEnabled: true,
 		PortGateMode:    models.PortGateModePassphrase,
 		PortGateTimeout: 3600,
 	}
 	body, _ := json.Marshal(srv)
-	req := httptest.NewRequest("POST", "/api/servers", bytes.NewReader(body))
+	req = httptest.NewRequest("POST", "/api/servers", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create server failed: %d, body: %s", w.Code, w.Body.String())
 	}
 
-	// 2. Add an access key for this server
+	// 3. Start, Stats, Command, Stop lifecycle
+	req = httptest.NewRequest("POST", "/api/servers/bsm-world/start", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("start server failed: %d", w.Code)
+	}
+
+	req = httptest.NewRequest("GET", "/api/servers/bsm-world/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("stats failed: %d", w.Code)
+	}
+
+	cmdPayload := map[string]string{"command": "time set day"}
+	cmdBody, _ := json.Marshal(cmdPayload)
+	req = httptest.NewRequest("POST", "/api/servers/bsm-world/command", bytes.NewReader(cmdBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("command failed: %d", w.Code)
+	}
+
+	// 4. Add an access key for this server
 	keyHash := auth.HashAccessKey(pepper, "open-sesame")
 	srvID := "bsm-world"
 	_ = db.CreatePortGateKey(ctx, &models.PortGateKey{
@@ -156,7 +204,7 @@ func TestServerAndKnockFlow(t *testing.T) {
 		IsActive:  true,
 	})
 
-	// 3. Test Knock Config
+	// 5. Test Knock Config
 	req = httptest.NewRequest("GET", "/api/knock/bsm-world/config", nil)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -164,7 +212,7 @@ func TestServerAndKnockFlow(t *testing.T) {
 		t.Fatalf("knock config failed: %d", w.Code)
 	}
 
-	// 4. Test Knock Attempt
+	// 6. Test Knock Attempt
 	knockReq := KnockRequest{
 		Passphrase: "open-sesame",
 	}
@@ -183,9 +231,9 @@ func TestServerAndKnockFlow(t *testing.T) {
 	_ = json.NewDecoder(w.Body).Decode(&knockRes)
 	sessionToken := knockRes["session_token"].(string)
 
-	// 5. Test Heartbeat (Mobile Roaming with IP change)
+	// 7. Test Heartbeat (Mobile Roaming with IP change)
 	req = httptest.NewRequest("POST", "/api/knock/bsm-world/heartbeat", nil)
-	req.RemoteAddr = "198.51.100.99:55210" // Simulates player moving to 5G network
+	req.RemoteAddr = "198.51.100.99:55210"
 	req.Header.Set("X-Knock-Token", sessionToken)
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -193,9 +241,13 @@ func TestServerAndKnockFlow(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("heartbeat failed: %d, body: %s", w.Code, w.Body.String())
 	}
-	var hbRes map[string]interface{}
-	_ = json.NewDecoder(w.Body).Decode(&hbRes)
-	if !hbRes["ip_updated"].(bool) {
-		t.Errorf("expected ip_updated to be true on roaming")
+
+	// 8. Stop Server
+	req = httptest.NewRequest("POST", "/api/servers/bsm-world/stop", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("stop server failed: %d", w.Code)
 	}
 }

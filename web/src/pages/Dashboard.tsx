@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Server as ServerIcon, Shield, ExternalLink, HardDrive, AlertTriangle, Loader2 } from 'lucide-react';
+import { Plus, Server as ServerIcon, Shield, ExternalLink, HardDrive, AlertTriangle, Loader2, Play, Square } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User } from '../types';
 
@@ -13,6 +13,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   // New server modal fields
   const [serverId, setServerId] = useState('');
@@ -38,6 +39,42 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
   useEffect(() => {
     fetchServers();
   }, []);
+
+  const openDeployModal = async () => {
+    setShowModal(true);
+    try {
+      const suggested = await api.suggestPorts();
+      if (suggested && suggested.port) {
+        setPort(suggested.port);
+      }
+    } catch {
+      // Keep default port
+    }
+  };
+
+  const handleStart = async (id: string) => {
+    setActionLoading(id);
+    try {
+      await api.startServer(id);
+      await fetchServers();
+    } catch (err: any) {
+      alert(err.message || 'Failed to start server');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleStop = async (id: string) => {
+    setActionLoading(id);
+    try {
+      await api.stopServer(id);
+      await fetchServers();
+    } catch (err: any) {
+      alert(err.message || 'Failed to stop server');
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   const handleCreateServer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,7 +118,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
         {user.role === 'admin' && (
           <button
-            onClick={() => setShowModal(true)}
+            onClick={openDeployModal}
             className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center space-x-2 transition-all shadow-[0_0_15px_rgba(16,185,129,0.25)] hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]"
           >
             <Plus className="w-4 h-4" />
@@ -109,7 +146,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
           </p>
           {user.role === 'admin' && (
             <button
-              onClick={() => setShowModal(true)}
+              onClick={openDeployModal}
               className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono font-bold text-sm"
             >
               + Create Server
@@ -174,12 +211,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
               </div>
 
               <div className="pt-3 border-t border-obsidian-800 flex items-center justify-between">
-                <Link
-                  to={`/servers/${s.id}`}
-                  className="px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-200 hover:text-emerald-400 text-xs font-mono font-medium transition-colors"
-                >
-                  Manage Hub →
-                </Link>
+                <div className="flex items-center space-x-2">
+                  <Link
+                    to={`/servers/${s.id}`}
+                    className="px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-200 hover:text-emerald-400 text-xs font-mono font-medium transition-colors"
+                  >
+                    Manage Hub →
+                  </Link>
+
+                  {s.status === 'running' ? (
+                    <button
+                      onClick={() => handleStop(s.id)}
+                      disabled={actionLoading === s.id}
+                      title="Stop Server"
+                      className="p-1.5 rounded-lg bg-obsidian-950 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-obsidian-700 transition-colors"
+                    >
+                      {actionLoading === s.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5 fill-current" />}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleStart(s.id)}
+                      disabled={actionLoading === s.id}
+                      title="Start Server"
+                      className="p-1.5 rounded-lg bg-obsidian-950 hover:bg-emerald-950/60 text-slate-400 hover:text-emerald-400 border border-obsidian-700 transition-colors"
+                    >
+                      {actionLoading === s.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                    </button>
+                  )}
+                </div>
 
                 <div className="text-[11px] text-slate-500 font-mono">
                   v{s.version}
@@ -230,7 +289,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1">UDP Port</label>
+                  <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                    <span>UDP Port</span>
+                    <span className="text-[10px] text-emerald-400">IPv6: {port + 1}</span>
+                  </label>
                   <input
                     type="number"
                     required

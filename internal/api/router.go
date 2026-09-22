@@ -5,20 +5,25 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
 type RouterOptions struct {
-	DB          *database.ManagerDB
-	IPResolver  *ipresolver.Resolver
-	RateLimiter *auth.RateLimiter
-	JWTSecret   []byte
-	Pepper      string
-	WebFS       fs.FS
+	DB            *database.ManagerDB
+	IPResolver    *ipresolver.Resolver
+	RateLimiter   *auth.RateLimiter
+	Engine        engine.ServerEngine
+	PortAllocator *allocator.PortAllocator
+	DataDir       string
+	JWTSecret     []byte
+	Pepper        string
+	WebFS         fs.FS
 }
 
 // NewRouter constructs and configures the Chi router.
@@ -28,7 +33,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	mw := NewMiddleware(opts.DB, opts.IPResolver, opts.RateLimiter, opts.JWTSecret)
 	authHandler := NewAuthHandler(opts.DB, opts.RateLimiter, opts.JWTSecret)
 	systemHandler := NewSystemHandler(opts.DB)
-	serverHandler := NewServerHandler(opts.DB)
+	serverHandler := NewServerHandler(opts.DB, opts.Engine, opts.PortAllocator, opts.DataDir)
 	knockHandler := NewKnockHandler(opts.DB, opts.RateLimiter, opts.Pepper)
 
 	// Global Middlewares
@@ -66,12 +71,23 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 			// Servers
 			authGroup.Get("/servers", serverHandler.List)
-			authGroup.With(mw.RequireServerAccess).Get("/servers/{id}", serverHandler.Get)
+
+			authGroup.Group(func(srvGroup chi.Router) {
+				srvGroup.Use(mw.RequireServerAccess)
+				srvGroup.Get("/servers/{id}", serverHandler.Get)
+				srvGroup.Get("/servers/{id}/stats", serverHandler.Stats)
+				srvGroup.Get("/servers/{id}/console/ws", serverHandler.ConsoleWS)
+				srvGroup.Post("/servers/{id}/start", serverHandler.Start)
+				srvGroup.Post("/servers/{id}/stop", serverHandler.Stop)
+				srvGroup.Post("/servers/{id}/restart", serverHandler.Restart)
+				srvGroup.Post("/servers/{id}/command", serverHandler.SendCommand)
+			})
 
 			// Admin-only operations
 			authGroup.Group(func(adminGroup chi.Router) {
 				adminGroup.Use(mw.RequireAdmin)
 
+				adminGroup.Get("/servers/suggest-ports", serverHandler.SuggestPorts)
 				adminGroup.Post("/servers", serverHandler.Create)
 				adminGroup.Put("/servers/{id}", serverHandler.Update)
 				adminGroup.Delete("/servers/{id}", serverHandler.Delete)
@@ -93,14 +109,12 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				return
 			}
 
-			// If file exists in WebFS, serve it; otherwise serve index.html for client-side routing
 			if f, err := opts.WebFS.Open(path); err == nil {
 				_ = f.Close()
 				fileServer.ServeHTTP(w, req)
 				return
 			}
 
-			// Fallback to index.html for SPA routes (unless it was an /api route)
 			if !strings.HasPrefix(req.URL.Path, "/api") {
 				req.URL.Path = "/"
 				fileServer.ServeHTTP(w, req)

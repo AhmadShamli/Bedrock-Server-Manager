@@ -96,6 +96,37 @@ class APIClient {
     });
   }
 
+  async suggestPorts(): Promise<{ port: number; portv6: number }> {
+    return this.request('/api/servers/suggest-ports');
+  }
+
+  async startServer(id: string): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/start`, { method: 'POST' });
+  }
+
+  async stopServer(id: string): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/stop`, { method: 'POST' });
+  }
+
+  async restartServer(id: string): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/restart`, { method: 'POST' });
+  }
+
+  async sendCommand(id: string, command: string): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/command`, {
+      method: 'POST',
+      body: JSON.stringify({ command }),
+    });
+  }
+
+  async getStats(id: string): Promise<{
+    cpu_percent: number;
+    ram_bytes: number;
+    player_count: number;
+  }> {
+    return this.request(`/api/servers/${id}/stats`);
+  }
+
   async updateServer(id: string, server: Partial<Server>): Promise<{ status: string }> {
     return this.request(`/api/servers/${id}`, {
       method: 'PUT',

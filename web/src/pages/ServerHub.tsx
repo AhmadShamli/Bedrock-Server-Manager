@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, Play, Shield, Terminal, Settings, ExternalLink, HardDrive, Cpu, AlertTriangle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink, HardDrive, Cpu, AlertTriangle, Loader2, Send } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User } from '../types';
 
@@ -14,21 +14,137 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'portgate' | 'settings'>('overview');
   const [error, setError] = useState<string | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+
+  // Console WebSocket state
+  const [logs, setLogs] = useState<string[]>([]);
+  const [command, setCommand] = useState('');
+  const [wsConnected, setWsConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const consoleBottomRef = useRef<HTMLDivElement | null>(null);
+
+  // Live Stats state
+  const [stats, setStats] = useState<{ cpu_percent: number; ram_bytes: number; player_count: number } | null>(null);
+
+  const fetchServer = async () => {
+    if (!id) return;
+    try {
+      const data = await api.getServer(id);
+      setServer(data);
+    } catch (err: any) {
+      setError(err.message || 'Server not found');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (!id) return;
-    const fetchServer = async () => {
-      try {
-        const data = await api.getServer(id);
-        setServer(data);
-      } catch (err: any) {
-        setError(err.message || 'Server not found');
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchServer();
   }, [id]);
+
+  // Connect WebSocket for live logs
+  useEffect(() => {
+    if (!id || activeTab !== 'overview') return;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const token = localStorage.getItem('bsm_token') || '';
+    const wsUrl = `${protocol}//${window.location.host}/api/servers/${id}/console/ws?token=${encodeURIComponent(token)}`;
+
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setWsConnected(true);
+    };
+
+    ws.onmessage = (evt) => {
+      try {
+        const msg = JSON.parse(evt.data);
+        if (msg.type === 'history' || msg.type === 'log') {
+          setLogs((prev) => [...prev, msg.payload]);
+        }
+      } catch {
+        setLogs((prev) => [...prev, evt.data]);
+      }
+    };
+
+    ws.onclose = () => {
+      setWsConnected(false);
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [id, activeTab]);
+
+  // Auto-scroll console
+  useEffect(() => {
+    consoleBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
+  // Live Stats Poller
+  useEffect(() => {
+    if (!id || server?.status !== 'running') return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.getStats(id);
+        setStats(res);
+      } catch {}
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [id, server?.status]);
+
+  const handleStart = async () => {
+    if (!id) return;
+    setActionLoading(true);
+    try {
+      await api.startServer(id);
+      await fetchServer();
+    } catch (err: any) {
+      alert(err.message || 'Failed to start server');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleStop = async () => {
+    if (!id) return;
+    setActionLoading(true);
+    try {
+      await api.stopServer(id);
+      await fetchServer();
+    } catch (err: any) {
+      alert(err.message || 'Failed to stop server');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRestart = async () => {
+    if (!id) return;
+    setActionLoading(true);
+    try {
+      await api.restartServer(id);
+      await fetchServer();
+    } catch (err: any) {
+      alert(err.message || 'Failed to restart server');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleSendCommand = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!command.trim()) return;
+
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'command', payload: command.trim() }));
+    } else if (id) {
+      api.sendCommand(id, command.trim()).catch(() => {});
+    }
+    setCommand('');
+  };
 
   if (loading) {
     return (
@@ -72,6 +188,8 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                 className={`text-[11px] font-mono px-2 py-0.5 rounded-full border uppercase ${
                   server.status === 'running'
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                    : server.status === 'crashed'
+                    ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
                     : 'bg-slate-800 text-slate-400 border-slate-700'
                 }`}
               >
@@ -97,13 +215,35 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
             </Link>
           )}
 
-          <button
-            className="px-3 py-2 rounded-lg bg-obsidian-850 hover:bg-obsidian-800 border border-obsidian-700 text-slate-200 font-mono text-xs flex items-center space-x-1.5"
-            onClick={() => alert('Server lifecycle management active in Phase 2!')}
-          >
-            <Play className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Start</span>
-          </button>
+          {server.status === 'running' ? (
+            <>
+              <button
+                onClick={handleRestart}
+                disabled={actionLoading}
+                className="px-3 py-2 rounded-lg bg-obsidian-850 hover:bg-obsidian-800 border border-obsidian-700 text-slate-200 font-mono text-xs flex items-center space-x-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-cyber-cyan ${actionLoading ? 'animate-spin' : ''}`} />
+                <span>Restart</span>
+              </button>
+              <button
+                onClick={handleStop}
+                disabled={actionLoading}
+                className="px-3 py-2 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/40 text-rose-300 font-mono text-xs flex items-center space-x-1.5"
+              >
+                <Square className="w-3.5 h-3.5 fill-current text-rose-400" />
+                <span>Stop</span>
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleStart}
+              disabled={actionLoading}
+              className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+            >
+              {actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+              <span>Start Server</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -118,7 +258,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
           }`}
         >
           <Terminal className="w-3.5 h-3.5" />
-          <span>Overview</span>
+          <span>Overview & Console</span>
         </button>
 
         <button
@@ -149,21 +289,56 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       {/* Tab Contents */}
       {activeTab === 'overview' && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 md:col-span-2">
-            <h3 className="font-mono text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
-              <Terminal className="w-4 h-4 text-emerald-400" />
-              <span>Live Console Stream</span>
-            </h3>
-            <div className="h-64 bg-obsidian-950 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto border border-obsidian-800">
-              <p className="text-slate-500">[BSM] Container orchestrator ready.</p>
-              <p className="text-slate-500">[BSM] Waiting for server boot...</p>
-              <p className="text-emerald-400/80">[BSM] Port gating active on UDP {server.port}.</p>
+          {/* Interactive Console */}
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 md:col-span-2 flex flex-col h-[520px]">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-emerald-400" />
+                <span>Interactive BDS Terminal</span>
+              </h3>
+              <div className="flex items-center space-x-2 text-[11px] font-mono">
+                <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`}></span>
+                <span className="text-slate-400">{wsConnected ? 'Connected' : 'Offline'}</span>
+              </div>
             </div>
+
+            {/* Console Log Area */}
+            <div className="flex-1 bg-obsidian-950 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto border border-obsidian-800 space-y-1">
+              {logs.length === 0 ? (
+                <p className="text-slate-600 italic">No console logs received yet...</p>
+              ) : (
+                logs.map((line, idx) => (
+                  <div key={idx} className="leading-relaxed hover:bg-obsidian-900/60 px-1 rounded">
+                    {line}
+                  </div>
+                ))
+              )}
+              <div ref={consoleBottomRef} />
+            </div>
+
+            {/* Command Input Bar */}
+            <form onSubmit={handleSendCommand} className="mt-3 flex items-center gap-2">
+              <input
+                type="text"
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                placeholder="Enter BDS console command (e.g. say Hello, op Steve, time set day)..."
+                className="flex-1 px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-xs focus:border-emerald-500"
+              />
+              <button
+                type="submit"
+                className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>Send</span>
+              </button>
+            </form>
           </div>
 
+          {/* Right Column: Resource Limits & Live Telemetry */}
           <div className="space-y-6">
             <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
-              <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Resource Limits</h3>
+              <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Hardware Limits</h3>
               <div className="space-y-3 font-mono text-xs">
                 <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
                   <span className="text-slate-400 flex items-center gap-1.5">
@@ -181,6 +356,26 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                 </div>
               </div>
             </div>
+
+            {stats && (
+              <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
+                <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Live Telemetry</h3>
+                <div className="space-y-3 font-mono text-xs">
+                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                    <span className="text-slate-400">Current CPU</span>
+                    <span className="text-emerald-400 font-bold">{stats.cpu_percent.toFixed(1)}%</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                    <span className="text-slate-400">Current RAM</span>
+                    <span className="text-slate-200">{(stats.ram_bytes / (1024 * 1024)).toFixed(0)} MB</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">Online Players</span>
+                    <span className="text-cyber-cyan font-bold">{stats.player_count}</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
               <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Port Gating</h3>

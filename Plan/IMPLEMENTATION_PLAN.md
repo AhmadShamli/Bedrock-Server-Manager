@@ -39,7 +39,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 ---
 
 ## Phase 2: Docker Server Orchestrator & Port Allocator
-- [ ] Implement `DockerEngine` (`internal/engine/docker.go`) using `github.com/docker/docker/client`:
+- [x] Implement `DockerEngine` (`internal/engine/docker.go`) using `github.com/docker/docker/client`:
   - Connect to `/var/run/docker.sock` or `DOCKER_HOST`
   - Automated image management (`itzg/minecraft-bedrock-server` version pulling)
   - Container creation with strict hardware resource capping:
@@ -51,7 +51,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - Live console streaming via `ContainerAttach` (stdin/stdout WebSockets with 1,000-line ring buffer)
   - Real-time hardware telemetry sampling via `ContainerStats` (CPU %, RAM RSS/usage, network I/O)
   - Crash-loop circuit breaker (stops auto-restarting if 5 crashes occur within 5 mins) and exponential backoff
-- [ ] Implement Port Allocator (`internal/allocator/port.go`):
+- [x] Implement Port Allocator (`internal/allocator/port.go`):
   - Scans for free UDP ports starting at 19132 (IPv4) / 19133 (IPv6)
   - Validates against active Docker port bindings, host listeners, and registered servers
 

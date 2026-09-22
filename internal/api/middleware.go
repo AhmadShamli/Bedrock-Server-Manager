@@ -42,12 +42,14 @@ func (m *Middleware) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var tokenStr string
 
-		// Check Authorization header
+		// Check Authorization header, cookie, or URL query param (for WebSockets)
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
 		} else if cookie, err := r.Cookie("bsm_session"); err == nil {
 			tokenStr = cookie.Value
+		} else if qToken := r.URL.Query().Get("token"); qToken != "" {
+			tokenStr = qToken
 		}
 
 		if tokenStr == "" {

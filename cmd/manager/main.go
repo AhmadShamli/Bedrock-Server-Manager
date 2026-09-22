@@ -11,11 +11,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/api"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/config"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/web"
 )
@@ -78,29 +81,72 @@ func main() {
 		_ = mgrDB.SetSetting(ctx, "heartbeat_interval_seconds", strconv.Itoa(int(cfg.HeartbeatInterval.Seconds())))
 	}
 
-	// 6. Initialize IP Resolver & Rate Limiter
+	// 6. Initialize Container Orchestration Engine
+	var serverEngine engine.ServerEngine
+	dockerEng, err := engine.NewDockerEngine(cfg.DockerHost)
+	if err == nil {
+		serverEngine = dockerEng
+		log.Println("[Engine] Docker container orchestrator initialized.")
+	} else {
+		log.Printf("[WARN] Docker daemon unreachable (%v). Running in simulated fallback mode.", err)
+		serverEngine = engine.NewMockEngine()
+	}
+
+	// 7. Initialize Port Allocator & IP Resolver
+	portAlloc := allocator.NewPortAllocator()
 	resolver := ipresolver.NewResolver(cfg.ProxyMode, cfg.TrustedProxies)
 	log.Printf("[Network] Client IP Resolver initialized (Mode: %s)", cfg.ProxyMode)
 
 	// Two-tier rate limiter: Level 1: 5 attempts/5m; Level 2: 10 distinct failed IPs/5m -> 15m circuit breaker
 	rateLimiter := auth.NewRateLimiter(5, 5*time.Minute, 10, 5*time.Minute, 15*time.Minute)
 
-	// 7. Initialize Telemetry Collector
+	// 8. Initialize Telemetry Collector & Poller
 	telemetryCollector := telemetry.NewTelemetryCollector(metricsDB)
 	telemetryCollector.Start(30*time.Second, 5*time.Minute, 1*time.Hour)
 	defer telemetryCollector.Stop()
 
-	// 8. Build Router
+	// Background metrics sampler (every 2s default)
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			servers, err := mgrDB.ListServers(context.Background())
+			if err != nil {
+				continue
+			}
+			for _, s := range servers {
+				if s.Status == models.ServerStatusRunning {
+					if stats, err := serverEngine.GetContainerStats(context.Background(), &s); err == nil && stats != nil {
+						telemetryCollector.Ingest(s.ID, stats.CPUPercent, stats.RAMBytes, stats.PlayerCount)
+					}
+				}
+			}
+		}
+	}()
+
+	// 9. Boot Manager (auto-start servers marked autostart_on_boot = 1)
+	bootMgr := engine.NewBootManager(mgrDB, serverEngine)
+	go func() {
+		time.Sleep(1 * time.Second) // Brief pause to let HTTP initialize
+		if started, err := bootMgr.AutostartServers(context.Background()); err == nil && len(started) > 0 {
+			log.Printf("[BootManager] Successfully autostarted %d servers: %v", len(started), started)
+		}
+	}()
+
+	// 10. Build Router
 	router := api.NewRouter(api.RouterOptions{
-		DB:          mgrDB,
-		IPResolver:  resolver,
-		RateLimiter: rateLimiter,
-		JWTSecret:   []byte(jwtSecretStr),
-		Pepper:      pepperStr,
-		WebFS:       web.DistFS(),
+		DB:            mgrDB,
+		IPResolver:    resolver,
+		RateLimiter:   rateLimiter,
+		Engine:        serverEngine,
+		PortAllocator: portAlloc,
+		DataDir:       cfg.DataDir,
+		JWTSecret:     []byte(jwtSecretStr),
+		Pepper:        pepperStr,
+		WebFS:         web.DistFS(),
 	})
 
-	// 9. Start HTTP Server
+	// 11. Start HTTP Server
 	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv := &http.Server{
 		Addr:         serverAddr,
@@ -117,7 +163,7 @@ func main() {
 		}
 	}()
 
-	// 10. Graceful Shutdown
+	// 12. Graceful Shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
