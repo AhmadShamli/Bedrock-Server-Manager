@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -299,12 +300,13 @@ func (e *DockerEngine) SendConsoleCommand(ctx context.Context, server *models.Se
 		containerID = fmt.Sprintf("bsm-%s", server.ID)
 	}
 
+	escapedCmd := strings.ReplaceAll(cmd, "'", `'\''`)
 	execConfig := types.ExecConfig{
 		AttachStdin:  true,
 		AttachStdout: false,
 		AttachStderr: false,
 		Tty:          true,
-		Cmd:          []string{"sh", "-c", fmt.Sprintf("echo '%s' > /proc/1/fd/0", cmd)},
+		Cmd:          []string{"sh", "-c", fmt.Sprintf("echo '%s' > /proc/1/fd/0", escapedCmd)},
 	}
 
 	execID, err := e.cli.ContainerExecCreate(ctx, containerID, execConfig)

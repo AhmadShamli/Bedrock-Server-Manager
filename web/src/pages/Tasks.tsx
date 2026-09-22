@@ -296,6 +296,7 @@ export const Tasks: React.FC = () => {
                   onChange={(e) => setServerId(e.target.value)}
                   className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
                 >
+                  <option value="">Global (All Servers / System)</option>
                   {servers.map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} ({s.port})

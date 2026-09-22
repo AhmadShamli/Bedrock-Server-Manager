@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -39,11 +41,22 @@ func (h *ServerHandler) ConsoleWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	var writeMu sync.Mutex
+	safeWriteJSON := func(v interface{}) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		return conn.WriteJSON(v)
+	}
+
 	// 1. Send recent 1,000-line history
 	history := h.engine.GetRecentLogs(serverID)
 	for _, line := range history {
 		msg := WSMessage{Type: "history", Payload: line}
-		if err := conn.WriteJSON(msg); err != nil {
+		if err := safeWriteJSON(msg); err != nil {
 			return
 		}
 	}
@@ -62,11 +75,10 @@ func (h *ServerHandler) ConsoleWS(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					return
 				}
-				_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if err := conn.WriteJSON(WSMessage{Type: "log", Payload: line}); err != nil {
+				if err := safeWriteJSON(WSMessage{Type: "log", Payload: line}); err != nil {
 					return
 				}
-			case <-r.Context().Done():
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -80,11 +92,12 @@ func (h *ServerHandler) ConsoleWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if wsMsg.Type == "command" && wsMsg.Payload != "" {
-			if err := h.engine.SendConsoleCommand(r.Context(), server, wsMsg.Payload); err != nil {
-				_ = conn.WriteJSON(WSMessage{Type: "error", Payload: "Failed to send command: " + err.Error()})
+			if err := h.engine.SendConsoleCommand(ctx, server, wsMsg.Payload); err != nil {
+				_ = safeWriteJSON(WSMessage{Type: "error", Payload: "Failed to send command: " + err.Error()})
 			}
 		}
 	}
 
+	cancel()
 	<-done
 }

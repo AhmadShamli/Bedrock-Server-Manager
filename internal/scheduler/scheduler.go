@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,24 +18,33 @@ import (
 
 // TaskScheduler coordinates cron-based automated server routines.
 type TaskScheduler struct {
-	mu        sync.Mutex
-	db        *database.ManagerDB
-	eng       engine.ServerEngine
-	dataDir   string
-	cron      *cron.Cron
-	entryIDs  map[int64]cron.EntryID
-	runningMu sync.Mutex
+	mu            sync.Mutex
+	db            *database.ManagerDB
+	eng           engine.ServerEngine
+	dataDir       string
+	cron          *cron.Cron
+	entryIDs      map[int64]cron.EntryID
+	runningMu     sync.Mutex
+	restartDelays []time.Duration
 }
 
 // NewTaskScheduler initializes a new TaskScheduler instance.
 func NewTaskScheduler(db *database.ManagerDB, eng engine.ServerEngine, dataDir string) *TaskScheduler {
 	return &TaskScheduler{
-		db:       db,
-		eng:      eng,
-		dataDir:  dataDir,
-		cron:     cron.New(cron.WithParser(cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor))),
-		entryIDs: make(map[int64]cron.EntryID),
+		db:            db,
+		eng:           eng,
+		dataDir:       dataDir,
+		cron:          cron.New(cron.WithParser(cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor))),
+		entryIDs:      make(map[int64]cron.EntryID),
+		restartDelays: []time.Duration{15 * time.Second, 10 * time.Second, 5 * time.Second},
 	}
+}
+
+// SetRestartDelays configures custom countdown intervals for server restart routines (e.g. for testing).
+func (s *TaskScheduler) SetRestartDelays(delays []time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.restartDelays = delays
 }
 
 // Start begins the cron scheduler and loads active tasks from the database.
@@ -157,61 +167,139 @@ func (s *TaskScheduler) executeTask(ctx context.Context, t *models.Task) {
 	})
 }
 
-func (s *TaskScheduler) runBackupTask(ctx context.Context, t *models.Task) error {
-	if t.ServerID == nil {
-		return fmt.Errorf("backup task requires server_id")
+func (s *TaskScheduler) resolveTargetServers(ctx context.Context, t *models.Task) ([]*models.Server, error) {
+	if t.ServerID != nil {
+		srv, err := s.db.GetServer(ctx, *t.ServerID)
+		if err != nil {
+			return nil, fmt.Errorf("server not found: %w", err)
+		}
+		return []*models.Server{srv}, nil
 	}
-	srv, err := s.db.GetServer(ctx, *t.ServerID)
+
+	servers, err := s.db.ListServers(ctx)
 	if err != nil {
-		return fmt.Errorf("server not found: %w", err)
+		return nil, fmt.Errorf("failed to list servers: %w", err)
+	}
+	result := make([]*models.Server, len(servers))
+	for i := range servers {
+		result[i] = &servers[i]
+	}
+	return result, nil
+}
+
+func (s *TaskScheduler) runBackupTask(ctx context.Context, t *models.Task) error {
+	targets, err := s.resolveTargetServers(ctx, t)
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return nil
 	}
 
-	serverDir := filepath.Join(s.dataDir, "servers", srv.ID)
-	backupDir := filepath.Join(s.dataDir, "backups", srv.ID)
-
-	_, err = backup.CreateHotBackup(ctx, srv, serverDir, backupDir, s.eng, "scheduled", false, s.db)
-	return err
+	var errs []string
+	for _, srv := range targets {
+		serverDir := filepath.Join(s.dataDir, "servers", srv.ID)
+		backupDir := filepath.Join(s.dataDir, "backups", srv.ID)
+		if _, err := backup.CreateHotBackup(ctx, srv, serverDir, backupDir, s.eng, "scheduled", false, s.db); err != nil {
+			errs = append(errs, fmt.Sprintf("server %s: %v", srv.ID, err))
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("backup failed: %s", strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 func (s *TaskScheduler) runRestartTask(ctx context.Context, t *models.Task) error {
-	if t.ServerID == nil {
-		return fmt.Errorf("restart task requires server_id")
-	}
-	srv, err := s.db.GetServer(ctx, *t.ServerID)
+	targets, err := s.resolveTargetServers(ctx, t)
 	if err != nil {
-		return fmt.Errorf("server not found: %w", err)
+		return err
+	}
+	if len(targets) == 0 || s.eng == nil {
+		return nil
 	}
 
-	if srv.Status == models.ServerStatusRunning && s.eng != nil {
-		// Broadcast countdown warnings to in-game players
-		_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 30 seconds!")
-		time.Sleep(15 * time.Second)
-		_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 15 seconds!")
-		time.Sleep(10 * time.Second)
-		_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 5 seconds!")
-		time.Sleep(5 * time.Second)
-
-		return s.eng.RestartServer(ctx, srv)
+	var running []*models.Server
+	for _, srv := range targets {
+		if srv.Status == models.ServerStatusRunning {
+			running = append(running, srv)
+		}
 	}
 
-	if srv.Status == models.ServerStatusStopped && s.eng != nil {
-		return s.eng.StartServer(ctx, srv)
+	s.mu.Lock()
+	delays := s.restartDelays
+	s.mu.Unlock()
+
+	if len(running) > 0 && len(delays) == 3 {
+		// Broadcast countdown warnings to in-game players across all target running servers
+		for _, srv := range running {
+			_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 30 seconds!")
+		}
+		if sleepWithContext(ctx, delays[0]) {
+			for _, srv := range running {
+				_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 15 seconds!")
+			}
+			if sleepWithContext(ctx, delays[1]) {
+				for _, srv := range running {
+					_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 5 seconds!")
+				}
+				_ = sleepWithContext(ctx, delays[2])
+			}
+		}
 	}
 
+	var errs []string
+	for _, srv := range targets {
+		if srv.Status == models.ServerStatusRunning {
+			if err := s.eng.RestartServer(ctx, srv); err != nil {
+				errs = append(errs, fmt.Sprintf("server %s restart failed: %v", srv.ID, err))
+			}
+		} else if srv.Status == models.ServerStatusStopped {
+			if err := s.eng.StartServer(ctx, srv); err != nil {
+				errs = append(errs, fmt.Sprintf("server %s start failed: %v", srv.ID, err))
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("restart errors: %s", strings.Join(errs, "; "))
+	}
 	return nil
 }
 
 func (s *TaskScheduler) runCommandTask(ctx context.Context, t *models.Task) error {
-	if t.ServerID == nil {
-		return fmt.Errorf("command task requires server_id")
-	}
-	srv, err := s.db.GetServer(ctx, *t.ServerID)
+	targets, err := s.resolveTargetServers(ctx, t)
 	if err != nil {
-		return fmt.Errorf("server not found: %w", err)
+		return err
+	}
+	if len(targets) == 0 || s.eng == nil {
+		return nil
 	}
 
-	if s.eng != nil && srv.Status == models.ServerStatusRunning {
-		return s.eng.SendConsoleCommand(ctx, srv, t.Payload)
+	var errs []string
+	for _, srv := range targets {
+		if srv.Status == models.ServerStatusRunning {
+			if err := s.eng.SendConsoleCommand(ctx, srv, t.Payload); err != nil {
+				errs = append(errs, fmt.Sprintf("server %s command failed: %v", srv.ID, err))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("command execution errors: %s", strings.Join(errs, "; "))
 	}
 	return nil
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }

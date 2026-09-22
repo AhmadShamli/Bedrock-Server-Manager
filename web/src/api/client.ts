@@ -244,7 +244,8 @@ class APIClient {
   }
 
   getExportUrl(id: string): string {
-    return `/api/servers/${id}/export`;
+    const token = this.getToken();
+    return `/api/servers/${id}/export${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   }
 
   // Presets & Updates
