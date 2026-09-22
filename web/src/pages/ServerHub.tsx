@@ -13,7 +13,7 @@ interface ServerHubProps {
   user: User;
 }
 
-export const ServerHub: React.FC<ServerHubProps> = () => {
+export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [server, setServer] = useState<Server | null>(null);
@@ -1614,7 +1614,8 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       {activeTab === 'settings' && (
         <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 max-w-4xl space-y-8">
           {/* SERVER INSTANCE CONFIGURATION */}
-          <div className="border-b border-obsidian-800 pb-8">
+          {user.role === 'admin' && (
+            <div className="border-b border-obsidian-800 pb-8">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
@@ -1812,6 +1813,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
               )}
             </form>
           </div>
+          )}
 
           {/* server.properties form */}
           <div>
@@ -2131,53 +2133,55 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
           )}
 
           {/* 1-Click Clone Form */}
-          <div>
-            <h3 className="font-mono text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
-              <Copy className="w-4 h-4 text-emerald-400" />
-              <span>1-Click Server Cloning</span>
-            </h3>
-            <p className="text-xs text-slate-400 font-mono mb-4">
-              Duplicate all worlds, configurations, and packs. An unused UDP port is automatically assigned.
-            </p>
+          {user.role === 'admin' && (
+            <div>
+              <h3 className="font-mono text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
+                <Copy className="w-4 h-4 text-emerald-400" />
+                <span>1-Click Server Cloning</span>
+              </h3>
+              <p className="text-xs text-slate-400 font-mono mb-4">
+                Duplicate all worlds, configurations, and packs. An unused UDP port is automatically assigned.
+              </p>
 
-            <form onSubmit={handleClone} className="space-y-3 font-mono text-xs">
-              <div>
-                <label className="block text-slate-400 mb-1">Cloned Server Name</label>
-                <input
-                  type="text"
-                  required
-                  value={cloneName}
-                  onChange={(e) => {
-                    setCloneName(e.target.value);
-                    if (!cloneId) setCloneId(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '-'));
-                  }}
-                  placeholder="Survival Clone"
-                  className="w-full px-3 py-2 rounded bg-obsidian-950 border border-obsidian-700 text-slate-100 text-xs"
-                />
-              </div>
+              <form onSubmit={handleClone} className="space-y-3 font-mono text-xs">
+                <div>
+                  <label className="block text-slate-400 mb-1">Cloned Server Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={cloneName}
+                    onChange={(e) => {
+                      setCloneName(e.target.value);
+                      if (!cloneId) setCloneId(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '-'));
+                    }}
+                    placeholder="Survival Clone"
+                    className="w-full px-3 py-2 rounded bg-obsidian-950 border border-obsidian-700 text-slate-100 text-xs"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-slate-400 mb-1">Cloned Server ID</label>
-                <input
-                  type="text"
-                  required
-                  value={cloneId}
-                  onChange={(e) => setCloneId(e.target.value)}
-                  placeholder="survival-clone"
-                  className="w-full px-3 py-2 rounded bg-obsidian-950 border border-obsidian-700 text-slate-100 text-xs"
-                />
-              </div>
+                <div>
+                  <label className="block text-slate-400 mb-1">Cloned Server ID</label>
+                  <input
+                    type="text"
+                    required
+                    value={cloneId}
+                    onChange={(e) => setCloneId(e.target.value)}
+                    placeholder="survival-clone"
+                    className="w-full px-3 py-2 rounded bg-obsidian-950 border border-obsidian-700 text-slate-100 text-xs"
+                  />
+                </div>
 
-              <button
-                type="submit"
-                disabled={cloning}
-                className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-2"
-              >
-                {cloning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>Clone Instance</span>
-              </button>
-            </form>
-          </div>
+                <button
+                  type="submit"
+                  disabled={cloning}
+                  className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-2"
+                >
+                  {cloning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>Clone Instance</span>
+                </button>
+              </form>
+            </div>
+          )}
 
           {/* Export Bundle */}
           <div className="pt-6 border-t border-obsidian-800">
@@ -2200,188 +2204,192 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
           </div>
 
           {/* Sync & Copy Configs to Another Server */}
-          <div className="pt-6 border-t border-obsidian-800">
-            <h3 className="font-mono text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
-              <Share2 className="w-4 h-4 text-emerald-400" />
-              <span>Sync & Copy Configs to Another Server</span>
-            </h3>
-            <p className="text-xs text-slate-400 font-mono mb-4">
-              Selectively copy allowlists (<code className="text-emerald-400">allowlist.json</code>), operator permissions (<code className="text-amber-400">permissions.json</code>), or server properties to existing servers. Target network ports and world identities are strictly preserved.
-            </p>
+          {user.role === 'admin' && (
+            <div className="pt-6 border-t border-obsidian-800">
+              <h3 className="font-mono text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
+                <Share2 className="w-4 h-4 text-emerald-400" />
+                <span>Sync & Copy Configs to Another Server</span>
+              </h3>
+              <p className="text-xs text-slate-400 font-mono mb-4">
+                Selectively copy allowlists (<code className="text-emerald-400">allowlist.json</code>), operator permissions (<code className="text-amber-400">permissions.json</code>), or server properties to existing servers. Target network ports and world identities are strictly preserved.
+              </p>
 
-            {copyStatusMsg && (
-              <div
-                className={`p-3 rounded-lg font-mono text-xs mb-4 border ${
-                  copyStatusMsg.isError
-                    ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                    : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                }`}
-              >
-                {copyStatusMsg.text}
-              </div>
-            )}
+              {copyStatusMsg && (
+                <div
+                  className={`p-3 rounded-lg font-mono text-xs mb-4 border ${
+                    copyStatusMsg.isError
+                      ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                      : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                  }`}
+                >
+                  {copyStatusMsg.text}
+                </div>
+              )}
 
-            <form onSubmit={handleCopyConfigs} className="space-y-4 font-mono text-xs">
-              {/* Target Servers Selector */}
-              <div>
-                <label className="block text-slate-400 mb-1.5 font-bold">Select Target Server(s):</label>
-                {allServers.filter((s) => s.id !== server.id).length === 0 ? (
-                  <p className="text-slate-600 italic bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
-                    No other servers found. Create or clone another server first to sync configs between them.
-                  </p>
-                ) : (
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto p-2 bg-obsidian-950 rounded-lg border border-obsidian-800">
-                    {allServers
-                      .filter((s) => s.id !== server.id)
-                      .map((s) => {
-                        const isSelected = selectedTargetIds.includes(s.id);
-                        return (
-                          <label
-                            key={s.id}
-                            className={`flex items-center justify-between p-2 rounded cursor-pointer transition-colors ${
-                              isSelected ? 'bg-emerald-950/40 border border-emerald-500/40' : 'hover:bg-obsidian-900 border border-transparent'
-                            }`}
-                          >
-                            <div className="flex items-center space-x-2.5">
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedTargetIds([...selectedTargetIds, s.id]);
-                                  } else {
-                                    setSelectedTargetIds(selectedTargetIds.filter((tid) => tid !== s.id));
-                                  }
-                                }}
-                                className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
-                              />
-                              <div>
-                                <span className="text-slate-200 font-bold">{s.name}</span>
-                                <span className="text-slate-500 text-[10px] ml-2">({s.id} • UDP :{s.port})</span>
-                              </div>
-                            </div>
-                            <span
-                              className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                                s.status === 'running'
-                                  ? 'bg-emerald-500/10 text-emerald-400'
-                                  : 'bg-slate-500/10 text-slate-400'
+              <form onSubmit={handleCopyConfigs} className="space-y-4 font-mono text-xs">
+                {/* Target Servers Selector */}
+                <div>
+                  <label className="block text-slate-400 mb-1.5 font-bold">Select Target Server(s):</label>
+                  {allServers.filter((s) => s.id !== server.id).length === 0 ? (
+                    <p className="text-slate-600 italic bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
+                      No other servers found. Create or clone another server first to sync configs between them.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto p-2 bg-obsidian-950 rounded-lg border border-obsidian-800">
+                      {allServers
+                        .filter((s) => s.id !== server.id)
+                        .map((s) => {
+                          const isSelected = selectedTargetIds.includes(s.id);
+                          return (
+                            <label
+                              key={s.id}
+                              className={`flex items-center justify-between p-2 rounded cursor-pointer transition-colors ${
+                                isSelected ? 'bg-emerald-950/40 border border-emerald-500/40' : 'hover:bg-obsidian-900 border border-transparent'
                               }`}
                             >
-                              {s.status}
-                            </span>
-                          </label>
-                        );
-                      })}
+                              <div className="flex items-center space-x-2.5">
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedTargetIds([...selectedTargetIds, s.id]);
+                                    } else {
+                                      setSelectedTargetIds(selectedTargetIds.filter((tid) => tid !== s.id));
+                                    }
+                                  }}
+                                  className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                                />
+                                <div>
+                                  <span className="text-slate-200 font-bold">{s.name}</span>
+                                  <span className="text-slate-500 text-[10px] ml-2">({s.id} • UDP :{s.port})</span>
+                                </div>
+                              </div>
+                              <span
+                                className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                                  s.status === 'running'
+                                    ? 'bg-emerald-500/10 text-emerald-400'
+                                    : 'bg-slate-500/10 text-slate-400'
+                                }`}
+                              >
+                                {s.status}
+                              </span>
+                            </label>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Items to copy */}
+                <div>
+                  <label className="block text-slate-400 mb-1.5 font-bold">Configurations to Copy:</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={copyAllowlist}
+                        onChange={(e) => setCopyAllowlist(e.target.checked)}
+                        className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                      />
+                      <span className="text-slate-200 text-xs">Allowlist</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={copyPermissions}
+                        onChange={(e) => setCopyPermissions(e.target.checked)}
+                        className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                      />
+                      <span className="text-slate-200 text-xs">Ops & Permissions</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={copyProperties}
+                        onChange={(e) => setCopyProperties(e.target.checked)}
+                        className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                      />
+                      <span className="text-slate-200 text-xs">server.properties</span>
+                    </label>
                   </div>
-                )}
-              </div>
-
-              {/* Items to copy */}
-              <div>
-                <label className="block text-slate-400 mb-1.5 font-bold">Configurations to Copy:</label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
-                  <label className="flex items-center space-x-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={copyAllowlist}
-                      onChange={(e) => setCopyAllowlist(e.target.checked)}
-                      className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
-                    />
-                    <span className="text-slate-200 text-xs">Allowlist</span>
-                  </label>
-
-                  <label className="flex items-center space-x-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={copyPermissions}
-                      onChange={(e) => setCopyPermissions(e.target.checked)}
-                      className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
-                    />
-                    <span className="text-slate-200 text-xs">Ops & Permissions</span>
-                  </label>
-
-                  <label className="flex items-center space-x-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={copyProperties}
-                      onChange={(e) => setCopyProperties(e.target.checked)}
-                      className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
-                    />
-                    <span className="text-slate-200 text-xs">server.properties</span>
-                  </label>
                 </div>
-              </div>
 
-              {/* Mode */}
-              <div>
-                <label className="block text-slate-400 mb-1.5 font-bold">Sync Mode:</label>
-                <div className="flex flex-col sm:flex-row gap-3 bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
-                  <label className="flex items-center space-x-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="copyMode"
-                      value="merge"
-                      checked={copyMode === 'merge'}
-                      onChange={() => setCopyMode('merge')}
-                      className="text-emerald-500 bg-obsidian-900 border-obsidian-700 focus:ring-emerald-500"
-                    />
-                    <div>
-                      <span className="text-slate-200 font-bold block">Merge</span>
-                      <span className="text-[10px] text-slate-400">Preserve existing entries on target and append new</span>
-                    </div>
-                  </label>
+                {/* Mode */}
+                <div>
+                  <label className="block text-slate-400 mb-1.5 font-bold">Sync Mode:</label>
+                  <div className="flex flex-col sm:flex-row gap-3 bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="copyMode"
+                        value="merge"
+                        checked={copyMode === 'merge'}
+                        onChange={() => setCopyMode('merge')}
+                        className="text-emerald-500 bg-obsidian-900 border-obsidian-700 focus:ring-emerald-500"
+                      />
+                      <div>
+                        <span className="text-slate-200 font-bold block">Merge</span>
+                        <span className="text-[10px] text-slate-400">Preserve existing entries on target and append new</span>
+                      </div>
+                    </label>
 
-                  <label className="flex items-center space-x-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="copyMode"
-                      value="replace"
-                      checked={copyMode === 'replace'}
-                      onChange={() => setCopyMode('replace')}
-                      className="text-emerald-500 bg-obsidian-900 border-obsidian-700 focus:ring-emerald-500"
-                    />
-                    <div>
-                      <span className="text-slate-200 font-bold block">Replace / Overwrite</span>
-                      <span className="text-[10px] text-slate-400">Overwrite target files completely</span>
-                    </div>
-                  </label>
+                    <label className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="copyMode"
+                        value="replace"
+                        checked={copyMode === 'replace'}
+                        onChange={() => setCopyMode('replace')}
+                        className="text-emerald-500 bg-obsidian-900 border-obsidian-700 focus:ring-emerald-500"
+                      />
+                      <div>
+                        <span className="text-slate-200 font-bold block">Replace / Overwrite</span>
+                        <span className="text-[10px] text-slate-400">Overwrite target files completely</span>
+                      </div>
+                    </label>
+                  </div>
                 </div>
-              </div>
 
-              <button
-                type="submit"
-                disabled={copying || selectedTargetIds.length === 0}
-                className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-2 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {copying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
-                <span>Sync Configurations</span>
-              </button>
-            </form>
-          </div>
+                <button
+                  type="submit"
+                  disabled={copying || selectedTargetIds.length === 0}
+                  className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {copying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
+                  <span>Sync Configurations</span>
+                </button>
+              </form>
+            </div>
+          )}
 
           {/* DANGER ZONE - DELETE SERVER */}
-          <div className="pt-6 border-t border-rose-900/40">
-            <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-5 space-y-3">
-              <h3 className="font-mono text-base font-bold text-rose-300 flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-rose-400" />
-                <span>Danger Zone: Delete Server Instance</span>
-              </h3>
-              <p className="text-xs text-slate-400 font-mono">
-                Irrevocably deletes this server container, its database record, and configuration. Be sure to export or backup worlds beforehand.
-              </p>
-              <button
-                type="button"
-                onClick={() => {
-                  setDeleteConfirmText('');
-                  setShowDeleteServerModal(true);
-                }}
-                className="px-4 py-2 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-slate-950 font-bold font-mono text-xs border border-rose-500/40 flex items-center space-x-1.5 transition-colors"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete Server Instance</span>
-              </button>
+          {user.role === 'admin' && (
+            <div className="pt-6 border-t border-rose-900/40">
+              <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-5 space-y-3">
+                <h3 className="font-mono text-base font-bold text-rose-300 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-400" />
+                  <span>Danger Zone: Delete Server Instance</span>
+                </h3>
+                <p className="text-xs text-slate-400 font-mono">
+                  Irrevocably deletes this server container, its database record, and configuration. Be sure to export or backup worlds beforehand.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteConfirmText('');
+                    setShowDeleteServerModal(true);
+                  }}
+                  className="px-4 py-2 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-slate-950 font-bold font-mono text-xs border border-rose-500/40 flex items-center space-x-1.5 transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Server Instance</span>
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* DELETE SERVER CONFIRMATION MODAL */}
           {showDeleteServerModal && (
