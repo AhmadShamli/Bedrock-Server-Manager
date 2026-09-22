@@ -1,0 +1,35 @@
+services:
+  bsm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bedrock-server-manager
+    restart: unless-stopped
+    # host PID and network privileges allow BSM to dynamically manage host firewall rules via nsenter
+    pid: host
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+    environment:
+      - PORT=8080
+      - DATA_DIR=/data
+      - PROXY_MODE=direct # Options: direct, reverse_proxy, cloudflare
+      - FIREWALL_DRIVER=ufw # Options: ufw, iptables, custom, mock
+      - HEARTBEAT_INTERVAL_SECONDS=10
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      # Docker daemon socket for Minecraft BDS container orchestration
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persistent manager data (database, server configs, backups)
+      - ./data:/data
+    ports:
+      # Web dashboard & API
+      - "8080:8080"
+      # Default Bedrock Dedicated Server UDP ports range
+      - "19132-19142:19132-19142/udp"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

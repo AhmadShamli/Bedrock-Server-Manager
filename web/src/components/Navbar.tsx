@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Shield, Server as ServerIcon, LogOut, Terminal } from 'lucide-react';
+import { Shield, Server as ServerIcon, LogOut, Terminal, Clock, History } from 'lucide-react';
 import { api } from '../api/client';
 import { User } from '../types';
 
@@ -43,6 +43,26 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
               <ServerIcon className="w-4 h-4" />
               <span className="hidden sm:inline">Instances</span>
             </Link>
+
+            {user.role === 'admin' && (
+              <>
+                <Link
+                  to="/tasks"
+                  className="px-3 py-1.5 text-sm font-medium text-slate-300 hover:text-emerald-400 flex items-center space-x-1.5 transition-colors"
+                >
+                  <Clock className="w-4 h-4" />
+                  <span className="hidden sm:inline">Tasks</span>
+                </Link>
+
+                <Link
+                  to="/audit"
+                  className="px-3 py-1.5 text-sm font-medium text-slate-300 hover:text-emerald-400 flex items-center space-x-1.5 transition-colors"
+                >
+                  <History className="w-4 h-4" />
+                  <span className="hidden sm:inline">Audit</span>
+                </Link>
+              </>
+            )}
 
             <div className="h-4 w-px bg-obsidian-700"></div>
 

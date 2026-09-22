@@ -9,6 +9,7 @@ import (
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/go-chi/chi/v5"
 )
@@ -17,13 +18,15 @@ type KnockHandler struct {
 	db          *database.ManagerDB
 	rateLimiter *auth.RateLimiter
 	pepper      string
+	firewall    firewall.FirewallDriver
 }
 
-func NewKnockHandler(db *database.ManagerDB, rateLimiter *auth.RateLimiter, pepper string) *KnockHandler {
+func NewKnockHandler(db *database.ManagerDB, rateLimiter *auth.RateLimiter, pepper string, fw firewall.FirewallDriver) *KnockHandler {
 	return &KnockHandler{
 		db:          db,
 		rateLimiter: rateLimiter,
 		pepper:      pepper,
+		firewall:    fw,
 	}
 }
 
@@ -194,6 +197,15 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Apply dynamic firewall allow rule
+	if h.firewall != nil {
+		comment := fmt.Sprintf("bsm_%s_%d", server.ID, lease.ID)
+		_ = h.firewall.AllowPort(r.Context(), clientIP, server.Port, comment)
+		if server.PortV6 > 0 {
+			_ = h.firewall.AllowPort(r.Context(), clientIP, server.PortV6, comment)
+		}
+	}
+
 	// Set signed session cookie for mobile roaming & heartbeat
 	http.SetCookie(w, &http.Cookie{
 		Name:     "bsm_knock_" + server.ID,
@@ -248,14 +260,29 @@ func (h *KnockHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	server, err := h.db.GetServer(r.Context(), serverID)
+	if err != nil || server == nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
 	currentIP := GetClientIP(r).String()
 	ipUpdated := false
 
 	if lease.IPAddress != currentIP {
-		// Roaming detected! Hot-swap IP
+		// Roaming detected! Hot-swap IP in firewall and database
 		oldIP := lease.IPAddress
 		if err := h.db.UpdateLeaseIP(r.Context(), lease.ID, currentIP); err == nil {
 			ipUpdated = true
+			if h.firewall != nil {
+				comment := fmt.Sprintf("bsm_%s_%d", server.ID, lease.ID)
+				_ = h.firewall.RevokePort(r.Context(), oldIP, server.Port, comment)
+				_ = h.firewall.AllowPort(r.Context(), currentIP, server.Port, comment)
+				if server.PortV6 > 0 {
+					_ = h.firewall.RevokePort(r.Context(), oldIP, server.PortV6, comment)
+					_ = h.firewall.AllowPort(r.Context(), currentIP, server.PortV6, comment)
+				}
+			}
 			_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 				ActorType: "player",
 				ActorName: lease.Gamertag,
@@ -317,3 +344,124 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 		"direct_launch_url":  directURL,
 	})
 }
+
+// ListLeases returns active leases for the given server.
+func (h *KnockHandler) ListLeases(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	leases, err := h.db.ListActiveLeases(r.Context(), serverID)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to list leases"}`, http.StatusInternalServerError)
+		return
+	}
+	if leases == nil {
+		leases = []models.PortGateLease{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(leases)
+}
+
+// RevokeLease cancels an active lease immediately and removes firewall rules.
+func (h *KnockHandler) RevokeLease(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	leaseIDStr := chi.URLParam(r, "leaseId")
+	leaseID, err := strconv.ParseInt(leaseIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid lease ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	lease, err := h.db.GetLease(r.Context(), leaseID)
+	if err != nil || lease == nil || lease.ServerID != serverID {
+		http.Error(w, `{"error": "Lease not found"}`, http.StatusNotFound)
+		return
+	}
+
+	server, err := h.db.GetServer(r.Context(), serverID)
+	if err == nil && server != nil && h.firewall != nil {
+		comment := fmt.Sprintf("bsm_%s_%d", server.ID, lease.ID)
+		_ = h.firewall.RevokePort(r.Context(), lease.IPAddress, server.Port, comment)
+		if server.PortV6 > 0 {
+			_ = h.firewall.RevokePort(r.Context(), lease.IPAddress, server.PortV6, comment)
+		}
+	}
+
+	_ = h.db.SetLeaseStatus(r.Context(), leaseID, "revoked")
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	if claims != nil {
+		actorName = claims.Username
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "knock_lease_revoked",
+		Target:    serverID,
+		Details:   fmt.Sprintf(`{"lease_id": %d, "ip": "%s"}`, leaseID, lease.IPAddress),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// CreateManualLease allows administrators to manually grant an IP bypass.
+type ManualLeaseRequest struct {
+	IPAddress       string `json:"ip_address"`
+	Gamertag        string `json:"gamertag"`
+	DurationMinutes int    `json:"duration_minutes"`
+	Comment         string `json:"comment"`
+}
+
+func (h *KnockHandler) CreateManualLease(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	server, err := h.db.GetServer(r.Context(), serverID)
+	if err != nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	var req ManualLeaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IPAddress == "" {
+		http.Error(w, `{"error": "Valid ip_address is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.DurationMinutes <= 0 {
+		req.DurationMinutes = 60 // 1 hour default
+	}
+
+	now := time.Now().UTC()
+	leaseDuration := time.Duration(req.DurationMinutes) * time.Minute
+	sessionToken, _ := auth.GenerateRandomToken(16)
+	sessionTokenHash := auth.HashToken(sessionToken)
+
+	lease := &models.PortGateLease{
+		ServerID:         server.ID,
+		IPAddress:        req.IPAddress,
+		Gamertag:         req.Gamertag,
+		KnockMethod:      "manual_admin",
+		SessionTokenHash: sessionTokenHash,
+		GrantedAt:        now,
+		ExpiresAt:        now.Add(leaseDuration),
+		Comment:          req.Comment,
+		Status:           "active",
+	}
+
+	if err := h.db.CreatePortGateLease(r.Context(), lease); err != nil {
+		http.Error(w, `{"error": "Failed to create lease"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if h.firewall != nil {
+		comment := fmt.Sprintf("bsm_%s_%d", server.ID, lease.ID)
+		_ = h.firewall.AllowPort(r.Context(), req.IPAddress, server.Port, comment)
+		if server.PortV6 > 0 {
+			_ = h.firewall.AllowPort(r.Context(), req.IPAddress, server.PortV6, comment)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(lease)
+}
+

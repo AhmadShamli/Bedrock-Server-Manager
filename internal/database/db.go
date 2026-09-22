@@ -640,6 +640,80 @@ func (db *ManagerDB) RevokeLease(ctx context.Context, leaseID int64) error {
 	return err
 }
 
+func (db *ManagerDB) GetLease(ctx context.Context, id int64) (*models.PortGateLease, error) {
+	var l models.PortGateLease
+	var keyID sql.NullInt64
+	var grantedAtStr, expiresAtStr string
+
+	err := db.QueryRowContext(ctx, `
+		SELECT id, server_id, key_id, ip_address, gamertag, knock_method,
+		       session_token_hash, granted_at, expires_at, comment, status
+		FROM port_gate_leases
+		WHERE id = ?`, id,
+	).Scan(
+		&l.ID, &l.ServerID, &keyID, &l.IPAddress, &l.Gamertag, &l.KnockMethod,
+		&l.SessionTokenHash, &grantedAtStr, &expiresAtStr, &l.Comment, &l.Status,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if keyID.Valid {
+		l.KeyID = &keyID.Int64
+	}
+	if t, err := ParseTime(grantedAtStr); err == nil {
+		l.GrantedAt = t
+	}
+	if t, err := ParseTime(expiresAtStr); err == nil {
+		l.ExpiresAt = t
+	}
+	return &l, nil
+}
+
+func (db *ManagerDB) SetLeaseStatus(ctx context.Context, leaseID int64, status string) error {
+	_, err := db.ExecContext(ctx, "UPDATE port_gate_leases SET status = ? WHERE id = ?", status, leaseID)
+	return err
+}
+
+func (db *ManagerDB) GetExpiredActiveLeases(ctx context.Context) ([]models.PortGateLease, error) {
+	nowStr := FormatTime(time.Now().UTC())
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, server_id, key_id, ip_address, gamertag, knock_method,
+		       session_token_hash, granted_at, expires_at, comment, status
+		FROM port_gate_leases
+		WHERE status = 'active' AND expires_at <= ?
+		ORDER BY id ASC`, nowStr,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var leases []models.PortGateLease
+	for rows.Next() {
+		var l models.PortGateLease
+		var keyID sql.NullInt64
+		var grantedAtStr, expiresAtStr string
+
+		if err := rows.Scan(
+			&l.ID, &l.ServerID, &keyID, &l.IPAddress, &l.Gamertag, &l.KnockMethod,
+			&l.SessionTokenHash, &grantedAtStr, &expiresAtStr, &l.Comment, &l.Status,
+		); err != nil {
+			return nil, err
+		}
+		if keyID.Valid {
+			l.KeyID = &keyID.Int64
+		}
+		if t, err := ParseTime(grantedAtStr); err == nil {
+			l.GrantedAt = t
+		}
+		if t, err := ParseTime(expiresAtStr); err == nil {
+			l.ExpiresAt = t
+		}
+		leases = append(leases, l)
+	}
+	return leases, rows.Err()
+}
+
 func (db *ManagerDB) ExpireOldLeases(ctx context.Context) (int64, error) {
 	nowStr := FormatTime(time.Now().UTC())
 	res, err := db.ExecContext(ctx, "UPDATE port_gate_leases SET status = 'expired' WHERE status = 'active' AND expires_at <= ?", nowStr)
@@ -797,6 +871,231 @@ func (db *ManagerDB) ListBackups(ctx context.Context, serverID string) ([]models
 	}
 	return backups, rows.Err()
 }
+
+func (db *ManagerDB) GetBackup(ctx context.Context, id int64) (*models.Backup, error) {
+	var b models.Backup
+	var isLockedInt int
+	var createdAtStr string
+
+	err := db.QueryRowContext(ctx, `
+		SELECT id, server_id, filename, size_bytes, type, is_locked, status, created_at
+		FROM backups WHERE id = ?`, id,
+	).Scan(
+		&b.ID, &b.ServerID, &b.Filename, &b.SizeBytes, &b.Type, &isLockedInt, &b.Status, &createdAtStr,
+	)
+	if err != nil {
+		return nil, err
+	}
+	b.IsLocked = isLockedInt == 1
+	if t, err := ParseTime(createdAtStr); err == nil {
+		b.CreatedAt = t
+	}
+	return &b, nil
+}
+
+func (db *ManagerDB) DeleteBackup(ctx context.Context, id int64) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM backups WHERE id = ?", id)
+	return err
+}
+
+func (db *ManagerDB) ToggleBackupLock(ctx context.Context, id int64, isLocked bool) error {
+	lockedInt := 0
+	if isLocked {
+		lockedInt = 1
+	}
+	_, err := db.ExecContext(ctx, "UPDATE backups SET is_locked = ? WHERE id = ?", lockedInt, id)
+	return err
+}
+
+func (db *ManagerDB) GetUnpinnedBackups(ctx context.Context, serverID string) ([]models.Backup, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, server_id, filename, size_bytes, type, is_locked, status, created_at
+		FROM backups WHERE server_id = ? AND is_locked = 0 ORDER BY id ASC`, serverID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var backups []models.Backup
+	for rows.Next() {
+		var b models.Backup
+		var isLockedInt int
+		var createdAtStr string
+
+		if err := rows.Scan(
+			&b.ID, &b.ServerID, &b.Filename, &b.SizeBytes, &b.Type, &isLockedInt, &b.Status, &createdAtStr,
+		); err != nil {
+			return nil, err
+		}
+		b.IsLocked = isLockedInt == 1
+		if t, err := ParseTime(createdAtStr); err == nil {
+			b.CreatedAt = t
+		}
+		backups = append(backups, b)
+	}
+	return backups, rows.Err()
+}
+
+// --- Task CRUD ---
+
+func (db *ManagerDB) CreateTask(ctx context.Context, t *models.Task) error {
+	now := time.Now().UTC()
+	t.CreatedAt = now
+	enabledInt := 0
+	if t.Enabled {
+		enabledInt = 1
+	}
+
+	res, err := db.ExecContext(ctx, `
+		INSERT INTO tasks (server_id, name, cron_expr, action, payload, last_run, next_run, enabled, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ServerID, t.Name, t.CronExpr, t.Action, t.Payload,
+		FormatNullTime(t.LastRun), FormatNullTime(t.NextRun), enabledInt, FormatTime(now),
+	)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	t.ID = id
+	return nil
+}
+
+func (db *ManagerDB) ListTasks(ctx context.Context, serverID *string) ([]models.Task, error) {
+	var rows *sql.Rows
+	var err error
+	if serverID != nil {
+		rows, err = db.QueryContext(ctx, `
+			SELECT id, server_id, name, cron_expr, action, payload, last_run, next_run, enabled, created_at
+			FROM tasks WHERE server_id = ? OR server_id IS NULL ORDER BY id DESC`, *serverID,
+		)
+	} else {
+		rows, err = db.QueryContext(ctx, `
+			SELECT id, server_id, name, cron_expr, action, payload, last_run, next_run, enabled, created_at
+			FROM tasks ORDER BY id DESC`,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []models.Task
+	for rows.Next() {
+		var t models.Task
+		var srvID sql.NullString
+		var lastRunStr, nextRunStr, createdAtStr sql.NullString
+		var enabledInt int
+
+		if err := rows.Scan(
+			&t.ID, &srvID, &t.Name, &t.CronExpr, &t.Action, &t.Payload,
+			&lastRunStr, &nextRunStr, &enabledInt, &createdAtStr,
+		); err != nil {
+			return nil, err
+		}
+		if srvID.Valid {
+			t.ServerID = &srvID.String
+		}
+		if lastRunStr.Valid {
+			if tm, err := ParseTime(lastRunStr.String); err == nil {
+				t.LastRun = &tm
+			}
+		}
+		if nextRunStr.Valid {
+			if tm, err := ParseTime(nextRunStr.String); err == nil {
+				t.NextRun = &tm
+			}
+		}
+		t.Enabled = enabledInt == 1
+		if createdAtStr.Valid {
+			if tm, err := ParseTime(createdAtStr.String); err == nil {
+				t.CreatedAt = tm
+			}
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+func (db *ManagerDB) GetTask(ctx context.Context, id int64) (*models.Task, error) {
+	var t models.Task
+	var srvID sql.NullString
+	var lastRunStr, nextRunStr, createdAtStr sql.NullString
+	var enabledInt int
+
+	err := db.QueryRowContext(ctx, `
+		SELECT id, server_id, name, cron_expr, action, payload, last_run, next_run, enabled, created_at
+		FROM tasks WHERE id = ?`, id,
+	).Scan(
+		&t.ID, &srvID, &t.Name, &t.CronExpr, &t.Action, &t.Payload,
+		&lastRunStr, &nextRunStr, &enabledInt, &createdAtStr,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if srvID.Valid {
+		t.ServerID = &srvID.String
+	}
+	if lastRunStr.Valid {
+		if tm, err := ParseTime(lastRunStr.String); err == nil {
+			t.LastRun = &tm
+		}
+	}
+	if nextRunStr.Valid {
+		if tm, err := ParseTime(nextRunStr.String); err == nil {
+			t.NextRun = &tm
+		}
+	}
+	t.Enabled = enabledInt == 1
+	if createdAtStr.Valid {
+		if tm, err := ParseTime(createdAtStr.String); err == nil {
+			t.CreatedAt = tm
+		}
+	}
+	return &t, nil
+}
+
+func (db *ManagerDB) UpdateTask(ctx context.Context, t *models.Task) error {
+	enabledInt := 0
+	if t.Enabled {
+		enabledInt = 1
+	}
+	_, err := db.ExecContext(ctx, `
+		UPDATE tasks
+		SET server_id = ?, name = ?, cron_expr = ?, action = ?, payload = ?, enabled = ?
+		WHERE id = ?`,
+		t.ServerID, t.Name, t.CronExpr, t.Action, t.Payload, enabledInt, t.ID,
+	)
+	return err
+}
+
+func (db *ManagerDB) DeleteTask(ctx context.Context, id int64) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM tasks WHERE id = ?", id)
+	return err
+}
+
+func (db *ManagerDB) ToggleTask(ctx context.Context, id int64, enabled bool) error {
+	enabledInt := 0
+	if enabled {
+		enabledInt = 1
+	}
+	_, err := db.ExecContext(ctx, "UPDATE tasks SET enabled = ? WHERE id = ?", enabledInt, id)
+	return err
+}
+
+func (db *ManagerDB) UpdateTaskRun(ctx context.Context, id int64, lastRun time.Time, nextRun *time.Time) error {
+	_, err := db.ExecContext(ctx, `
+		UPDATE tasks
+		SET last_run = ?, next_run = ?
+		WHERE id = ?`,
+		FormatTime(lastRun), FormatNullTime(nextRun), id,
+	)
+	return err
+}
+
 
 // --- MetricsDB Operations ---
 

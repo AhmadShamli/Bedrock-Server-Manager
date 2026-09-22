@@ -9,8 +9,10 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/scheduler"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
@@ -20,6 +22,8 @@ type RouterOptions struct {
 	IPResolver    *ipresolver.Resolver
 	RateLimiter   *auth.RateLimiter
 	Engine        engine.ServerEngine
+	Firewall      firewall.FirewallDriver
+	Scheduler     *scheduler.TaskScheduler
 	PortAllocator *allocator.PortAllocator
 	PlayerManager *player.Manager
 	DataDir       string
@@ -40,8 +44,11 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	authHandler := NewAuthHandler(opts.DB, opts.RateLimiter, opts.JWTSecret)
 	systemHandler := NewSystemHandler(opts.DB)
 	serverHandler := NewServerHandler(opts.DB, opts.Engine, opts.PortAllocator, opts.DataDir)
-	knockHandler := NewKnockHandler(opts.DB, opts.RateLimiter, opts.Pepper)
+	knockHandler := NewKnockHandler(opts.DB, opts.RateLimiter, opts.Pepper, opts.Firewall)
 	playerHubHandler := NewPlayerHubHandler(serverHandler, opts.PlayerManager)
+	backupHandler := NewBackupHandler(opts.DB, opts.Engine, opts.DataDir)
+	addonHandler := NewAddonHandler(opts.DB, opts.DataDir)
+	taskHandler := NewTaskHandler(opts.DB, opts.Scheduler)
 
 	// Global Middlewares
 	r.Use(chimiddleware.RequestID)
@@ -112,6 +119,26 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 				// RakNet Ping
 				srvGroup.Get("/servers/{id}/ping", playerHubHandler.Ping)
+
+				// Port Gate Leases
+				srvGroup.Get("/servers/{id}/leases", knockHandler.ListLeases)
+				srvGroup.Post("/servers/{id}/leases/{leaseId}/revoke", knockHandler.RevokeLease)
+				srvGroup.Post("/servers/{id}/leases/manual", knockHandler.CreateManualLease)
+
+				// Backups & Worlds
+				srvGroup.Get("/servers/{id}/backups", backupHandler.ListBackups)
+				srvGroup.Post("/servers/{id}/backups", backupHandler.CreateBackup)
+				srvGroup.Post("/servers/{id}/backups/{backupId}/lock", backupHandler.ToggleLock)
+				srvGroup.Delete("/servers/{id}/backups/{backupId}", backupHandler.DeleteBackup)
+				srvGroup.Get("/servers/{id}/backups/{backupId}/download", backupHandler.DownloadBackup)
+				srvGroup.Post("/servers/{id}/backups/{backupId}/restore", backupHandler.RestoreBackup)
+				srvGroup.Get("/servers/{id}/world/export", backupHandler.ExportWorld)
+				srvGroup.Post("/servers/{id}/world/import", backupHandler.ImportWorld)
+
+				// Addon Manager
+				srvGroup.Get("/servers/{id}/addons", addonHandler.List)
+				srvGroup.Post("/servers/{id}/addons", addonHandler.Install)
+				srvGroup.Delete("/servers/{id}/addons/{type}/{folder}", addonHandler.Delete)
 			})
 
 			// Admin-only operations
@@ -124,6 +151,14 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Delete("/servers/{id}", serverHandler.Delete)
 				adminGroup.Post("/servers/{id}/clone", serverHandler.Clone)
 				adminGroup.Get("/servers/{id}/export", serverHandler.Export)
+
+				// Task Scheduler
+				adminGroup.Get("/tasks", taskHandler.List)
+				adminGroup.Post("/tasks", taskHandler.Create)
+				adminGroup.Put("/tasks/{id}", taskHandler.Update)
+				adminGroup.Delete("/tasks/{id}", taskHandler.Delete)
+				adminGroup.Post("/tasks/{id}/toggle", taskHandler.Toggle)
+				adminGroup.Post("/tasks/{id}/run", taskHandler.RunNow)
 
 				adminGroup.Get("/system/audit", systemHandler.ListAuditLogs)
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)

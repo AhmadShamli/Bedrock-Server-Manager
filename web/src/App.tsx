@@ -8,6 +8,8 @@ import { ServerHub } from './pages/ServerHub';
 import { Login } from './pages/Login';
 import { Setup } from './pages/Setup';
 import { KnockPortal } from './pages/KnockPortal';
+import { Tasks } from './pages/Tasks';
+import { AuditLogs } from './pages/AuditLogs';
 import { Loader2 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -97,6 +99,14 @@ export const App: React.FC = () => {
           <Route
             path="/servers/:id"
             element={user ? <ServerHub user={user} /> : <Navigate to="/login" replace />}
+          />
+          <Route
+            path="/tasks"
+            element={user && user.role === 'admin' ? <Tasks /> : <Navigate to="/" replace />}
+          />
+          <Route
+            path="/audit"
+            element={user && user.role === 'admin' ? <AuditLogs /> : <Navigate to="/" replace />}
           />
 
           {/* Fallback */}

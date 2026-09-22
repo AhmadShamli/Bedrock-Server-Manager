@@ -84,16 +84,16 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - Start/stop notifications
   - Player join/leave broadcasts
   - Backup result notifications
-- [ ] Pluggable Dynamic Firewall Engine (`internal/firewall`, referenced from `../Funnel`):
+- [x] Pluggable Dynamic Firewall Engine (`internal/firewall`, referenced from `../Funnel`):
   - `NetNSDetector` & `nsenter` wrapper (`ShouldUseNsenter()`, `WrapCommand()`) for host firewall execution from Docker
   - `FirewallDriver` interface (`AllowIP(ip, port, comment)`, `RevokeIP(ip, port, comment)`, `ListRules()`)
   - `UFWDriver` (default, executes `ufw allow proto udp from ...`)
-  - `IPTablesDriver` (manages dedicated `BEDROCK_PORT_GATE` chain)
+  - `IPTablesDriver` (manages dedicated `BSM_PORT_GATE` chain)
   - `CustomScriptDriver` (configurable shell hooks for custom environments)
   - Public Port-Knock handler (`/api/knock/:id` with Gamertag / Passphrase validation)
   - Mobile Roaming & Heartbeat API (`/api/knock/:id/heartbeat`): configurable interval (default: 10 seconds), detects IP changes via signed session cookie and hot-swaps firewall rules seamlessly
-  - Background Lease Auditor (purges expired IP rules every 30s)
-- [ ] Trusted Proxy Client IP Resolver (`internal/ipresolver`, referenced from `../Funnel`):
+  - Background Lease Auditor (purges expired IP rules every 15s)
+- [x] Trusted Proxy Client IP Resolver (`internal/ipresolver`, referenced from `../Funnel`):
   - Supports `direct`, `reverse_proxy`, and `cloudflare` modes
   - Parses `CF-Connecting-IP`, RFC 7239 `Forwarded`, `X-Forwarded-For` (right-to-left untrusted parsing), `X-Real-IP`
   - Dynamic Cloudflare IP prefix fetcher and trusted CIDR verification
@@ -101,23 +101,23 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 ---
 
 ## Phase 4: Hot Backups, World Management, Retention & Lifecycle
-- [ ] Hot Backup Engine (`internal/backup`):
+- [x] Hot Backup Engine (`internal/backup`):
   - Bedrock `save hold` -> `save query` -> snapshot file copy -> `save resume` workflow
   - Zip compression of world state without taking server offline
   - Backup restore and download endpoints
   - Scheduled backup cron (`robfig/cron/v3`)
-- [ ] Comprehensive Backup Retention & Disk Quotas:
+- [x] Comprehensive Backup Retention & Disk Quotas:
   - Count retention (retain last N backups, default: 10)
   - Age retention (purge unpinned backups older than X days, default: 14 days)
   - Disk quota enforcement (purge oldest unpinned backups when quota exceeded)
   - Pin / Lock protection flag for milestone backups
-- [ ] World Import / Export:
+- [x] World Import / Export:
   - Upload `.mcworld` or `.zip` and extract into `worlds/`
   - Export current world as downloadable `.mcworld`
-- [ ] Addon / Pack Manager:
+- [x] Addon / Pack Manager:
   - Upload and extract `.mcpack` / `.mcaddon` into `behavior_packs` / `resource_packs`
-  - Update `world_behavior_packs.json` and `world_resource_packs.json`
-- [ ] Shutdown & Restart Workflows:
+  - Automatic manifest parsing, UUID extraction, and directory placement
+- [x] Shutdown & Restart Workflows:
   - Graceful stop: countdown broadcast (`say ...`), disconnect active players with maintenance reason, issue `stop`, await LevelDB flush
   - Direct BDS stop: instant `stop` to stdin without broadcasts
   - Emergency force kill: immediate container termination fallback
@@ -125,14 +125,14 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 ---
 
 ## Phase 5: Modern Web Dashboard (React + Vite + Tailwind)
-- [ ] Frontend setup in `web/`:
+- [x] Frontend setup in `web/`:
   - Vite + React + TypeScript + Tailwind CSS + Lucide Icons + React Query
   - **Dark Mode Only UI**: Sleek obsidian/cyberpunk aesthetic with Minecraft emerald accents, optimized for desktop and mobile devices
-- [ ] Core Views:
+- [x] Core Views:
   - **Setup Wizard**: Onboarding screen for new installations (`/setup`)
   - **Dashboard / Server List**: Cards displaying live server status, players online, CPU/RAM, quick start/stop
   - **Shutdown Action Modal**: Admin choice between Graceful Stop (with countdown) and Direct Stop
-  - **Interactive Terminal**: `xterm.js` console with real-time WebSocket log streaming, ANSI coloring, auto-scroll, command history, and quick command buttons
+  - **Interactive Terminal**: Real-time WebSocket log streaming, ANSI coloring, auto-scroll, command history, and quick command buttons
   - **Player Hub & Live Chat**: Active player list, Allowlist editor, Operator editor, kick/ban/op modals, real-time in-game chat feed panel, and broadcast/DM modal
   - **Port Gate & IP Leases**: Dynamic firewall toggle, active IP leases table with countdowns, manual IP allowlist modal, QR code generator, and shareable link
   - **Player Knock Portal (`/knock/:id`)**: Lightweight public web portal for players to enter Gamertag/passphrase, unlock their IP address, background heartbeat (configurable, default: 10s) for mobile 4G/5G roaming, 1-tap IP reconnect button, and direct game launch via `minecraft://?addExternalServer=<Name>|<Host>:<Port>`
@@ -142,19 +142,21 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - **Addon Manager**: Drag-and-drop `.mcpack`/`.mcaddon` installer
   - **Audit Log Viewer**: Dedicated audit dashboard with user/action/server filtering, date picker, and CSV/JSON export
   - **Notifications & Webhooks**: Discord webhook configuration and in-app toast alerts
+  - **Task Scheduler**: Cron routines for automated hot backups, graceful server restarts with player countdowns, and scheduled commands
   - **User & Role Management**: Admin user creation, per-server Operator access assignments
-- [ ] Embedding:
+- [x] Embedding:
   - Embed Vite production `dist/` into Go binary via `//go:embed all:dist`
 
 ---
 
 ## Phase 6: Packaging, Docker & Verification
-- [ ] Multi-stage `Dockerfile`:
+- [x] Multi-stage `Dockerfile`:
   - Stage 1: Build React frontend (`npm run build`)
   - Stage 2: Compile Go static binary (`CGO_ENABLED=0 go build`)
-  - Stage 3: Minimal runtime image (Debian slim with `iptables`, `nftables`, `sudo`, `util-linux` [nsenter], `tini`, and non-root user setup)
-- [ ] `docker-compose.yml` (referencing `../Funnel` patterns):
+  - Stage 3: Minimal runtime image (Debian bookworm-slim with `iptables`, `iproute2`, `ufw`, `util-linux` [nsenter], `tini`, `ca-certificates`)
+- [x] `docker-compose.yml` (referencing `../Funnel` patterns):
   - Mounts `/var/run/docker.sock` for Minecraft container orchestration
   - Configures `pid: host` and `cap_add: [SYS_ADMIN, NET_ADMIN]` for transparent host firewall manipulation via `nsenter`
   - Persistent volume binding for `data/`
-- [ ] Automated tests (unit tests for drivers, config parsers, RakNet ping, backup workflow).
+- [x] Automated tests (unit tests for drivers, config parsers, RakNet ping, backup workflow, scheduler, addon manager).
+

@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -280,6 +280,177 @@ class APIClient {
     direct_launch_url?: string;
   }> {
     return this.request(`/api/knock/${serverId}/status`);
+  }
+
+  // --- Port Gate Leases ---
+  async listLeases(serverId: string): Promise<PortGateLease[]> {
+    return this.request(`/api/servers/${serverId}/leases`);
+  }
+
+  async revokeLease(serverId: string, leaseId: number): Promise<{ success: boolean }> {
+    return this.request(`/api/servers/${serverId}/leases/${leaseId}/revoke`, {
+      method: 'POST',
+    });
+  }
+
+  async createManualLease(serverId: string, payload: {
+    ip_address: string;
+    gamertag?: string;
+    duration_minutes: number;
+    comment?: string;
+  }): Promise<PortGateLease> {
+    return this.request(`/api/servers/${serverId}/leases/manual`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // --- Backups & Worlds ---
+  async listBackups(serverId: string): Promise<Backup[]> {
+    return this.request(`/api/servers/${serverId}/backups`);
+  }
+
+  async createBackup(serverId: string, payload: { type?: string; is_locked?: boolean } = {}): Promise<Backup> {
+    return this.request(`/api/servers/${serverId}/backups`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async toggleBackupLock(serverId: string, backupId: number): Promise<{ id: number; is_locked: boolean }> {
+    return this.request(`/api/servers/${serverId}/backups/${backupId}/lock`, {
+      method: 'POST',
+    });
+  }
+
+  async deleteBackup(serverId: string, backupId: number): Promise<{ success: boolean }> {
+    return this.request(`/api/servers/${serverId}/backups/${backupId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async restoreBackup(serverId: string, backupId: number): Promise<{ success: boolean }> {
+    return this.request(`/api/servers/${serverId}/backups/${backupId}/restore`, {
+      method: 'POST',
+    });
+  }
+
+  downloadBackupUrl(serverId: string, backupId: number): string {
+    const token = this.getToken();
+    return `/api/servers/${serverId}/backups/${backupId}/download${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  }
+
+  exportWorldUrl(serverId: string): string {
+    const token = this.getToken();
+    return `/api/servers/${serverId}/world/export${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  }
+
+  async importWorld(serverId: string, file: File, worldName = 'Bedrock level'): Promise<{ success: boolean }> {
+    const formData = new FormData();
+    formData.append('world_file', file);
+    formData.append('world_name', worldName);
+
+    const headers: Record<string, string> = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    const res = await fetch(`/api/servers/${serverId}/world/import`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Upload failed' }));
+      throw new Error(err.error || 'Upload failed');
+    }
+    return res.json();
+  }
+
+  // --- Addon / Pack Manager ---
+  async listAddons(serverId: string): Promise<AddonPack[]> {
+    return this.request(`/api/servers/${serverId}/addons`);
+  }
+
+  async installAddon(serverId: string, file: File): Promise<AddonPack> {
+    const formData = new FormData();
+    formData.append('addon_file', file);
+
+    const headers: Record<string, string> = {};
+    if (this.token) {
+      headers['Authorization'] = `Bearer ${this.token}`;
+    }
+
+    const res = await fetch(`/api/servers/${serverId}/addons`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Installation failed' }));
+      throw new Error(err.error || 'Installation failed');
+    }
+    return res.json();
+  }
+
+  async deleteAddon(serverId: string, type: string, folder: string): Promise<{ success: boolean }> {
+    return this.request(`/api/servers/${serverId}/addons/${type}/${folder}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- Task Scheduler ---
+  async listTasks(serverId?: string): Promise<Task[]> {
+    const url = serverId ? `/api/tasks?server_id=${encodeURIComponent(serverId)}` : '/api/tasks';
+    return this.request(url);
+  }
+
+  async createTask(task: Partial<Task>): Promise<Task> {
+    return this.request('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify(task),
+    });
+  }
+
+  async updateTask(id: number, task: Partial<Task>): Promise<Task> {
+    return this.request(`/api/tasks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(task),
+    });
+  }
+
+  async deleteTask(id: number): Promise<{ success: boolean }> {
+    return this.request(`/api/tasks/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async toggleTask(id: number): Promise<{ id: number; enabled: boolean }> {
+    return this.request(`/api/tasks/${id}/toggle`, {
+      method: 'POST',
+    });
+  }
+
+  async runTaskNow(id: number): Promise<{ success: boolean }> {
+    return this.request(`/api/tasks/${id}/run`, {
+      method: 'POST',
+    });
+  }
+
+  // --- System Audit & Settings ---
+  async listAuditLogs(limit = 50, offset = 0): Promise<AuditLog[]> {
+    return this.request(`/api/system/audit?limit=${limit}&offset=${offset}`);
+  }
+
+  async getSettings(): Promise<Record<string, string>> {
+    return this.request('/api/system/settings');
+  }
+
+  async updateSetting(key: string, value: string): Promise<{ success: boolean }> {
+    return this.request('/api/system/settings', {
+      method: 'POST',
+      body: JSON.stringify({ key, value }),
+    });
   }
 }
 

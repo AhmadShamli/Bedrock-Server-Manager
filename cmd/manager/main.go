@@ -17,9 +17,11 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/config"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/scheduler"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/webhook"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/web"
@@ -156,12 +158,59 @@ func main() {
 		}
 	}()
 
-	// 12. Build Router
+	// 12. Initialize Dynamic Firewall Driver & Lease Auditor
+	var fwDriver firewall.FirewallDriver
+	detector := firewall.NewNetNSDetector("auto")
+	switch cfg.FirewallDriver {
+	case "iptables":
+		ipt := firewall.NewIPTablesDriver(detector)
+		if err := ipt.Validate(ctx); err == nil {
+			fwDriver = ipt
+			log.Println("[Firewall] Initialized IPTables driver (dedicated chain: BSM_PORT_GATE)")
+		}
+	case "custom":
+		scriptPath := os.Getenv("BSM_FIREWALL_SCRIPT")
+		cust := firewall.NewCustomScriptDriver(scriptPath)
+		if err := cust.Validate(ctx); err == nil {
+			fwDriver = cust
+			log.Printf("[Firewall] Initialized Custom script driver: %s", scriptPath)
+		}
+	default: // "ufw" or default
+		ufw := firewall.NewUFWDriver(detector)
+		if err := ufw.Validate(ctx); err == nil {
+			fwDriver = ufw
+			log.Println("[Firewall] Initialized UFW driver")
+		} else {
+			ipt := firewall.NewIPTablesDriver(detector)
+			if err := ipt.Validate(ctx); err == nil {
+				fwDriver = ipt
+				log.Println("[Firewall] UFW unavailable; fallen back to IPTables driver")
+			}
+		}
+	}
+
+	if fwDriver == nil {
+		log.Println("[Firewall] No supported host firewall detected. Operating in simulated Mock driver mode.")
+		fwDriver = firewall.NewMockFirewallDriver()
+	}
+
+	leaseAuditor := firewall.NewLeaseAuditor(mgrDB, fwDriver, 15*time.Second)
+	leaseAuditor.Start(ctx)
+	defer leaseAuditor.Stop()
+
+	// 13. Initialize Task Scheduler (cron automation)
+	taskScheduler := scheduler.NewTaskScheduler(mgrDB, serverEngine, cfg.DataDir)
+	_ = taskScheduler.Start(ctx)
+	defer taskScheduler.Stop()
+
+	// 14. Build Router
 	router := api.NewRouter(api.RouterOptions{
 		DB:            mgrDB,
 		IPResolver:    resolver,
 		RateLimiter:   rateLimiter,
 		Engine:        serverEngine,
+		Firewall:      fwDriver,
+		Scheduler:     taskScheduler,
 		PortAllocator: portAlloc,
 		PlayerManager: playerMgr,
 		DataDir:       cfg.DataDir,

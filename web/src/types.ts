@@ -59,3 +59,49 @@ export interface KnockConfig {
   port_gate_mode: 'gamertag' | 'passphrase' | 'combined';
   heartbeat_interval_seconds: number;
 }
+
+export interface Backup {
+  id: number;
+  server_id: string;
+  filename: string;
+  size_bytes: number;
+  type: string;
+  is_locked: boolean;
+  status: string;
+  created_at: string;
+}
+
+export interface Task {
+  id: number;
+  server_id?: string;
+  name: string;
+  cron_expr: string;
+  action: string;
+  payload: string;
+  last_run?: string;
+  next_run?: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface AddonPack {
+  type: 'behavior' | 'resource';
+  folder: string;
+  name: string;
+  description: string;
+  uuid: string;
+  version: string;
+}
+
+export interface AuditLog {
+  id: number;
+  user_id?: number;
+  actor_type: string;
+  actor_name: string;
+  action: string;
+  target: string;
+  details: string;
+  client_ip: string;
+  timestamp: string;
+}
+

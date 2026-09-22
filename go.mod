@@ -8,6 +8,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.5.3
+	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/crypto v0.57.0
 	modernc.org/sqlite v1.59.0
 )

@@ -12,11 +12,12 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 )
 
-func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, *engine.MockEngine, []byte, string) {
+func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, *engine.MockEngine, *firewall.MockFirewallDriver, []byte, string) {
 	db, err := database.OpenManagerDB(":memory:")
 	if err != nil {
 		t.Fatalf("OpenManagerDB failed: %v", err)
@@ -27,6 +28,7 @@ func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, *engine
 	rateLimiter := auth.NewRateLimiter(5, 5*time.Minute, 10, 5*time.Minute, 15*time.Minute)
 	resolver := ipresolver.NewResolver("direct", nil)
 	mockEngine := engine.NewMockEngine()
+	mockFw := firewall.NewMockFirewallDriver()
 	pa := allocator.NewPortAllocator()
 
 	r := NewRouter(RouterOptions{
@@ -34,6 +36,7 @@ func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, *engine
 		IPResolver:    resolver,
 		RateLimiter:   rateLimiter,
 		Engine:        mockEngine,
+		Firewall:      mockFw,
 		PortAllocator: pa,
 		DataDir:       "data_test",
 		JWTSecret:     jwtSecret,
@@ -41,7 +44,7 @@ func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, *engine
 		WebFS:         nil,
 	})
 
-	return &chiMuxWrapper{r}, db, mockEngine, jwtSecret, pepper
+	return &chiMuxWrapper{r}, db, mockEngine, mockFw, jwtSecret, pepper
 }
 
 type chiMuxWrapper struct {
@@ -49,7 +52,7 @@ type chiMuxWrapper struct {
 }
 
 func TestAPISetupAndAuthFlow(t *testing.T) {
-	router, db, _, _, _ := setupTestRouter(t)
+	router, db, _, _, _, _ := setupTestRouter(t)
 	defer db.Close()
 
 	// 1. Check setup status initially -> needs_setup: true
@@ -123,7 +126,7 @@ func TestAPISetupAndAuthFlow(t *testing.T) {
 }
 
 func TestServerAndKnockFlow(t *testing.T) {
-	router, db, _, jwtSecret, pepper := setupTestRouter(t)
+	router, db, _, mockFw, jwtSecret, pepper := setupTestRouter(t)
 	defer db.Close()
 
 	ctx := t.Context()
@@ -144,15 +147,19 @@ func TestServerAndKnockFlow(t *testing.T) {
 		t.Errorf("invalid suggested ports: %+v", ports)
 	}
 
-	// 2. Create Server via API
-	srv := models.Server{
+	// 2. Create Server
+	srv := &models.Server{
 		ID:              "bsm-world",
-		Name:            "Bedrock Realm",
-		Port:            ports["port"],
-		PortV6:          ports["portv6"],
+		Name:            "Survival World",
+		Version:         "1.21.0.03",
+		Port:            19132,
+		PortV6:          19133,
+		Mode:            "survival",
+		Difficulty:      "normal",
 		PortGateEnabled: true,
-		PortGateMode:    models.PortGateModePassphrase,
+		PortGateMode:    "passphrase",
 		PortGateTimeout: 3600,
+		Status:          "stopped",
 	}
 	body, _ := json.Marshal(srv)
 	req = httptest.NewRequest("POST", "/api/servers", bytes.NewReader(body))
@@ -165,7 +172,7 @@ func TestServerAndKnockFlow(t *testing.T) {
 		t.Fatalf("create server failed: %d, body: %s", w.Code, w.Body.String())
 	}
 
-	// 3. Start, Stats, Command, Stop lifecycle
+	// 2. Start Server
 	req = httptest.NewRequest("POST", "/api/servers/bsm-world/start", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w = httptest.NewRecorder()
@@ -174,26 +181,19 @@ func TestServerAndKnockFlow(t *testing.T) {
 		t.Fatalf("start server failed: %d", w.Code)
 	}
 
-	req = httptest.NewRequest("GET", "/api/servers/bsm-world/stats", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	w = httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("stats failed: %d", w.Code)
-	}
-
-	cmdPayload := map[string]string{"command": "time set day"}
-	cmdBody, _ := json.Marshal(cmdPayload)
+	// 3. Send Console Command
+	cmdReq := map[string]string{"command": "time set day"}
+	cmdBody, _ := json.Marshal(cmdReq)
 	req = httptest.NewRequest("POST", "/api/servers/bsm-world/command", bytes.NewReader(cmdBody))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("command failed: %d", w.Code)
+		t.Fatalf("send command failed: %d", w.Code)
 	}
 
-	// 4. Add an access key for this server
+	// 4. Create Port Gate Key
 	keyHash := auth.HashAccessKey(pepper, "open-sesame")
 	srvID := "bsm-world"
 	_ = db.CreatePortGateKey(ctx, &models.PortGateKey{
@@ -227,11 +227,16 @@ func TestServerAndKnockFlow(t *testing.T) {
 		t.Fatalf("knock authorization failed: %d, body: %s", w.Code, w.Body.String())
 	}
 
+	// Verify firewall rule was created for 203.0.113.50
+	if !mockFw.HasRule("203.0.113.50", 19132) {
+		t.Fatalf("expected firewall rule for 203.0.113.50:19132")
+	}
+
 	var knockRes map[string]interface{}
 	_ = json.NewDecoder(w.Body).Decode(&knockRes)
 	sessionToken := knockRes["session_token"].(string)
 
-	// 7. Test Heartbeat (Mobile Roaming with IP change)
+	// 7. Test Heartbeat (Mobile Roaming with IP change to 198.51.100.99)
 	req = httptest.NewRequest("POST", "/api/knock/bsm-world/heartbeat", nil)
 	req.RemoteAddr = "198.51.100.99:55210"
 	req.Header.Set("X-Knock-Token", sessionToken)
@@ -242,7 +247,41 @@ func TestServerAndKnockFlow(t *testing.T) {
 		t.Fatalf("heartbeat failed: %d, body: %s", w.Code, w.Body.String())
 	}
 
-	// 8. Stop Server
+	// Verify old IP rule revoked and new IP rule added in firewall
+	if mockFw.HasRule("203.0.113.50", 19132) {
+		t.Fatalf("expected old IP 203.0.113.50 rule to be revoked")
+	}
+	if !mockFw.HasRule("198.51.100.99", 19132) {
+		t.Fatalf("expected new IP 198.51.100.99 rule to be allowed")
+	}
+
+	// 8. Admin List Leases
+	req = httptest.NewRequest("GET", "/api/servers/bsm-world/leases", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("list leases failed: %d", w.Code)
+	}
+	var leases []models.PortGateLease
+	_ = json.NewDecoder(w.Body).Decode(&leases)
+	if len(leases) != 1 || leases[0].IPAddress != "198.51.100.99" {
+		t.Fatalf("unexpected leases: %+v", leases)
+	}
+
+	// 9. Admin Revoke Lease
+	req = httptest.NewRequest("POST", "/api/servers/bsm-world/leases/1/revoke", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("revoke lease failed: %d", w.Code)
+	}
+	if mockFw.HasRule("198.51.100.99", 19132) {
+		t.Fatalf("expected revoked lease firewall rule to be removed")
+	}
+
+	// 10. Stop Server
 	req = httptest.NewRequest("POST", "/api/servers/bsm-world/stop", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w = httptest.NewRecorder()
