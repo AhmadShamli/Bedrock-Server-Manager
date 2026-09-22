@@ -11,8 +11,9 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - **Primary DB (`data/manager.db`)**:
     - Users table (id, username, password_hash, role, created_at)
     - UserServerAccess table (user_id, server_id) for granular per-server Operator access control
-    - Servers table (id, name, version, port, portv6, status, mode, autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout, port_gate_passphrase, created_at, memory_limit, cpu_limit)
-    - PortGateLeases table (id, server_id, ip_address, gamertag, knock_method, granted_at, expires_at, comment)
+    - Servers table (id, name, version, port, portv6, status, mode, autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout, created_at, memory_limit, cpu_limit)
+    - PortGateKeys table (id, server_id, label, key_hash, key_prefix, max_uses, used_count, lease_duration_seconds, expires_at, is_active, created_at)
+    - PortGateLeases table (id, server_id, key_id, ip_address, gamertag, knock_method, granted_at, expires_at, comment)
     - Backups table (id, server_id, filename, size, type, status, created_at)
     - Tasks table (id, server_id, cron_expr, action, payload, last_run, next_run, enabled)
     - AuditLogs table (id, user_id, action, details, timestamp)

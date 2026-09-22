@@ -184,8 +184,19 @@ All server configuration is organized into structured, validated UI tabs:
   - Requires players to visit a lightweight web unlock portal (`/knock/:server_id`) to dynamically grant their client IP access to the server's specific UDP port.
 - **Verification Modes (Configurable per-server by Admin)**:
   1. **Gamertag Verification**: Player enters their Minecraft Gamertag; the manager validates that the Gamertag exists in `allowlist.json`.
-  2. **Knock Passphrase**: Player enters a secret shared passphrase or invite key configured by the administrator.
-  3. **Combined**: Requires both a valid allowlisted Gamertag and the secret passphrase.
+  2. **Knock Passphrases / Access Keys**: Player enters a valid access passphrase.
+  3. **Combined**: Requires both a valid allowlisted Gamertag and a valid passphrase.
+- **Multi-Passphrase & Global Key Architecture (`PortGateKeys`)**:
+  - Administrators can create **unlimited passphrases / access keys** per server, plus **Global Master Keys**:
+    * **Server-Scoped Keys**: Linked to a specific server (`server_id`), valid only for unlocking that server's port.
+    * **Global Keys (`server_id IS NULL`)**: Master keys configured in Global Settings that are valid across all port-gated servers.
+  - Each key includes rich operational attributes:
+    * **Label**: Human-readable name (e.g. "Discord Community", "VIP Supporters", "Family & Friends").
+    * **Passphrase**: Stored securely using Argon2id hashing.
+    * **Max Uses / Quota**: Optional limit on how many times the key can be redeemed (`0` = unlimited, or fixed e.g. 10 uses).
+    * **Expiration Date**: Optional validity timestamp (e.g. valid for a weekend event).
+    * **Lease Duration Override**: Optional custom lease time for players using this key (e.g. VIP key grants 24h lease, Guest key grants 2h).
+    * **Active Toggle**: Instantly disable or revoke a key without affecting other keys.
 - **Lease Duration & Expiration**:
   - Configurable lease timeout stored in seconds (e.g. `7200` for 2h, `21600` for 6h, `86400` for 24h).
   - Admin UI provides a user-friendly dropdown selector (1h, 3h, 6h, 12h, 24h, Custom).
