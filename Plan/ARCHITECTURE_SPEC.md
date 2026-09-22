@@ -218,6 +218,42 @@ All server configuration is organized into structured, validated UI tabs:
   - Automatic sliding refresh on active dashboard interactions.
   - Optional 30-day "Remember Me" extended token for trusted administrator devices.
 
+### 6.6. Web Navigation Architecture & Layout Hierarchy
+- **Dual-Tier Layout**:
+  - **Tier 1 (Global Sidebar)**:
+    - 🖥️ **Servers**: Card grid/list of instances with live CPU/RAM/player gauges and "+ New Server" button.
+    - 📜 **Audit Logs**: Platform-wide activity audit trail.
+    - 👥 **Users**: User accounts, Admin vs Operator roles, and per-server access grants (Admin only).
+    - ⚙️ **Settings**: Global telemetry sampling rate (2s default), Discord webhooks, and system update banner.
+  - **Tier 2 (Server Context Hub)**:
+    - Persistent top status header: Server Title, State Badge (Running, Stopped, Crashed, Updating), Port, and Power Action Controls (Start, Graceful Stop, Direct Stop, Force Kill, Restart, Clone, Export).
+    - Dedicated Context Tabs:
+      - 📟 **Console**: Real-time xterm.js terminal over WebSockets with 1,000-line ring buffer.
+      - 👥 **Players & Chat**: Active players list, Allowlist, Ops, and dedicated live In-Game Chat Feed & Broadcaster.
+      - 📈 **Telemetry**: CPU %, RAM, and player count charts (1h raw, 24h/7d 5m rollups, 30d 1h rollups).
+      - ⚙️ **Configuration**: Form editors for `server.properties`, `allowlist.json`, and `permissions.json`.
+      - 💾 **Backups & Worlds**: Zero-downtime hot backups, retention settings, pin/lock toggle, world import/export.
+      - 🧩 **Addons & Packs**: Behavior & Resource pack drag-and-drop installer.
+      - ⏰ **Scheduled Tasks**: Cron-based auto-restarts with warnings, scheduled backups, and commands.
+- **Mobile & Tablet Responsive Adaptation**:
+  - Collapses global navigation into a slide-over left drawer with top hamburger toggle button.
+  - Server context tabs scroll smoothly horizontally with sticky top status banner for thumb-friendly mobile control.
+- **Client Route Structure**:
+  - `/setup` (Setup Wizard)
+  - `/login` (Authentication)
+  - `/servers` (Server List Overview)
+  - `/servers/new` (Guided Server Creation Modal)
+  - `/servers/:id/console` (Console View)
+  - `/servers/:id/players` (Player Hub & Chat)
+  - `/servers/:id/telemetry` (Performance Charts)
+  - `/servers/:id/config` (Server Configuration)
+  - `/servers/:id/backups` (Backups & Worlds)
+  - `/servers/:id/addons` (Addon Manager)
+  - `/servers/:id/tasks` (Task Scheduler)
+  - `/audit` (Audit Log Viewer)
+  - `/users` (User Management)
+  - `/settings` (System Settings)
+
 ---
 
 ## 7. Directory Layout
