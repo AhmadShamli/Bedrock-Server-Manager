@@ -222,6 +222,11 @@ All server configuration is organized into structured, validated UI tabs:
        `minecraft://?addExternalServer=<ServerName>|<ServerHost>:<ServerPort>`
        Clicking this automatically launches the Minecraft app on Windows, iOS, or Android and opens the "Add Server" screen with name, host, and port pre-populated!
     2. **"📋 Copy Server Address" Button**: One-click copies `host:port` to the clipboard for manual entry on consoles (Xbox, PlayStation, Nintendo Switch).
+- **Mobile Roaming & Dynamic IP Handoff**:
+  - **The Problem**: Mobile devices on cellular networks (4G/5G) or Wi-Fi handoffs change their public IP address as they move between cell towers or networks, which would normally break static firewall allowlisting.
+  - **Signed Device Session Cookie**: Upon successful authentication, the server sets a secure, signed HTTP cookie valid for the active session duration.
+  - **Background Heartbeat**: When the player keeps the `/knock/:id` tab open in the background, a lightweight 60s heartbeat ping (`POST /api/knock/:id/heartbeat`) detects if the client's public IP has changed. The backend automatically replaces the old IP with the new IP in the firewall rules without interrupting the player.
+  - **One-Tap Quick Reconnect**: If the tab was closed and the player's IP changes later, revisiting `/knock/:id` recognizes their active session and displays a single **"🔄 1-Tap Update My IP"** button, instantly updating the firewall without re-entering credentials.
 - **Dashboard Management**:
   - Dedicated **Port Gate** tab in Server Hub showing active IP leases, client IPs, Gamertags, countdowns, manual IP allowlist button, and instant "Revoke Access" controls.
   - Shareable Knock Link & QR Code generation for convenient mobile device access.

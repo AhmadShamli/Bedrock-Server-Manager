@@ -91,6 +91,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - `IPTablesDriver` (manages dedicated `BEDROCK_PORT_GATE` chain)
   - `CustomScriptDriver` (configurable shell hooks for custom environments)
   - Public Port-Knock handler (`/api/knock/:id` with Gamertag / Passphrase validation)
+  - Mobile Roaming & Heartbeat API (`/api/knock/:id/heartbeat`): detects IP changes via signed session cookie and hot-swaps firewall rules seamlessly
   - Background Lease Auditor (purges expired IP rules every 30s)
 - [ ] Trusted Proxy Client IP Resolver (`internal/ipresolver`, referenced from `../Funnel`):
   - Supports `direct`, `reverse_proxy`, and `cloudflare` modes
@@ -134,7 +135,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - **Interactive Terminal**: `xterm.js` console with real-time WebSocket log streaming, ANSI coloring, auto-scroll, command history, and quick command buttons
   - **Player Hub & Live Chat**: Active player list, Allowlist editor, Operator editor, kick/ban/op modals, real-time in-game chat feed panel, and broadcast/DM modal
   - **Port Gate & IP Leases**: Dynamic firewall toggle, active IP leases table with countdowns, manual IP allowlist modal, QR code generator, and shareable link
-  - **Player Knock Portal (`/knock/:id`)**: Lightweight public web portal for players to enter Gamertag/passphrase, unlock their IP address, and launch the game directly via `minecraft://?addExternalServer=<Name>|<Host>:<Port>` or one-click copy connection address
+  - **Player Knock Portal (`/knock/:id`)**: Lightweight public web portal for players to enter Gamertag/passphrase, unlock their IP address, background heartbeat for mobile 4G/5G roaming, 1-tap IP reconnect button, and direct game launch via `minecraft://?addExternalServer=<Name>|<Host>:<Port>`
   - **Server Settings**: GUI form editor for `server.properties`, `allowlist.json`, and `permissions.json`
   - **Backups & Worlds**: Hot backup triggers, retention settings, pin/lock toggle, restore, world upload/export
   - **Server Cloning & Export**: 1-click Clone modal and Full Server Export download button
