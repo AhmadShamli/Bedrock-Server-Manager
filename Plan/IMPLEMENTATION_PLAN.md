@@ -26,10 +26,11 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
     - Tiered data retention pruner (raw: 6h, 5m: 7d, 1h: 30d)
 - [ ] Implement JWT Authentication & User management (`internal/auth`, `internal/api/auth.go`):
   - Password hashing via Argon2id
-  - Login / refresh / me endpoints
+  - Login / refresh / me endpoints with 24-hour sliding session and 30-day "Remember Me"
   - RBAC middleware (`Admin` vs `Server Operator` with per-server instance authorization)
   - Strict internal-only API scope (no remote API keys / bot tokens)
   - Initial setup wizard endpoint & check (`/api/setup`) with automatic JWT secret generation and optional ENV override
+  - Configurable server binding via `PORT` (default: 8080) and `DATA_DIR` (default: `data`) with reverse-proxy header support (`X-Forwarded-For`, `X-Forwarded-Proto`)
 
 ---
 
@@ -66,6 +67,8 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - Path-traversal proof security (no arbitrary filesystem browsing)
 - [ ] Player Hub Engine (`internal/player`):
   - Real-time player detection via stdout log parsing
+  - Dedicated in-game chat feed parser (streams player chat into isolated chat UI feed)
+  - Broadcaster API: send global styled alerts (`say`/`tellraw`) or private direct messages (`tell`)
   - RakNet UDP Ping poller (`internal/raknet`) for latency, MOTD, and online player counts
   - Player quick actions (`kick`, `ban`, `op`, `deop`, `teleport`, `say`)
   - XUID / Gamertag resolution and persistence
@@ -110,7 +113,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - **Dashboard / Server List**: Cards displaying live server status, players online, CPU/RAM, quick start/stop
   - **Shutdown Action Modal**: Admin choice between Graceful Stop (with countdown) and Direct Stop
   - **Interactive Terminal**: `xterm.js` console with real-time WebSocket log streaming, ANSI coloring, auto-scroll, command history, and quick command buttons
-  - **Player Hub**: Active player list, Allowlist management, Operator management, kick/ban/op modals
+  - **Player Hub & Live Chat**: Active player list, Allowlist editor, Operator editor, kick/ban/op modals, real-time in-game chat feed panel, and broadcast/DM modal
   - **Server Settings**: GUI form editor for `server.properties`, `allowlist.json`, and `permissions.json`
   - **Backups & Worlds**: Hot backup triggers, retention settings, pin/lock toggle, restore, world upload/export
   - **Server Cloning & Export**: 1-click Clone modal and Full Server Export download button

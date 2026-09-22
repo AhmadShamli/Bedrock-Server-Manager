@@ -75,10 +75,12 @@ flowchart TD
   - `permissions.json` (`[{"permission": "operator"|"member"|"visitor", "xuid": "..."}]`).
 - Arbitrary file browsing is disabled by design to eliminate path traversal vulnerabilities and prevent accidental file deletion.
 
-### 4.3. Player Hub
+### 4.3. Player Hub & Live Chat Broadcaster
 - **Live Connection Tracking**: Parses stdout logs (`Player connected: <name>, xuid: <xuid>` / `Player disconnected`) and maintains active session list.
 - **Gamertag & XUID Synchronization**: Automatically resolves and stores player XUIDs for allowlist and operator permissions.
 - **Quick Player Actions**: Kick, ban, teleport, change permission level (`operator`, `member`, `visitor`), and broadcast in-game messages.
+- **Dedicated In-Game Chat Feed**: Real-time stream parsing in-game player chat messages into a clean, dedicated web chat panel (isolated from system logs).
+- **Direct Message & Global Broadcaster**: Web UI form to send global announcements (styled `say` / `tellraw` broadcasts) or direct private messages (`tell <player> <msg>`) without touching the raw terminal console.
 
 ### 4.4. Zero-Downtime Hot Backups, World Management & Retention
 - **Hot Backup Protocol**:
@@ -205,6 +207,16 @@ All server configuration is organized into structured, validated UI tabs:
   - **Zero external web servers**: In production, the single Go executable serves all HTML, JS, CSS, fonts, and images directly from memory with gzip compression.
   - **SPA History Fallback**: Non-API routes are automatically routed to `index.html` so client-side React Router navigation works seamlessly across all paths (`/servers/*`, `/settings`, `/setup`, etc.).
   - **Development Mode**: In development, `vite` runs with Hot Module Replacement (HMR) and proxies `/api` and `/ws` requests to the Go backend on `localhost:8080`.
+
+### 6.5. Manager Web Server, Reverse Proxy & Session Security
+- **Web Server & Binding**:
+  - Listens on `0.0.0.0:8080` by default.
+  - Configurable via environment variables: `PORT=8080` and `DATA_DIR=data`.
+  - Reverse proxy ready: works seamlessly behind standard reverse proxies (Nginx, Caddy, Traefik, Cloudflare Tunnel) for external SSL/TLS termination with `X-Forwarded-For` and `X-Forwarded-Proto` support.
+- **Session Security & Sliding Expiration**:
+  - Standard 24-hour JWT session token stored in secure, HttpOnly, SameSite cookies.
+  - Automatic sliding refresh on active dashboard interactions.
+  - Optional 30-day "Remember Me" extended token for trusted administrator devices.
 
 ---
 
