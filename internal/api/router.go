@@ -50,6 +50,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	addonHandler := NewAddonHandler(opts.DB, opts.DataDir)
 	taskHandler := NewTaskHandler(opts.DB, opts.Scheduler)
 	globalPlayerHandler := NewGlobalPlayerHandler(opts.DB, opts.Engine, opts.DataDir)
+	userHandler := NewUserHandler(opts.DB)
 
 	// Global Middlewares
 	r.Use(chimiddleware.RequestID)
@@ -121,10 +122,13 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				// RakNet Ping
 				srvGroup.Get("/servers/{id}/ping", playerHubHandler.Ping)
 
-				// Port Gate Leases
+				// Port Gate Leases & Keys
 				srvGroup.Get("/servers/{id}/leases", knockHandler.ListLeases)
 				srvGroup.Post("/servers/{id}/leases/{leaseId}/revoke", knockHandler.RevokeLease)
 				srvGroup.Post("/servers/{id}/leases/manual", knockHandler.CreateManualLease)
+				srvGroup.Get("/servers/{id}/access-keys", knockHandler.ListAccessKeys)
+				srvGroup.Post("/servers/{id}/access-keys", knockHandler.CreateAccessKey)
+				srvGroup.Delete("/servers/{id}/access-keys/{keyId}", knockHandler.DeleteAccessKey)
 
 				// Backups & Worlds
 				srvGroup.Get("/servers/{id}/backups", backupHandler.ListBackups)
@@ -170,10 +174,19 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				// Task Scheduler
 				adminGroup.Get("/tasks", taskHandler.List)
 				adminGroup.Post("/tasks", taskHandler.Create)
+				adminGroup.Get("/tasks/{id}", taskHandler.Get)
 				adminGroup.Put("/tasks/{id}", taskHandler.Update)
 				adminGroup.Delete("/tasks/{id}", taskHandler.Delete)
 				adminGroup.Post("/tasks/{id}/toggle", taskHandler.Toggle)
 				adminGroup.Post("/tasks/{id}/run", taskHandler.RunNow)
+
+				// User Management
+				adminGroup.Get("/users", userHandler.List)
+				adminGroup.Post("/users", userHandler.Create)
+				adminGroup.Put("/users/{id}/password", userHandler.UpdatePassword)
+				adminGroup.Delete("/users/{id}", userHandler.Delete)
+				adminGroup.Get("/users/{id}/servers", userHandler.GetServerAccess)
+				adminGroup.Put("/users/{id}/servers", userHandler.UpdateServerAccess)
 
 				adminGroup.Get("/system/audit", systemHandler.ListAuditLogs)
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)

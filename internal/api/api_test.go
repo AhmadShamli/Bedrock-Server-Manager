@@ -2,7 +2,9 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -457,3 +459,320 @@ func TestAPIGlobalPlayers(t *testing.T) {
 		t.Fatalf("expected LocalPromoted to be removed from global")
 	}
 }
+
+func TestAPIServerUpdateAndValidation(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	// Create admin user & token
+	pwHash, _ := auth.HashPassword("TestPass1234!", 8)
+	user, err := db.CreateUser(ctx, "admin_upd", pwHash, models.RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	token, _ := auth.GenerateJWT(jwtSecret, user.ID, user.Username, user.Role, time.Hour)
+
+	// Create test server
+	srv := &models.Server{
+		ID:              "srv-upd-test",
+		Name:            "Original Name",
+		Version:         "1.21.0.03",
+		Port:            19140,
+		PortV6:          19141,
+		Status:          models.ServerStatusStopped,
+		Mode:            "survival",
+		Difficulty:      "normal",
+		MemoryLimit:     "2G",
+		CPULimit:        2.0,
+		AutostartOnBoot: false,
+		PortGateEnabled: false,
+		PortGateMode:    "passphrase",
+		PortGateTimeout: 7200,
+	}
+	if err := db.CreateServer(ctx, srv); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+
+	// Partial update: rename and change mode without wiping other fields
+	updBody := []byte(`{"name":"Updated Realm Name","mode":"creative","autostart_on_boot":true}`)
+	req := httptest.NewRequest("PUT", "/api/servers/srv-upd-test", bytes.NewReader(updBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT /api/servers failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var updated models.Server
+	_ = json.NewDecoder(w.Body).Decode(&updated)
+	if updated.Name != "Updated Realm Name" || updated.Mode != "creative" || !updated.AutostartOnBoot {
+		t.Errorf("expected updated fields, got: %+v", updated)
+	}
+	// Verify port was preserved
+	if updated.Port != 19140 || updated.MemoryLimit != "2G" {
+		t.Errorf("expected original fields to be preserved, got port=%d mem=%s", updated.Port, updated.MemoryLimit)
+	}
+
+	// Create another server to test port collision
+	srv2 := &models.Server{
+		ID:      "srv-upd-collision",
+		Name:    "Server 2",
+		Version: "1.21.0.03",
+		Port:    19150,
+		PortV6:  19151,
+		Status:  models.ServerStatusStopped,
+	}
+	_ = db.CreateServer(ctx, srv2)
+
+	// Attempt to update srv to use port 19150 -> should return 409 Conflict
+	conflictBody := []byte(`{"port":19150}`)
+	req = httptest.NewRequest("PUT", "/api/servers/srv-upd-test", bytes.NewReader(conflictBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409 Conflict for port collision, got %d", w.Code)
+	}
+}
+
+func TestAPIPortGateKeysCRUD(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	pwHash, _ := auth.HashPassword("TestPass1234!", 8)
+	user, _ := db.CreateUser(ctx, "admin_keys", pwHash, models.RoleAdmin)
+	token, _ := auth.GenerateJWT(jwtSecret, user.ID, user.Username, user.Role, time.Hour)
+
+	srv := &models.Server{
+		ID:              "srv-keys-test",
+		Name:            "Keys Server",
+		Port:            19160,
+		PortV6:          19161,
+		Status:          models.ServerStatusStopped,
+		PortGateEnabled: true,
+		PortGateTimeout: 3600,
+	}
+	_ = db.CreateServer(ctx, srv)
+
+	// 1. Create Access Key via POST /api/servers/srv-keys-test/access-keys
+	createPayload := []byte(`{"label":"VIP Key","passphrase":"SuperSecretVIPPassphrase","max_uses":5,"lease_duration_seconds":1800}`)
+	req := httptest.NewRequest("POST", "/api/servers/srv-keys-test/access-keys", bytes.NewReader(createPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create access key failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var createdKey CreateAccessKeyResponse
+	_ = json.NewDecoder(w.Body).Decode(&createdKey)
+	if createdKey.Label != "VIP Key" || createdKey.PlaintextPassphrase != "SuperSecretVIPPassphrase" || createdKey.ID == 0 {
+		t.Fatalf("unexpected created key response: %+v", createdKey)
+	}
+
+	// 2. List Access Keys via GET /api/servers/srv-keys-test/access-keys
+	req = httptest.NewRequest("GET", "/api/servers/srv-keys-test/access-keys", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("list access keys failed: %d", w.Code)
+	}
+	var keys []models.PortGateKey
+	_ = json.NewDecoder(w.Body).Decode(&keys)
+	if len(keys) != 1 || keys[0].Label != "VIP Key" {
+		t.Fatalf("unexpected keys list: %+v", keys)
+	}
+
+	// 3. Delete Access Key via DELETE /api/servers/srv-keys-test/access-keys/{keyId}
+	delURL := fmt.Sprintf("/api/servers/srv-keys-test/access-keys/%d", createdKey.ID)
+	req = httptest.NewRequest("DELETE", delURL, nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete access key failed: %d", w.Code)
+	}
+
+	// Verify key was removed
+	keysAfter, _ := db.ListPortGateKeys(ctx, &srv.ID)
+	if len(keysAfter) != 0 {
+		t.Fatalf("expected 0 keys after deletion, got %d", len(keysAfter))
+	}
+}
+
+func TestAPITasksCRUD(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	pwHash, _ := auth.HashPassword("TestPass1234!", 8)
+	user, _ := db.CreateUser(ctx, "admin_tasks", pwHash, models.RoleAdmin)
+	token, _ := auth.GenerateJWT(jwtSecret, user.ID, user.Username, user.Role, time.Hour)
+
+	// 1. Create Task via POST /api/tasks
+	createPayload := []byte(`{"name":"Hourly Backup","cron_expr":"0 * * * *","action":"backup"}`)
+	req := httptest.NewRequest("POST", "/api/tasks", bytes.NewReader(createPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create task failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var createdTask models.Task
+	_ = json.NewDecoder(w.Body).Decode(&createdTask)
+	if createdTask.ID == 0 || createdTask.Name != "Hourly Backup" {
+		t.Fatalf("unexpected task: %+v", createdTask)
+	}
+
+	// 2. Get Task via GET /api/tasks/{id}
+	req = httptest.NewRequest("GET", fmt.Sprintf("/api/tasks/%d", createdTask.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("get task failed: %d", w.Code)
+	}
+
+	// 3. Update Task via PUT /api/tasks/{id}
+	updatePayload := []byte(`{"name":"Midnight Backup","cron_expr":"0 0 * * *"}`)
+	req = httptest.NewRequest("PUT", fmt.Sprintf("/api/tasks/%d", createdTask.ID), bytes.NewReader(updatePayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("update task failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var updatedTask models.Task
+	_ = json.NewDecoder(w.Body).Decode(&updatedTask)
+	if updatedTask.Name != "Midnight Backup" || updatedTask.CronExpr != "0 0 * * *" || updatedTask.Action != "backup" {
+		t.Fatalf("unexpected updated task: %+v", updatedTask)
+	}
+
+	// 4. Toggle Task via POST /api/tasks/{id}/toggle
+	req = httptest.NewRequest("POST", fmt.Sprintf("/api/tasks/%d/toggle", createdTask.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("toggle task failed: %d", w.Code)
+	}
+
+	// 5. Delete Task via DELETE /api/tasks/{id}
+	req = httptest.NewRequest("DELETE", fmt.Sprintf("/api/tasks/%d", createdTask.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete task failed: %d", w.Code)
+	}
+}
+
+func TestAPIUsersCRUD(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	pwHash, _ := auth.HashPassword("TestPass1234!", 8)
+	user, _ := db.CreateUser(ctx, "superadmin", pwHash, models.RoleAdmin)
+	token, _ := auth.GenerateJWT(jwtSecret, user.ID, user.Username, user.Role, time.Hour)
+
+	// 1. Create User via POST /api/users
+	createPayload := []byte(`{"username":"operator1","password":"OperatorPassword123!","role":"operator"}`)
+	req := httptest.NewRequest("POST", "/api/users", bytes.NewReader(createPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create user failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var createdUser models.User
+	_ = json.NewDecoder(w.Body).Decode(&createdUser)
+	if createdUser.Username != "operator1" || createdUser.Role != models.RoleOperator {
+		t.Fatalf("unexpected created user: %+v", createdUser)
+	}
+
+	// 2. List Users via GET /api/users
+	req = httptest.NewRequest("GET", "/api/users", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("list users failed: %d", w.Code)
+	}
+	var users []models.User
+	_ = json.NewDecoder(w.Body).Decode(&users)
+	if len(users) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(users))
+	}
+
+	// 3. Grant Server Access via PUT /api/users/{id}/servers
+	_ = db.CreateServer(ctx, &models.Server{ID: "server-alpha", Name: "Alpha", Port: 19170, PortV6: 19171})
+	_ = db.CreateServer(ctx, &models.Server{ID: "server-beta", Name: "Beta", Port: 19172, PortV6: 19173})
+
+	accessPayload := []byte(`{"server_ids":["server-alpha","server-beta"]}`)
+	req = httptest.NewRequest("PUT", fmt.Sprintf("/api/users/%d/servers", createdUser.ID), bytes.NewReader(accessPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("update server access failed: %d", w.Code)
+	}
+
+	// 4. Get Server Access via GET /api/users/{id}/servers
+	req = httptest.NewRequest("GET", fmt.Sprintf("/api/users/%d/servers", createdUser.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("get server access failed: %d", w.Code)
+	}
+	var serverIDs []string
+	_ = json.NewDecoder(w.Body).Decode(&serverIDs)
+	if len(serverIDs) != 2 {
+		t.Fatalf("expected 2 servers, got %d", len(serverIDs))
+	}
+
+	// 5. Update Password via PUT /api/users/{id}/password
+	newPwPayload := []byte(`{"password":"NewOperatorPass123!"}`)
+	req = httptest.NewRequest("PUT", fmt.Sprintf("/api/users/%d/password", createdUser.ID), bytes.NewReader(newPwPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("update password failed: %d", w.Code)
+	}
+
+	// 6. Delete User via DELETE /api/users/{id}
+	req = httptest.NewRequest("DELETE", fmt.Sprintf("/api/users/%d", createdUser.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("delete user failed: %d", w.Code)
+	}
+}
+

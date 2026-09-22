@@ -1,13 +1,13 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink,
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
-  Upload, Trash2, Share2, Crown, Globe, UserMinus
+  Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, PortGateLease, GlobalPlayer } from '../types';
+import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer } from '../types';
 
 interface ServerHubProps {
   user: User;
@@ -15,19 +15,46 @@ interface ServerHubProps {
 
 export const ServerHub: React.FC<ServerHubProps> = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [server, setServer] = useState<Server | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'overview' | 'players' | 'portgate' | 'backups' | 'addons' | 'settings' | 'actions'>('overview');
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Port Gate Leases state
+  // Port Gate Leases & Access Keys state
   const [leases, setLeases] = useState<PortGateLease[]>([]);
+  const [accessKeys, setAccessKeys] = useState<PortGateKey[]>([]);
   const [showManualLeaseModal, setShowManualLeaseModal] = useState(false);
   const [manualIP, setManualIP] = useState('');
   const [manualGamertag, setManualGamertag] = useState('');
   const [manualDuration, setManualDuration] = useState(60);
   const [manualComment, setManualComment] = useState('');
+
+  const [showNewKeyModal, setShowNewKeyModal] = useState(false);
+  const [newKeyLabel, setNewKeyLabel] = useState('');
+  const [newKeyPassphrase, setNewKeyPassphrase] = useState('');
+  const [newKeyMaxUses, setNewKeyMaxUses] = useState(0);
+  const [newKeyDurationMinutes, setNewKeyDurationMinutes] = useState(120);
+  const [createdKeySecret, setCreatedKeySecret] = useState<string | null>(null);
+  const [copiedSecret, setCopiedSecret] = useState(false);
+
+  // Server Configuration Edit state
+  const [editServerName, setEditServerName] = useState('');
+  const [editServerMode, setEditServerMode] = useState('survival');
+  const [editServerDifficulty, setEditServerDifficulty] = useState('normal');
+  const [editServerMemLimit, setEditServerMemLimit] = useState('2G');
+  const [editServerAutostart, setEditServerAutostart] = useState(false);
+  const [editServerPortGate, setEditServerPortGate] = useState(false);
+  const [editServerPortGateMode, setEditServerPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
+  const [editServerPortGateTimeout, setEditServerPortGateTimeout] = useState(7200);
+  const [serverUpdating, setServerUpdating] = useState(false);
+  const [serverUpdatedMsg, setServerUpdatedMsg] = useState<string | null>(null);
+
+  // Server Deletion state
+  const [showDeleteServerModal, setShowDeleteServerModal] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [serverDeleting, setServerDeleting] = useState(false);
 
   // Backups state
   const [backupsList, setBackupsList] = useState<Backup[]>([]);
@@ -154,6 +181,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       api.getChat(id).then((res) => setChatFeed(res)).catch(() => {});
     } else if (activeTab === 'portgate') {
       api.listLeases(id).then(setLeases).catch(() => {});
+      api.listAccessKeys(id).then(setAccessKeys).catch(() => {});
     } else if (activeTab === 'backups') {
       api.listBackups(id).then(setBackupsList).catch(() => {});
     } else if (activeTab === 'addons') {
@@ -171,6 +199,93 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       api.listServers().then((servers) => setAllServers(servers)).catch(() => {});
     }
   }, [id, activeTab, server?.version]);
+
+  useEffect(() => {
+    if (server) {
+      setEditServerName(server.name);
+      setEditServerMode(server.mode);
+      setEditServerDifficulty(server.difficulty);
+      setEditServerMemLimit(server.memory_limit);
+      setEditServerAutostart(server.autostart_on_boot);
+      setEditServerPortGate(server.port_gate_enabled);
+      setEditServerPortGateMode(server.port_gate_mode);
+      setEditServerPortGateTimeout(server.port_gate_timeout);
+    }
+  }, [server]);
+
+  const handleCreateAccessKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id) return;
+    try {
+      const res = await api.createAccessKey(id, {
+        label: newKeyLabel.trim(),
+        passphrase: newKeyPassphrase.trim() || undefined,
+        max_uses: Number(newKeyMaxUses),
+        lease_duration_seconds: Number(newKeyDurationMinutes) * 60,
+      });
+      setCreatedKeySecret(res.plaintext_passphrase || newKeyPassphrase.trim());
+      setNewKeyLabel('');
+      setNewKeyPassphrase('');
+      setNewKeyMaxUses(0);
+      const updatedKeys = await api.listAccessKeys(id);
+      setAccessKeys(updatedKeys);
+    } catch (err: any) {
+      alert(err.message || 'Failed to create access key');
+    }
+  };
+
+  const handleDeleteAccessKey = async (keyId: number) => {
+    if (!id || !confirm('Are you sure you want to revoke and delete this access key?')) return;
+    try {
+      await api.deleteAccessKey(id, keyId);
+      const updatedKeys = await api.listAccessKeys(id);
+      setAccessKeys(updatedKeys);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete access key');
+    }
+  };
+
+  const handleUpdateServerSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id) return;
+    setServerUpdating(true);
+    setServerUpdatedMsg(null);
+    try {
+      const updated = await api.updateServer(id, {
+        name: editServerName,
+        mode: editServerMode,
+        difficulty: editServerDifficulty,
+        memory_limit: editServerMemLimit,
+        autostart_on_boot: editServerAutostart,
+        port_gate_enabled: editServerPortGate,
+        port_gate_mode: editServerPortGateMode,
+        port_gate_timeout: Number(editServerPortGateTimeout),
+      });
+      setServer((prev) => (prev ? { ...prev, ...updated, status: prev.status } : null));
+      setServerUpdatedMsg('Server instance configuration updated successfully!');
+      setTimeout(() => setServerUpdatedMsg(null), 4000);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update server configuration');
+    } finally {
+      setServerUpdating(false);
+    }
+  };
+
+  const handleDeleteServerInstance = async () => {
+    if (!id) return;
+    if (deleteConfirmText.trim() !== id) {
+      alert(`Please type "${id}" to confirm deletion.`);
+      return;
+    }
+    setServerDeleting(true);
+    try {
+      await api.deleteServer(id);
+      navigate('/');
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete server');
+      setServerDeleting(false);
+    }
+  };
 
   const handleStart = async () => {
     if (!id) return;
@@ -1077,6 +1192,197 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
               </div>
             </div>
           )}
+
+          {/* ACCESS KEYS / PASSPHRASES CARD */}
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div>
+                <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
+                  <Key className="w-4 h-4 text-emerald-400" />
+                  <span>Port Gate Access Passphrases & Keys</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1 font-mono">
+                  Manage visitor passphrases and community keys for unlocking UDP port access via the Knock Portal.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setCreatedKeySecret(null);
+                  setShowNewKeyModal(true);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 shrink-0 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
+              >
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>+ Create Access Passphrase</span>
+              </button>
+            </div>
+
+            {accessKeys.length === 0 ? (
+              <div className="text-center py-8 bg-obsidian-950/60 border border-obsidian-800 rounded-lg text-slate-500 font-mono text-xs">
+                No access passphrases configured for this server. Create a key to let players knock using a shared or personal passphrase.
+              </div>
+            ) : (
+              <div className="border border-obsidian-800 rounded-lg overflow-hidden">
+                <table className="w-full text-left font-mono text-xs">
+                  <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
+                    <tr>
+                      <th className="px-4 py-2.5">Label</th>
+                      <th className="px-4 py-2.5">Passphrase Prefix</th>
+                      <th className="px-4 py-2.5">Uses / Limit</th>
+                      <th className="px-4 py-2.5">Grant Duration</th>
+                      <th className="px-4 py-2.5">Status</th>
+                      <th className="px-4 py-2.5 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
+                    {accessKeys.map((k) => (
+                      <tr key={k.id} className="hover:bg-obsidian-800/40">
+                        <td className="px-4 py-2.5 text-slate-200 font-bold">{k.label}</td>
+                        <td className="px-4 py-2.5 text-emerald-400">
+                          <code>{k.key_prefix}••••••</code>
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-300">
+                          {k.used_count} / {k.max_uses === 0 ? '∞' : k.max_uses}
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-400">
+                          {Math.round(k.lease_duration_seconds / 60)} min
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              k.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                            }`}
+                          >
+                            {k.is_active ? 'Active' : 'Inactive'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <button
+                            onClick={() => handleDeleteAccessKey(k.id)}
+                            className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
+                          >
+                            Revoke
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* NEW ACCESS KEY MODAL */}
+          {showNewKeyModal && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-md w-full p-6 shadow-2xl">
+                <h3 className="text-base font-mono font-bold text-slate-100 mb-4 flex items-center gap-2">
+                  <KeyRound className="w-4 h-4 text-emerald-400" />
+                  <span>Create Port Gate Passphrase</span>
+                </h3>
+
+                {createdKeySecret ? (
+                  <div className="space-y-4 font-mono text-xs">
+                    <div className="p-4 bg-emerald-950/40 border border-emerald-500/40 rounded-xl space-y-2">
+                      <p className="text-emerald-300 font-bold">Passphrase Key Generated!</p>
+                      <p className="text-slate-400 text-[11px]">
+                        Copy and share this passphrase with players. For security, it will not be displayed again.
+                      </p>
+                      <div className="flex items-center justify-between p-2.5 bg-obsidian-950 border border-emerald-500/30 rounded-lg">
+                        <code className="text-emerald-400 font-bold text-sm select-all">{createdKeySecret}</code>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(createdKeySecret);
+                            setCopiedSecret(true);
+                            setTimeout(() => setCopiedSecret(false), 2000);
+                          }}
+                          className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-[11px] flex items-center gap-1"
+                        >
+                          {copiedSecret ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          <span>{copiedSecret ? 'Copied' : 'Copy'}</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowNewKeyModal(false);
+                          setCreatedKeySecret(null);
+                        }}
+                        className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <form onSubmit={handleCreateAccessKey} className="space-y-4 font-mono text-xs">
+                    <div>
+                      <label className="block text-slate-300 mb-1 font-bold">Key Label / Description</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Discord Community Key"
+                        value={newKeyLabel}
+                        onChange={(e) => setNewKeyLabel(e.target.value)}
+                        className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-300 mb-1 font-bold">Custom Passphrase (optional)</label>
+                      <input
+                        type="text"
+                        placeholder="Leave blank to auto-generate secure key"
+                        value={newKeyPassphrase}
+                        onChange={(e) => setNewKeyPassphrase(e.target.value)}
+                        className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-slate-300 mb-1 font-bold">Max Uses (0 = unlimited)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={newKeyMaxUses}
+                          onChange={(e) => setNewKeyMaxUses(parseInt(e.target.value) || 0)}
+                          className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-300 mb-1 font-bold">Duration (minutes)</label>
+                        <input
+                          type="number"
+                          min="5"
+                          value={newKeyDurationMinutes}
+                          onChange={(e) => setNewKeyDurationMinutes(parseInt(e.target.value) || 120)}
+                          className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
+                      <button
+                        type="button"
+                        onClick={() => setShowNewKeyModal(false)}
+                        className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold"
+                      >
+                        Generate Key
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1294,6 +1600,150 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       {/* CONFIGURATION EDITOR TAB */}
       {activeTab === 'settings' && (
         <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 max-w-4xl space-y-8">
+          {/* SERVER INSTANCE CONFIGURATION */}
+          <div className="border-b border-obsidian-800 pb-8">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
+                  <Settings className="w-4 h-4 text-emerald-400" />
+                  <span>Server Instance Configuration</span>
+                </h3>
+                <p className="text-xs text-slate-400 font-mono mt-0.5">
+                  Update server metadata, memory limits, autostart, and port gating policy.
+                </p>
+              </div>
+
+              <button
+                onClick={handleUpdateServerSettings}
+                disabled={serverUpdating}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5 shrink-0"
+              >
+                {serverUpdating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                <span>Save Server Settings</span>
+              </button>
+            </div>
+
+            {serverUpdatedMsg && (
+              <div className="mb-4 p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 font-mono text-xs flex items-center space-x-2">
+                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>{serverUpdatedMsg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateServerSettings} className="space-y-4 font-mono text-xs bg-obsidian-950 p-4 rounded-xl border border-obsidian-800">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">Server Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={editServerName}
+                    onChange={(e) => setEditServerName(e.target.value)}
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">RAM Limit</label>
+                  <select
+                    value={editServerMemLimit}
+                    onChange={(e) => setEditServerMemLimit(e.target.value)}
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  >
+                    <option value="1G">1 GB</option>
+                    <option value="2G">2 GB (Recommended)</option>
+                    <option value="4G">4 GB</option>
+                    <option value="8G">8 GB</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">Game Mode</label>
+                  <select
+                    value={editServerMode}
+                    onChange={(e) => setEditServerMode(e.target.value)}
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  >
+                    <option value="survival">Survival</option>
+                    <option value="creative">Creative</option>
+                    <option value="adventure">Adventure</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">Difficulty</label>
+                  <select
+                    value={editServerDifficulty}
+                    onChange={(e) => setEditServerDifficulty(e.target.value)}
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  >
+                    <option value="peaceful">Peaceful</option>
+                    <option value="easy">Easy</option>
+                    <option value="normal">Normal</option>
+                    <option value="hard">Hard</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-obsidian-800/60 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                <label className="flex items-center space-x-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editServerAutostart}
+                    onChange={(e) => setEditServerAutostart(e.target.checked)}
+                    className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <span className="text-slate-200 font-bold block">Autostart on Daemon Boot</span>
+                    <span className="text-[10px] text-slate-400">Launch this server automatically when system restarts</span>
+                  </div>
+                </label>
+
+                <label className="flex items-center space-x-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editServerPortGate}
+                    onChange={(e) => setEditServerPortGate(e.target.checked)}
+                    className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <span className="text-slate-200 font-bold block">Dynamic Port Gating</span>
+                    <span className="text-[10px] text-slate-400">Enforce firewall knock before allowing UDP connections</span>
+                  </div>
+                </label>
+              </div>
+
+              {editServerPortGate && (
+                <div className="p-3 bg-obsidian-900/60 border border-obsidian-800 rounded-lg grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
+                  <div>
+                    <label className="block text-slate-400 mb-1 text-[11px] font-bold">Knock Verification Mode</label>
+                    <select
+                      value={editServerPortGateMode}
+                      onChange={(e) => setEditServerPortGateMode(e.target.value as any)}
+                      className="w-full px-2.5 py-1.5 rounded bg-obsidian-950 border border-obsidian-700 text-slate-200 text-xs"
+                    >
+                      <option value="passphrase">Passphrase / Access Key</option>
+                      <option value="gamertag">Gamertag Allowlist</option>
+                      <option value="combined">Combined (Passphrase + Gamertag)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 mb-1 text-[11px] font-bold">Lease Timeout (seconds)</label>
+                    <input
+                      type="number"
+                      min="60"
+                      value={editServerPortGateTimeout}
+                      onChange={(e) => setEditServerPortGateTimeout(parseInt(e.target.value) || 7200)}
+                      className="w-full px-2.5 py-1.5 rounded bg-obsidian-950 border border-obsidian-700 text-slate-200 text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+            </form>
+          </div>
+
           {/* server.properties form */}
           <div>
             <div className="flex items-center justify-between mb-4">
@@ -1383,12 +1833,18 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                 ) : (
                   allowlist.map((p) => {
                     const isGlobal = globalPlayers.some(
-                      (gp) => gp.name.toLowerCase() === p.name.toLowerCase() && gp.is_allowlisted
+                      (gp) => (gp.name.toLowerCase() === p.name.toLowerCase() || (p.xuid && gp.xuid === p.xuid)) && gp.is_allowlisted
                     );
+                    const matchingPerm = permissions.find(
+                      (perm) => (p.xuid && perm.xuid === p.xuid) || perm.xuid.toLowerCase() === p.name.toLowerCase()
+                    );
+                    const effectiveRole = matchingPerm ? matchingPerm.permission : 'member';
+
                     return (
                       <div key={p.name} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded bg-obsidian-900 border border-obsidian-800">
                         <div className="flex items-center space-x-2.5">
                           <span className="text-slate-200 font-bold">{p.name}</span>
+                          {p.xuid && <span className="text-slate-500 text-[10px]">({p.xuid})</span>}
                           {isGlobal ? (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                               <Globe className="w-2.5 h-2.5" /> GLOBAL
@@ -1412,7 +1868,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                             </button>
                           ) : (
                             <button
-                              onClick={() => handlePromoteToGlobal(p.name, p.xuid, 'member', true)}
+                              onClick={() => handlePromoteToGlobal(p.name, p.xuid, effectiveRole, true)}
                               title="Promote to Global Access List (syncs across all servers)"
                               className="text-emerald-400 hover:text-emerald-300 hover:underline text-[11px] flex items-center gap-1"
                             >
@@ -1480,9 +1936,14 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                   <p className="text-slate-600 italic">No custom permissions configured (all players use default member permission).</p>
                 ) : (
                   permissions.map((p) => {
-                    const isGlobalOp = globalPlayers.some(
-                      (gp) => (gp.xuid === p.xuid || gp.name.toLowerCase() === p.xuid.toLowerCase()) && gp.permission === p.permission
+                    const matchingAllow = allowlist.find(
+                      (al) => (al.xuid && al.xuid === p.xuid) || al.name.toLowerCase() === p.xuid.toLowerCase()
                     );
+                    const playerName = matchingAllow ? matchingAllow.name : p.xuid;
+                    const isGlobalOp = globalPlayers.some(
+                      (gp) => (gp.xuid === p.xuid || gp.name.toLowerCase() === playerName.toLowerCase()) && gp.permission === p.permission
+                    );
+
                     return (
                       <div key={p.xuid} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded bg-obsidian-900 border border-obsidian-800">
                         <div className="flex items-center space-x-2.5">
@@ -1498,7 +1959,8 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                             {p.permission === 'operator' && <Crown className="w-3 h-3" />}
                             <span>{p.permission}</span>
                           </span>
-                          <span className="text-slate-200 font-bold">{p.xuid}</span>
+                          <span className="text-slate-200 font-bold">{playerName}</span>
+                          {matchingAllow && <span className="text-slate-500 text-[10px]">({p.xuid})</span>}
                           {isGlobalOp ? (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
                               <Globe className="w-2.5 h-2.5" /> GLOBAL
@@ -1513,7 +1975,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                         <div className="flex items-center space-x-3 text-xs">
                           {isGlobalOp ? (
                             <button
-                              onClick={() => handleRemoveFromGlobal(p.xuid)}
+                              onClick={() => handleRemoveFromGlobal(playerName)}
                               title="Demote from Global role"
                               className="text-amber-400 hover:text-amber-300 hover:underline text-[11px] flex items-center gap-1"
                             >
@@ -1522,7 +1984,7 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                             </button>
                           ) : (
                             <button
-                              onClick={() => handlePromoteToGlobal(p.xuid, p.xuid, p.permission, true)}
+                              onClick={() => handlePromoteToGlobal(playerName, p.xuid, p.permission, matchingAllow ? true : false)}
                               title="Promote this operator role to Global"
                               className="text-emerald-400 hover:text-emerald-300 hover:underline text-[11px] flex items-center gap-1"
                             >
@@ -1807,6 +2269,72 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
               </button>
             </form>
           </div>
+
+          {/* DANGER ZONE - DELETE SERVER */}
+          <div className="pt-6 border-t border-rose-900/40">
+            <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-5 space-y-3">
+              <h3 className="font-mono text-base font-bold text-rose-300 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400" />
+                <span>Danger Zone: Delete Server Instance</span>
+              </h3>
+              <p className="text-xs text-slate-400 font-mono">
+                Irrevocably deletes this server container, its database record, and configuration. Be sure to export or backup worlds beforehand.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmText('');
+                  setShowDeleteServerModal(true);
+                }}
+                className="px-4 py-2 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-slate-950 font-bold font-mono text-xs border border-rose-500/40 flex items-center space-x-1.5 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Server Instance</span>
+              </button>
+            </div>
+          </div>
+
+          {/* DELETE SERVER CONFIRMATION MODAL */}
+          {showDeleteServerModal && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-obsidian-900 border border-rose-700/80 rounded-xl max-w-md w-full p-6 shadow-2xl">
+                <h3 className="text-base font-mono font-bold text-rose-400 mb-2 flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5" />
+                  <span>Confirm Server Deletion</span>
+                </h3>
+                <p className="text-xs text-slate-300 font-mono mb-4">
+                  This action is permanent and cannot be undone. To confirm deletion of <strong className="text-white font-bold">{server.name}</strong>, type its ID (<code className="text-rose-400 font-bold">{server.id}</code>) below:
+                </p>
+
+                <input
+                  type="text"
+                  value={deleteConfirmText}
+                  onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  placeholder={`Type "${server.id}" to confirm`}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-rose-800 rounded-lg text-rose-200 font-mono text-xs focus:outline-none focus:border-rose-500 mb-4"
+                />
+
+                <div className="flex justify-end space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteServerModal(false)}
+                    className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700 font-mono text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deleteConfirmText.trim() !== server.id || serverDeleting}
+                    onClick={handleDeleteServerInstance}
+                    className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold font-mono text-xs flex items-center space-x-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {serverDeleting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    <span>Delete Permanently</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

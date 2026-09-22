@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, GlobalPlayer } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, GlobalPlayer } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -127,7 +127,7 @@ class APIClient {
     return this.request(`/api/servers/${id}/stats`);
   }
 
-  async updateServer(id: string, server: Partial<Server>): Promise<{ status: string }> {
+  async updateServer(id: string, server: Partial<Server>): Promise<Server> {
     return this.request(`/api/servers/${id}`, {
       method: 'PUT',
       body: JSON.stringify(server),
@@ -326,6 +326,30 @@ class APIClient {
     });
   }
 
+  // --- Port Gate Access Keys ---
+  async listAccessKeys(serverId: string): Promise<PortGateKey[]> {
+    return this.request(`/api/servers/${serverId}/access-keys`);
+  }
+
+  async createAccessKey(serverId: string, payload: {
+    label: string;
+    passphrase?: string;
+    max_uses?: number;
+    lease_duration_seconds?: number;
+    expires_at?: string;
+  }): Promise<PortGateKey & { plaintext_passphrase?: string }> {
+    return this.request(`/api/servers/${serverId}/access-keys`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deleteAccessKey(serverId: string, keyId: number): Promise<{ success: boolean }> {
+    return this.request(`/api/servers/${serverId}/access-keys/${keyId}`, {
+      method: 'DELETE',
+    });
+  }
+
   // --- Backups & Worlds ---
   async listBackups(serverId: string): Promise<Backup[]> {
     return this.request(`/api/servers/${serverId}/backups`);
@@ -426,6 +450,10 @@ class APIClient {
     return this.request(url);
   }
 
+  async getTask(id: number): Promise<Task> {
+    return this.request(`/api/tasks/${id}`);
+  }
+
   async createTask(task: Partial<Task>): Promise<Task> {
     return this.request('/api/tasks', {
       method: 'POST',
@@ -471,6 +499,42 @@ class APIClient {
     return this.request('/api/system/settings', {
       method: 'POST',
       body: JSON.stringify({ key, value }),
+    });
+  }
+
+  // --- User Management ---
+  async listUsers(): Promise<User[]> {
+    return this.request('/api/users');
+  }
+
+  async createUser(payload: { username: string; password: string; role: 'admin' | 'operator' }): Promise<User> {
+    return this.request('/api/users', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateUserPassword(id: number, password: string): Promise<{ success: boolean }> {
+    return this.request(`/api/users/${id}/password`, {
+      method: 'PUT',
+      body: JSON.stringify({ password }),
+    });
+  }
+
+  async deleteUser(id: number): Promise<{ success: boolean }> {
+    return this.request(`/api/users/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getUserServerAccess(id: number): Promise<string[]> {
+    return this.request(`/api/users/${id}/servers`);
+  }
+
+  async updateUserServerAccess(id: number, serverIds: string[]): Promise<{ success: boolean }> {
+    return this.request(`/api/users/${id}/servers`, {
+      method: 'PUT',
+      body: JSON.stringify({ server_ids: serverIds }),
     });
   }
 

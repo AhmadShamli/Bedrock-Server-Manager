@@ -77,6 +77,25 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(t)
 }
 
+// Get returns a single scheduled task by ID.
+func (h *TaskHandler) Get(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid task ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.db.GetTask(r.Context(), id)
+	if err != nil || task == nil {
+		http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(task)
+}
+
 func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -85,20 +104,55 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var t models.Task
-	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+	existing, err := h.db.GetTask(r.Context(), id)
+	if err != nil || existing == nil {
+		http.Error(w, `{"error": "Task not found"}`, http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		Name     *string `json:"name"`
+		ServerID *string `json:"server_id"`
+		CronExpr *string `json:"cron_expr"`
+		Action   *string `json:"action"`
+		Payload  *string `json:"payload"`
+		Enabled  *bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "Invalid request"}`, http.StatusBadRequest)
 		return
 	}
 
-	t.ID = id
+	if req.Name != nil && *req.Name != "" {
+		existing.Name = *req.Name
+	}
+	if req.ServerID != nil {
+		if *req.ServerID == "" {
+			existing.ServerID = nil
+		} else {
+			existing.ServerID = req.ServerID
+		}
+	}
+	if req.CronExpr != nil && *req.CronExpr != "" {
+		existing.CronExpr = *req.CronExpr
+	}
+	if req.Action != nil && *req.Action != "" {
+		existing.Action = *req.Action
+	}
+	if req.Payload != nil {
+		existing.Payload = *req.Payload
+	}
+	if req.Enabled != nil {
+		existing.Enabled = *req.Enabled
+	}
+
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
-	if _, err := parser.Parse(t.CronExpr); err != nil {
+	if _, err := parser.Parse(existing.CronExpr); err != nil {
 		http.Error(w, `{"error": "Invalid cron expression"}`, http.StatusBadRequest)
 		return
 	}
 
-	if err := h.db.UpdateTask(r.Context(), &t); err != nil {
+	if err := h.db.UpdateTask(r.Context(), existing); err != nil {
 		http.Error(w, `{"error": "Failed to update task"}`, http.StatusInternalServerError)
 		return
 	}
@@ -108,7 +162,7 @@ func (h *TaskHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(t)
+	_ = json.NewEncoder(w).Encode(existing)
 }
 
 func (h *TaskHandler) Delete(w http.ResponseWriter, r *http.Request) {

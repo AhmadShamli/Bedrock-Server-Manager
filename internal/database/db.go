@@ -1224,13 +1224,40 @@ func (db *ManagerDB) UpsertGlobalPlayer(ctx context.Context, gp *models.GlobalPl
 	return gp, nil
 }
 
+func (db *ManagerDB) UpdateGlobalPlayer(ctx context.Context, gp *models.GlobalPlayer) (*models.GlobalPlayer, error) {
+	now := time.Now().UTC()
+	gp.UpdatedAt = now
+
+	allowlistedInt := 0
+	if gp.IsAllowlisted {
+		allowlistedInt = 1
+	}
+	ignoresLimitInt := 0
+	if gp.IgnoresPlayerLimit {
+		ignoresLimitInt = 1
+	}
+	if gp.Permission == "" {
+		gp.Permission = "member"
+	}
+
+	_, err := db.ExecContext(ctx, `
+		UPDATE global_players
+		SET name = ?, xuid = ?, is_allowlisted = ?, permission = ?, ignores_player_limit = ?, updated_at = ?
+		WHERE id = ?`,
+		gp.Name, gp.XUID, allowlistedInt, gp.Permission, ignoresLimitInt, FormatTime(gp.UpdatedAt), gp.ID)
+	if err != nil {
+		return nil, err
+	}
+	return gp, nil
+}
+
 func (db *ManagerDB) DeleteGlobalPlayer(ctx context.Context, id int64) error {
 	_, err := db.ExecContext(ctx, "DELETE FROM global_players WHERE id = ?", id)
 	return err
 }
 
-func (db *ManagerDB) DeleteGlobalPlayerByName(ctx context.Context, name string) error {
-	_, err := db.ExecContext(ctx, "DELETE FROM global_players WHERE LOWER(name) = LOWER(?)", name)
+func (db *ManagerDB) DeleteGlobalPlayerByName(ctx context.Context, nameOrXuid string) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM global_players WHERE LOWER(name) = LOWER(?) OR (xuid != '' AND xuid = ?)", nameOrXuid, nameOrXuid)
 	return err
 }
 

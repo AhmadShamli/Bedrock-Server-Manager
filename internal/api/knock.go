@@ -465,3 +465,151 @@ func (h *KnockHandler) CreateManualLease(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(lease)
 }
 
+// ListAccessKeys returns all configured access keys for a server.
+func (h *KnockHandler) ListAccessKeys(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	keys, err := h.db.ListPortGateKeys(r.Context(), &serverID)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to list access keys"}`, http.StatusInternalServerError)
+		return
+	}
+	if keys == nil {
+		keys = []models.PortGateKey{}
+	}
+	for i := range keys {
+		keys[i].KeyHash = ""
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(keys)
+}
+
+// CreateAccessKeyRequest payload for generating or saving an access key.
+type CreateAccessKeyRequest struct {
+	Label                string     `json:"label"`
+	Passphrase           string     `json:"passphrase"`
+	MaxUses              int        `json:"max_uses"`
+	LeaseDurationSeconds int        `json:"lease_duration_seconds"`
+	ExpiresAt            *time.Time `json:"expires_at"`
+}
+
+// CreateAccessKeyResponse returns the saved key along with the one-time plaintext passphrase.
+type CreateAccessKeyResponse struct {
+	models.PortGateKey
+	PlaintextPassphrase string `json:"plaintext_passphrase,omitempty"`
+}
+
+// CreateAccessKey provisions a new Port Gate access key / passphrase.
+func (h *KnockHandler) CreateAccessKey(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	server, err := h.db.GetServer(r.Context(), serverID)
+	if err != nil || server == nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	var req CreateAccessKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	passphrase := req.Passphrase
+	if passphrase == "" {
+		passphrase, _ = auth.GenerateRandomToken(12)
+	}
+
+	keyHash := auth.HashAccessKey(h.pepper, passphrase)
+	prefix := passphrase
+	if len(prefix) > 6 {
+		prefix = prefix[:6]
+	}
+
+	leaseSec := req.LeaseDurationSeconds
+	if leaseSec <= 0 {
+		leaseSec = server.PortGateTimeout
+	}
+	if leaseSec <= 0 {
+		leaseSec = 7200
+	}
+
+	key := &models.PortGateKey{
+		ServerID:             &server.ID,
+		Label:                req.Label,
+		KeyHash:              keyHash,
+		KeyPrefix:            prefix,
+		MaxUses:              req.MaxUses,
+		UsedCount:            0,
+		LeaseDurationSeconds: leaseSec,
+		ExpiresAt:            req.ExpiresAt,
+		IsActive:             true,
+	}
+
+	if err := h.db.CreatePortGateKey(r.Context(), key); err != nil {
+		http.Error(w, `{"error": "Failed to create access key"}`, http.StatusInternalServerError)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	var userID *int64
+	if claims != nil {
+		actorName = claims.Username
+		userID = &claims.UserID
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		UserID:    userID,
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "port_gate_key_created",
+		Target:    server.ID,
+		Details:   fmt.Sprintf(`{"key_id": %d, "label": "%s"}`, key.ID, key.Label),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	resp := CreateAccessKeyResponse{
+		PortGateKey:         *key,
+		PlaintextPassphrase: passphrase,
+	}
+	resp.KeyHash = ""
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// DeleteAccessKey revokes and removes a Port Gate access key.
+func (h *KnockHandler) DeleteAccessKey(w http.ResponseWriter, r *http.Request) {
+	keyIDStr := chi.URLParam(r, "keyId")
+	keyID, err := strconv.ParseInt(keyIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid key ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.db.DeletePortGateKey(r.Context(), keyID); err != nil {
+		http.Error(w, `{"error": "Failed to delete access key"}`, http.StatusInternalServerError)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	var userID *int64
+	if claims != nil {
+		actorName = claims.Username
+		userID = &claims.UserID
+	}
+	serverID := chi.URLParam(r, "id")
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		UserID:    userID,
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "port_gate_key_deleted",
+		Target:    serverID,
+		Details:   fmt.Sprintf(`{"key_id": %d}`, keyID),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, Play, Trash2, Plus, Server, AlertCircle, RefreshCw } from 'lucide-react';
+import { Clock, Play, Trash2, Plus, Server, AlertCircle, RefreshCw, Pencil } from 'lucide-react';
 import { api } from '../api/client';
 import { Task, Server as ServerType } from '../types';
 
@@ -16,6 +16,41 @@ export const Tasks: React.FC = () => {
   const [cronExpr, setCronExpr] = useState('0 4 * * *');
   const [action, setAction] = useState('backup');
   const [payload, setPayload] = useState('');
+
+  // Edit task state
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editServerId, setEditServerId] = useState('');
+  const [editCronExpr, setEditCronExpr] = useState('');
+  const [editAction, setEditAction] = useState('backup');
+  const [editPayload, setEditPayload] = useState('');
+
+  const openEditModal = (t: Task) => {
+    setEditingTask(t);
+    setEditName(t.name);
+    setEditServerId(t.server_id || '');
+    setEditCronExpr(t.cron_expr);
+    setEditAction(t.action);
+    setEditPayload(t.payload || '');
+  };
+
+  const handleUpdateTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask) return;
+    try {
+      await api.updateTask(editingTask.id, {
+        name: editName,
+        server_id: editServerId || undefined,
+        cron_expr: editCronExpr,
+        action: editAction,
+        payload: editPayload,
+      });
+      setEditingTask(null);
+      loadData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update task');
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -210,6 +245,13 @@ export const Tasks: React.FC = () => {
                         <Play className="w-3.5 h-3.5" />
                       </button>
                       <button
+                        onClick={() => openEditModal(task)}
+                        title="Edit Task"
+                        className="p-1.5 rounded bg-obsidian-800 text-slate-300 hover:bg-emerald-600 hover:text-slate-950 transition-colors"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
                         onClick={() => handleDelete(task.id)}
                         title="Delete Task"
                         className="p-1.5 rounded bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-slate-950 transition-colors"
@@ -339,6 +381,101 @@ export const Tasks: React.FC = () => {
                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold"
                 >
                   Schedule Task
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT TASK MODAL */}
+      {editingTask && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-md w-full p-6 shadow-2xl">
+            <h3 className="text-lg font-mono font-bold text-slate-100 mb-4 flex items-center gap-2">
+              <Pencil className="w-5 h-5 text-emerald-400" />
+              <span>Edit Scheduled Task</span>
+            </h3>
+
+            <form onSubmit={handleUpdateTask} className="space-y-4 font-mono text-xs">
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Task Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Target Server</label>
+                <select
+                  value={editServerId}
+                  onChange={(e) => setEditServerId(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="">Global (All Servers / System)</option>
+                  {servers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.port})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Action</label>
+                <select
+                  value={editAction}
+                  onChange={(e) => setEditAction(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="backup">Zero-Downtime Hot Backup</option>
+                  <option value="restart">Graceful Restart (with player countdown)</option>
+                  <option value="command">Console Command</option>
+                </select>
+              </div>
+
+              {editAction === 'command' && (
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Console Command</label>
+                  <input
+                    type="text"
+                    required
+                    value={editPayload}
+                    onChange={(e) => setEditPayload(e.target.value)}
+                    placeholder="e.g. say [ALERT] Daily cleaning in progress"
+                    className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Cron Expression</label>
+                <input
+                  type="text"
+                  required
+                  value={editCronExpr}
+                  onChange={(e) => setEditCronExpr(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-4 border-t border-obsidian-800">
+                <button
+                  type="button"
+                  onClick={() => setEditingTask(null)}
+                  className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold"
+                >
+                  Save Changes
                 </button>
               </div>
             </form>

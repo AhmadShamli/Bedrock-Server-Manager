@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/configfile"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
@@ -118,12 +119,16 @@ func (h *GlobalPlayerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(p.Name) != "" {
 		existing.Name = strings.TrimSpace(p.Name)
 	}
-	existing.XUID = strings.TrimSpace(p.XUID)
+	if p.XUID != "" {
+		existing.XUID = strings.TrimSpace(p.XUID)
+	}
 	existing.IsAllowlisted = p.IsAllowlisted
-	existing.Permission = p.Permission
+	if p.Permission != "" {
+		existing.Permission = p.Permission
+	}
 	existing.IgnoresPlayerLimit = p.IgnoresPlayerLimit
 
-	saved, err := h.db.UpsertGlobalPlayer(r.Context(), existing)
+	saved, err := h.db.UpdateGlobalPlayer(r.Context(), existing)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to update global player: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
@@ -254,14 +259,36 @@ func (h *GlobalPlayerHandler) PromotePlayer(w http.ResponseWriter, r *http.Reque
 		IsAllowlisted      bool   `json:"is_allowlisted"`
 		IgnoresPlayerLimit bool   `json:"ignores_player_limit"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || strings.TrimSpace(payload.Name) == "" {
-		http.Error(w, `{"error": "Player name is required"}`, http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error": "Invalid payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	resolvedName := strings.TrimSpace(payload.Name)
+	cleanXUID := strings.TrimSpace(payload.XUID)
+
+	// If name is blank or identical to XUID, attempt to resolve actual Gamertag from local allowlist.json
+	if cleanXUID != "" && (resolvedName == "" || resolvedName == cleanXUID) {
+		if alPath, err := configfile.SafePath(h.dataDir, serverID, "allowlist.json"); err == nil {
+			if entries, err := configfile.ReadAllowlist(alPath); err == nil {
+				for _, entry := range entries {
+					if entry.XUID == cleanXUID && entry.Name != "" {
+						resolvedName = entry.Name
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if resolvedName == "" {
+		http.Error(w, `{"error": "Player name or resolvable XUID is required"}`, http.StatusBadRequest)
 		return
 	}
 
 	gp := &models.GlobalPlayer{
-		Name:               strings.TrimSpace(payload.Name),
-		XUID:               strings.TrimSpace(payload.XUID),
+		Name:               resolvedName,
+		XUID:               cleanXUID,
 		Permission:         payload.Permission,
 		IsAllowlisted:      payload.IsAllowlisted,
 		IgnoresPlayerLimit: payload.IgnoresPlayerLimit,

@@ -109,6 +109,20 @@ func (h *ServerHandler) UpdateAllowlist(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Live reload if server is active
+	if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv.Status == models.ServerStatusRunning && h.engine != nil {
+		_ = h.engine.SendConsoleCommand(r.Context(), srv, "allowlist reload")
+	}
+
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: GetUserClaims(r).Username,
+		Action:    "update_allowlist",
+		Target:    serverID,
+		Details:   fmt.Sprintf(`{"count": %d}`, len(list)),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 }
@@ -151,6 +165,20 @@ func (h *ServerHandler) UpdatePermissions(w http.ResponseWriter, r *http.Request
 		http.Error(w, `{"error": "Failed to save permissions"}`, http.StatusInternalServerError)
 		return
 	}
+
+	// Live reload if server is active
+	if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv.Status == models.ServerStatusRunning && h.engine != nil {
+		_ = h.engine.SendConsoleCommand(r.Context(), srv, "permission reload")
+	}
+
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: GetUserClaims(r).Username,
+		Action:    "update_permissions",
+		Target:    serverID,
+		Details:   fmt.Sprintf(`{"count": %d}`, len(list)),
+		ClientIP:  GetClientIP(r).String(),
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})

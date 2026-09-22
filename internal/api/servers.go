@@ -339,20 +339,109 @@ func (h *ServerHandler) Stats(w http.ResponseWriter, r *http.Request) {
 // Update updates server configuration.
 func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	var s models.Server
-	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
+	existing, err := h.db.GetServer(r.Context(), id)
+	if err != nil || existing == nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	var req struct {
+		Name            *string  `json:"name"`
+		Port            *int     `json:"port"`
+		PortV6          *int     `json:"portv6"`
+		Mode            *string  `json:"mode"`
+		Difficulty      *string  `json:"difficulty"`
+		Version         *string  `json:"version"`
+		AutostartOnBoot *bool    `json:"autostart_on_boot"`
+		PortGateEnabled *bool    `json:"port_gate_enabled"`
+		PortGateMode    *string  `json:"port_gate_mode"`
+		PortGateTimeout *int     `json:"port_gate_timeout"`
+		MemoryLimit     *string  `json:"memory_limit"`
+		CPULimit        *float64 `json:"cpu_limit"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error": "Invalid payload"}`, http.StatusBadRequest)
 		return
 	}
-	s.ID = id
 
-	if err := h.db.UpdateServer(r.Context(), &s); err != nil {
+	targetPort := existing.Port
+	targetPortV6 := existing.PortV6
+
+	if req.Port != nil && *req.Port > 0 {
+		targetPort = *req.Port
+	}
+	if req.PortV6 != nil && *req.PortV6 > 0 {
+		targetPortV6 = *req.PortV6
+	}
+
+	// If ports are changing, validate they aren't taken by other servers
+	if targetPort != existing.Port || targetPortV6 != existing.PortV6 {
+		existingServers, _ := h.db.ListServers(r.Context())
+		if err := h.allocator.ValidatePortAssignment(targetPort, targetPortV6, existing.ID, existingServers); err != nil {
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		existing.Port = targetPort
+		existing.PortV6 = targetPortV6
+	}
+
+	if req.Name != nil && *req.Name != "" {
+		existing.Name = *req.Name
+	}
+	if req.Mode != nil && *req.Mode != "" {
+		existing.Mode = *req.Mode
+	}
+	if req.Difficulty != nil && *req.Difficulty != "" {
+		existing.Difficulty = *req.Difficulty
+	}
+	if req.Version != nil && *req.Version != "" {
+		existing.Version = *req.Version
+	}
+	if req.AutostartOnBoot != nil {
+		existing.AutostartOnBoot = *req.AutostartOnBoot
+	}
+	if req.PortGateEnabled != nil {
+		existing.PortGateEnabled = *req.PortGateEnabled
+	}
+	if req.PortGateMode != nil && *req.PortGateMode != "" {
+		existing.PortGateMode = *req.PortGateMode
+	}
+	if req.PortGateTimeout != nil && *req.PortGateTimeout > 0 {
+		existing.PortGateTimeout = *req.PortGateTimeout
+	}
+	if req.MemoryLimit != nil && *req.MemoryLimit != "" {
+		existing.MemoryLimit = *req.MemoryLimit
+	}
+	if req.CPULimit != nil && *req.CPULimit > 0 {
+		existing.CPULimit = *req.CPULimit
+	}
+
+	if err := h.db.UpdateServer(r.Context(), existing); err != nil {
 		http.Error(w, `{"error": "Failed to update server"}`, http.StatusInternalServerError)
 		return
 	}
 
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	var userID *int64
+	if claims != nil {
+		actorName = claims.Username
+		userID = &claims.UserID
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		UserID:    userID,
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "update_server",
+		Target:    existing.ID,
+		Details:   fmt.Sprintf(`{"name": "%s", "port": %d}`, existing.Name, existing.Port),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+	_ = json.NewEncoder(w).Encode(existing)
 }
 
 // Delete removes a server and its container.

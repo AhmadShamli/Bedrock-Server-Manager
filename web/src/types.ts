@@ -36,6 +36,7 @@ export interface PortGateKey {
   expires_at?: string;
   is_active: boolean;
   created_at: string;
+  plaintext_passphrase?: string;
 }
 
 export interface PortGateLease {
