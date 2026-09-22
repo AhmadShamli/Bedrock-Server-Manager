@@ -164,6 +164,14 @@ flowchart TD
   - Authentication events (successful logins, failed attempts, password changes).
 - Includes multi-filter search (by user, action category, server ID, date range) and CSV/JSON export capability.
 
+### 6.4. Frontend Embedding & Single-Binary Distribution
+- **`//go:embed` Standard Library Integration**:
+  - The React SPA is built via Vite (`npm run build`) into static assets in `web/dist`.
+  - The compiled Go binary embeds `web/dist` directly into the executable using Go's `embed.FS`.
+  - **Zero external web servers**: In production, the single Go executable serves all HTML, JS, CSS, fonts, and images directly from memory with gzip compression.
+  - **SPA History Fallback**: Non-API routes are automatically routed to `index.html` so client-side React Router navigation works seamlessly across all paths (`/servers/*`, `/settings`, `/setup`, etc.).
+  - **Development Mode**: In development, `vite` runs with Hot Module Replacement (HMR) and proxies `/api` and `/ws` requests to the Go backend on `localhost:8080`.
+
 ---
 
 ## 7. Directory Layout
