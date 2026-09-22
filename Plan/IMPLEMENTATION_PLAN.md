@@ -33,28 +33,21 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 
 ---
 
-## Phase 2: Core Server Engine & Drivers
-- [ ] Define the `ServerDriver` interface in `internal/driver/driver.go`:
-  - `Start(server *models.Server) error`
-  - `Stop(server *models.Server, gracefulTimeout time.Duration) error`
-  - `Restart(server *models.Server) error`
-  - `GetStatus(server *models.Server) (ServerStatus, error)`
-  - `WriteStdin(server *models.Server, command string) error`
-  - `SubscribeLogs(server *models.Server) (<-chan LogMessage, func())`
-  - `GetMetrics(server *models.Server) (SystemMetrics, error)`
-- [ ] Implement `ProcessDriver` (Bare-metal Linux native supervisor):
-  - Manages `bedrock_server` child process with `LD_LIBRARY_PATH=.`
-  - Ring buffer (1,000 lines) for stdout/stderr streaming
-  - Graceful stop via `stop` command before fallback to `SIGTERM`/`SIGKILL`
-  - Crash-loop circuit breaker (stops auto-restarting after 5 crashes in 5 mins) and exponential backoff
-- [ ] Implement `DockerDriver` (Docker API container driver):
-  - Uses `github.com/docker/docker/client` to interact with `/var/run/docker.sock`
-  - Manages container lifecycle using `itzg/minecraft-bedrock-server`
-  - Container volume binding to `data/servers/{id}:/data`
-  - Container stdout/stdin streaming and memory/CPU limits
-- [ ] Implement Port Allocator:
+## Phase 2: Docker Server Orchestrator & Port Allocator
+- [ ] Implement `DockerEngine` (`internal/engine/docker.go`) using `github.com/docker/docker/client`:
+  - Connect to `/var/run/docker.sock` or `DOCKER_HOST`
+  - Automated image management (`itzg/minecraft-bedrock-server` version pulling)
+  - Container creation with strict hardware resource capping:
+    - Memory & swap limits (`Resources.Memory`, `Resources.MemorySwap`)
+    - CPU quota & limit (`Resources.NanoCPUs`)
+  - Volume binding: maps host `./data/servers/{id}` into container `/data`
+  - Container lifecycle: `Start`, `Stop` (graceful BDS stop with timeout fallback), `Restart`, `Remove`
+  - Live console streaming via `ContainerAttach` (stdin/stdout WebSockets with 1,000-line ring buffer)
+  - Real-time hardware telemetry sampling via `ContainerStats` (CPU %, RAM RSS/usage, network I/O)
+  - Crash-loop circuit breaker (stops auto-restarting if 5 crashes occur within 5 mins) and exponential backoff
+- [ ] Implement Port Allocator (`internal/allocator/port.go`):
   - Scans for free UDP ports starting at 19132 (IPv4) / 19133 (IPv6)
-  - Validates against active network listeners and registered servers
+  - Validates against active Docker port bindings, host listeners, and registered servers
 
 ---
 

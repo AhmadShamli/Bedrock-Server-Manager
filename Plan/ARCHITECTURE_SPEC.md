@@ -2,7 +2,11 @@
 
 ## 1. Executive Summary
 
-Bedrock Server Manager is a lightweight, self-hosted management platform for Minecraft Bedrock Dedicated Servers (BDS). It is designed to run seamlessly either on **bare-metal Linux hosts** (as a single compiled Go binary) or inside **Docker environments** (managing sibling server containers via Docker socket).
+Bedrock Server Manager is a lightweight, self-hosted management platform for Minecraft Bedrock Dedicated Servers (BDS). To enforce strict per-server CPU and RAM resource caps, all Minecraft Bedrock servers are orchestrated as isolated Docker containers via the Docker Engine API.
+
+The **Manager itself** supports two deployment models:
+1. **Standalone Binary**: Run directly on the host as a single compiled Go binary (connecting to local `/var/run/docker.sock`).
+2. **Docker Compose**: Run inside a lightweight container via `docker-compose.yml` (mounting `/var/run/docker.sock`).
 
 ---
 
@@ -10,41 +14,46 @@ Bedrock Server Manager is a lightweight, self-hosted management platform for Min
 
 | Domain | Technology / Design Choice | Rationale |
 | :--- | :--- | :--- |
-| **Backend Language** | **Go (Golang 1.22+)** | Zero-dependency static compilation, low RAM/CPU footprint, strong concurrency model for process and WebSocket handling. |
+| **Backend Language** | **Go (Golang 1.22+)** | Zero-dependency static compilation, low RAM/CPU footprint, strong concurrency model for Docker SDK and WebSocket handling. |
 | **Frontend Framework** | **React 18 + Vite + Tailwind CSS + Lucide Icons** | Fast, responsive SPA with clean modern UI; built and embedded directly into the Go binary using `embed.FS`. |
-| **Data Persistence** | **Dual Embedded SQLite (`modernc.org/sqlite`)** | Clean architectural separation: Primary DB (`data/manager.db`) for relational metadata & configuration; Dedicated Telemetry DB (`data/metrics.db`) for high-frequency time-series metrics with automated 24h rolling retention. |
+| **Server Runtime Engine** | **Docker Engine API via Go SDK (`itzg/minecraft-bedrock-server`)** | Bedrock server natively lacks CPU/RAM limits. Orchestrating instances as Docker containers guarantees strict memory/CPU caps, port bindings, and safe isolation. |
+| **Data Persistence** | **Dual Embedded SQLite (`modernc.org/sqlite`)** | Clean architectural separation: Primary DB (`data/manager.db`) for relational metadata & configuration; Dedicated Telemetry DB (`data/metrics.db`) in WAL mode for time-series metrics with automated 24h rolling retention. |
 | **Authentication & Scope** | **JWT with Argon2id + Internal-Only API** | RBAC supporting `Admin` (full system access) and `Server Operator` with **Per-Server Access Control** (restricted to assigned instances only). No external API/remote keys; API is strictly internal to the Web UI. |
 | **Real-time Comms** | **WebSockets (`gorilla/websocket` or `coder/websocket`)** | Low-latency bi-directional communication for interactive BDS console streams, real-time player events, and system metrics. |
 | **Terminal Emulator** | **xterm.js + fit-addon** | Browser-based interactive console with 1,000-line ring buffer, ANSI coloring, and command history. |
 
 ---
 
-## 3. Dual Execution Engine Architecture
+## 3. Containerized Server Architecture
 
-The platform abstracts server lifecycle through a unified `ServerDriver` interface:
+The platform orchestrates all Minecraft Bedrock instances via the Docker Engine API (`/var/run/docker.sock`):
 
 ```mermaid
 flowchart TD
-    API["Manager API & Supervisor Core"] --> Driver{"Engine Selector"}
-    Driver -->|"Bare-Metal Mode"| ProcessDriver["ProcessDriver (Native Child Process)"]
-    Driver -->|"Docker Mode"| DockerDriver["DockerDriver (Docker Socket Engine API)"]
+    subgraph Manager_Deployment ["Manager Deployment Options"]
+        Standalone["Standalone Go Binary (Host)"]
+        Compose["Manager Container (docker compose)"]
+    end
 
-    ProcessDriver --> BDS_Proc["bedrock_server binary (LD_LIBRARY_PATH=.)\nIsolated folder: ./servers/{id}"]
-    DockerDriver --> BDS_Cont["itzg/minecraft-bedrock-server Container\nVolume: data/servers/{id}:/data"]
+    Standalone -->|"/var/run/docker.sock"| DockerAPI["Docker Engine API"]
+    Compose -->|"/var/run/docker.sock"| DockerAPI
+
+    subgraph Minecraft_Instances ["Managed Bedrock Instances (Strict Caps)"]
+        DockerAPI --> S1["BDS Container 1\n(RAM: 2GB, CPU: 2.0)\nPort: 19132 UDP\nVolume: data/servers/1:/data"]
+        DockerAPI --> S2["BDS Container 2\n(RAM: 1.5GB, CPU: 1.5)\nPort: 19134 UDP\nVolume: data/servers/2:/data"]
+        DockerAPI --> S3["BDS Container N\n(Custom Caps)\nPort: 19136 UDP\nVolume: data/servers/N:/data"]
+    end
 ```
 
-### 3.1. Bare-Metal Driver (`ProcessDriver`)
-- Runs `bedrock_server` directly on the host operating system.
-- Manages Unix signals (`SIGINT`, `SIGTERM`), standard I/O pipes (`stdin`, `stdout`, `stderr`).
-- Enforces proper environment variables (e.g. `LD_LIBRARY_PATH=.`).
-- Isolates server files in dedicated subdirectories: `./servers/{server_id}/`.
-- Downloads official Bedrock zip packages directly from Mojang download servers.
-
-### 3.2. Docker Driver (`DockerDriver`)
-- Connects to `/var/run/docker.sock` using the official Docker Go SDK.
-- Launches and manages isolated containers based on `itzg/minecraft-bedrock-server`.
-- Automatically maps UDP ports and binds persistent host volumes for configuration and world persistence.
-- Streams container stdout/stderr and attaches to container stdin for real-time console interaction.
+### 3.1. Docker Orchestrator (`DockerEngine`)
+- Connects to `/var/run/docker.sock` (or `DOCKER_HOST`) using the official Docker Go SDK.
+- Spawns and manages sibling containers using the battle-tested `itzg/minecraft-bedrock-server` base image.
+- Enforces hardware resource caps:
+  - Memory: `--memory` and `--memory-swap`
+  - CPU: `--cpus` (NanoCPUs)
+- Volume binding: maps host directory `data/servers/{id}` to container `/data`.
+- Bidirectional console attachment (`ContainerAttach`) for real-time interactive stdin/stdout over WebSockets.
+- Real-time container stats (`ContainerStats`) streaming CPU %, RAM usage, and network I/O.
 
 ---
 
@@ -52,8 +61,8 @@ flowchart TD
 
 ### 4.1. Server Installation, Creation & Updates
 - **Guided Creation with Presets**: One-click configuration presets ('Vanilla Survival', 'Creative Building', 'Hardcore') pre-populating recommended game rules, difficulty, view distance, and tick-distance, alongside advanced custom mode.
-- **Bare-metal**: Automatic scraping/fetching of official BDS Linux zips from Mojang with version selector (`latest`, `preview`, or pin to specific version). Updates extract server binaries while preserving `server.properties`, `allowlist.json`, `permissions.json`, and the `worlds/` directory.
-- **Docker**: Version tags mapped to `itzg/minecraft-bedrock-server` (e.g. `VERSION=LATEST`, `VERSION=PREVIEW`, or specific BDS version string).
+- **Image Hub & Version Tags**: Automatically pulls and configures `itzg/minecraft-bedrock-server` with configurable version tags (`VERSION=LATEST`, `VERSION=PREVIEW`, or specific BDS version string like `1.21.20.03`).
+- **Updates**: Seamless image pull and container recreation preserving all world data, configuration files, and player allowlists in the persistent volume.
 
 ### 4.2. Configuration Management (Configuration-Only Editor)
 - Visual form editors and structured JSON/properties editors restricted to designated server files:
