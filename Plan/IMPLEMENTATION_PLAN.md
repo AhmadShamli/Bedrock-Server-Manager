@@ -32,6 +32,7 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - Login / refresh / me endpoints with 24-hour sliding session and 30-day "Remember Me"
   - RBAC middleware (`Admin` vs `Server Operator` with per-server instance authorization)
   - Strict internal-only API scope (no remote API keys / bot tokens)
+  - Two-tier rate limiter (`internal/auth/ratelimit.go`, matching `../Funnel`): Tier 1 per-IP progressive backoff (30s–5m after 5 failures) + Tier 2 distributed circuit breaker (10+ distinct failed IPs trips 15m global pause)
   - Initial setup wizard endpoint & check (`/api/setup`) with automatic JWT secret generation and optional ENV override
   - Configurable server binding via `PORT` (default: 8080) and `DATA_DIR` (default: `data`) with reverse-proxy header support (`X-Forwarded-For`, `X-Forwarded-Proto`)
 

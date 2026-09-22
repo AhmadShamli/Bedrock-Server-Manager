@@ -313,6 +313,19 @@ All server configuration is organized into structured, validated UI tabs:
   - `/users` (User Management)
   - `/settings` (System Settings)
 
+### 6.7. Two-Tier Rate Limiting & Brute-Force Defense (from `../Funnel`)
+- **Tier 1 (Per-IP Progressive Backoff)**:
+  - Tracks failed login and knock passphrase attempts per IP within a sliding 5-minute window.
+  - After 5 consecutive failures, the IP is temporarily blocked with progressive backoff:
+    $$\text{Delay} = 30\text{s} \times 2^{\text{excess}}, \quad \text{capped at } 300\text{s (5 minutes)}$$
+  - A successful attempt immediately resets failure tracking for that IP.
+- **Tier 2 (Distributed Multi-IP Circuit Breaker)**:
+  - Detects distributed botnet credential stuffing across different IPs.
+  - If 10 or more distinct IPs fail authentication within a 5-minute window, the distributed circuit breaker trips.
+  - Automatically locks out new visitor knock/login authorizations for 15 minutes to preserve server resources.
+- **Security Alerting**:
+  - Every rate limit block is logged to `AuditLogs` and triggers a real-time Discord webhook alert (`⚠️ Potential Brute-Force Attack Detected`).
+
 ---
 
 ## 7. Directory Layout
