@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
@@ -52,6 +53,9 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
 		return
 	}
+
+	req.Username = strings.TrimSpace(req.Username)
+	req.Role = strings.ToLower(strings.TrimSpace(req.Role))
 
 	if req.Username == "" || len(req.Password) < 8 {
 		http.Error(w, `{"error": "Username is required and password must be at least 8 characters"}`, http.StatusBadRequest)
