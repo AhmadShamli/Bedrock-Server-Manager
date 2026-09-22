@@ -197,8 +197,14 @@ All server configuration is organized into structured, validated UI tabs:
   - **UFW Driver (Default)**: Automatically runs `ufw allow proto udp from <ip> to any port <port> comment "BSM_<server_id>_<ip>"`, and cleans up on lease expiry or server stop.
   - **iptables / nftables Driver**: Manages an isolated `BEDROCK_PORT_GATE` chain inserted into `DOCKER-USER` or `INPUT` tables with dynamic IP set matching.
   - **Custom Command Driver**: Allows administrators to specify custom shell commands/hooks for environment-specific firewalls (e.g. `firewalld`, pfSense/OPNsense webhook, or router scripts):
-    - `AddCommand`: `ufw allow proto udp from {{IP}} to any port {{PORT}}`
-    - `RemoveCommand`: `ufw delete allow proto udp from {{IP}} to any port {{PORT}}`
+- **Server Differentiation & Knock Routing**:
+  - **Direct Server URL (`/knock/:server_id`)**: Direct URL and QR code generated per-server (e.g. `/knock/survival`). The knock page displays that server's specific branding, MOTD, and UDP port, submitting directly to `POST /api/knock/:server_id`.
+  - **General Portal with Server Selector (`/knock`)**: If accessed without a server ID, provides a dynamic dropdown list of all servers currently running with port gating enabled.
+  - **Backend Validation & Port Isolation**:
+    1. Reads server by `server_id` to verify gating is active and fetch its assigned UDP port (`server-port`).
+    2. Validates against that specific server's `allowlist.json` (for Gamertag mode) or its specific `port_gate_passphrase` in the database.
+    3. Applies the firewall rule strictly for **that server's specific port** (e.g. UDP 19132), leaving all other server ports isolated and protected.
+    4. Inserts the active lease into `PortGateLeases` in `data/manager.db`.
 - **Dashboard Management**:
   - Dedicated **Port Gate** tab in Server Hub showing active IP leases, client IPs, Gamertags, countdowns, manual IP allowlist button, and instant "Revoke Access" controls.
   - Shareable Knock Link & QR Code generation for convenient mobile device access.
