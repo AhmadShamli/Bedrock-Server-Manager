@@ -191,7 +191,9 @@ All server configuration is organized into structured, validated UI tabs:
   - Admin UI provides a user-friendly dropdown selector (1h, 3h, 6h, 12h, 24h, Custom).
   - A background lease manager worker audits active leases every 30s and automatically purges expired IP rules from the firewall and database.
   - Active countdown timer displayed on the player's `/knock` screen.
-- **Pluggable Firewall Engine (`internal/firewall`)**:
+- **Pluggable Firewall Engine (`internal/firewall`, referenced from `../Funnel`)**:
+  - **Host Network Namespace Detection (`NetNSDetector` & `nsenter`)**: When running in Docker, automatically detects container vs host network namespace via `/proc/1/ns/net` and wraps firewall commands with `nsenter --net=/proc/1/ns/net` using `pid: host` and `cap_add: [SYS_ADMIN, NET_ADMIN]`, enabling transparent host firewall manipulation directly from containerized deployments.
+  - **Trusted Proxy IP Resolver (`internal/ipresolver`, referenced from `../Funnel`)**: Safely parses the genuine client IP from `CF-Connecting-IP`, RFC 7239 `Forwarded`, `X-Forwarded-For` (right-to-left untrusted parsing), and `X-Real-IP`, preventing spoofed client IPs when deployed behind reverse proxies.
   - **UFW Driver (Default)**: Automatically runs `ufw allow proto udp from <ip> to any port <port> comment "BSM_<server_id>_<ip>"`, and cleans up on lease expiry or server stop.
   - **iptables / nftables Driver**: Manages an isolated `BEDROCK_PORT_GATE` chain inserted into `DOCKER-USER` or `INPUT` tables with dynamic IP set matching.
   - **Custom Command Driver**: Allows administrators to specify custom shell commands/hooks for environment-specific firewalls (e.g. `firewalld`, pfSense/OPNsense webhook, or router scripts):
@@ -317,7 +319,9 @@ Bedrock-Server-Manager/
 │   │   ├── firewall.go           # FirewallDriver interface
 │   │   ├── ufw.go                # UFW driver (default)
 │   │   ├── iptables.go           # iptables / nftables driver
+│   │   ├── nsenter.go            # Host network namespace execution wrapper
 │   │   └── custom.go             # Custom command shell driver
+│   ├── ipresolver/               # Trusted reverse proxy client IP resolution
 │   ├── raknet/                   # Bedrock UDP ping client
 │   ├── backup/                   # Hot backup and world export engine
 │   ├── webhook/                  # Discord webhook dispatcher

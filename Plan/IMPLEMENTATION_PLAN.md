@@ -81,13 +81,18 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
   - Start/stop notifications
   - Player join/leave broadcasts
   - Backup result notifications
-- [ ] Pluggable Dynamic Firewall Engine (`internal/firewall`):
+- [ ] Pluggable Dynamic Firewall Engine (`internal/firewall`, referenced from `../Funnel`):
+  - `NetNSDetector` & `nsenter` wrapper (`ShouldUseNsenter()`, `WrapCommand()`) for host firewall execution from Docker
   - `FirewallDriver` interface (`AllowIP(ip, port, comment)`, `RevokeIP(ip, port, comment)`, `ListRules()`)
   - `UFWDriver` (default, executes `ufw allow proto udp from ...`)
   - `IPTablesDriver` (manages dedicated `BEDROCK_PORT_GATE` chain)
   - `CustomScriptDriver` (configurable shell hooks for custom environments)
   - Public Port-Knock handler (`/api/knock/:id` with Gamertag / Passphrase validation)
   - Background Lease Auditor (purges expired IP rules every 30s)
+- [ ] Trusted Proxy Client IP Resolver (`internal/ipresolver`, referenced from `../Funnel`):
+  - Supports `direct`, `reverse_proxy`, and `cloudflare` modes
+  - Parses `CF-Connecting-IP`, RFC 7239 `Forwarded`, `X-Forwarded-For` (right-to-left untrusted parsing), `X-Real-IP`
+  - Dynamic Cloudflare IP prefix fetcher and trusted CIDR verification
 
 ---
 
@@ -143,6 +148,9 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 - [ ] Multi-stage `Dockerfile`:
   - Stage 1: Build React frontend (`npm run build`)
   - Stage 2: Compile Go static binary (`CGO_ENABLED=0 go build`)
-  - Stage 3: Minimal runtime image (Ubuntu-based or Debian slim with `libcurl4` and required libraries for BDS on Linux, plus Docker CLI/socket support)
-- [ ] `docker-compose.yml` with `/var/run/docker.sock` and volume mount setup.
+  - Stage 3: Minimal runtime image (Debian slim with `iptables`, `nftables`, `sudo`, `util-linux` [nsenter], `tini`, and non-root user setup)
+- [ ] `docker-compose.yml` (referencing `../Funnel` patterns):
+  - Mounts `/var/run/docker.sock` for Minecraft container orchestration
+  - Configures `pid: host` and `cap_add: [SYS_ADMIN, NET_ADMIN]` for transparent host firewall manipulation via `nsenter`
+  - Persistent volume binding for `data/`
 - [ ] Automated tests (unit tests for drivers, config parsers, RakNet ping, backup workflow).
