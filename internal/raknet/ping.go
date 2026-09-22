@@ -83,6 +83,11 @@ func PingServer(host string, port int, timeout time.Duration) (*PingResponse, er
 	}
 
 	payload := string(recvBuf[35 : 35+strLen])
+	return ParsePongPayload(payload, latency)
+}
+
+// ParsePongPayload parses the raw MCPE unconnected pong payload string.
+func ParsePongPayload(payload string, latency int64) (*PingResponse, error) {
 	parts := strings.Split(payload, ";")
 	if len(parts) < 6 {
 		return nil, fmt.Errorf("unexpected pong format: %s", payload)
@@ -104,11 +109,24 @@ func PingServer(host string, port int, timeout time.Duration) (*PingResponse, er
 	if max, err := strconv.Atoi(parts[5]); err == nil {
 		res.MaxPlayers = max
 	}
+	if len(parts) > 6 {
+		res.ServerGUID = parts[6]
+	}
 	if len(parts) > 7 {
 		res.WorldName = parts[7]
 	}
 	if len(parts) > 8 {
 		res.GameMode = parts[8]
+	}
+	if len(parts) > 10 {
+		if p4, err := strconv.Atoi(parts[10]); err == nil {
+			res.PortIPv4 = p4
+		}
+	}
+	if len(parts) > 11 {
+		if p6, err := strconv.Atoi(parts[11]); err == nil {
+			res.PortIPv6 = p6
+		}
 	}
 
 	return res, nil

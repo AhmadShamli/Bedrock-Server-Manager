@@ -46,6 +46,7 @@ func (bm *BootManager) AutostartServers(ctx context.Context) ([]string, error) {
 		status, err := bm.engine.GetServerStatus(ctx, &s)
 		if err == nil && status == models.ServerStatusRunning {
 			log.Printf("[BootManager] Server '%s' (%s) is already running.", s.Name, s.ID)
+			bm.engine.AttachLogCapture(s.ID, s.ContainerID)
 			continue
 		}
 

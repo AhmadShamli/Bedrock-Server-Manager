@@ -21,6 +21,8 @@ type ServerEngine interface {
 	SendConsoleCommand(ctx context.Context, server *models.Server, cmd string) error
 	GetRecentLogs(serverID string) []string
 	SubscribeLogs(serverID string) (<-chan string, func())
+	AttachLogCapture(serverID, containerID string)
+	SetLogListener(listener func(serverID, line string))
 }
 
 // ParseMemoryBytes converts memory strings like "512M", "2G", "4GB" into bytes.

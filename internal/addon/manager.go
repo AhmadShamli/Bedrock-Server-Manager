@@ -93,12 +93,18 @@ func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, e
 
 	// 1. Find and parse manifest.json to identify pack type and identity
 	var manifestData []byte
+	var manifestPrefix string
 	for _, f := range zipReader.File {
 		if strings.EqualFold(filepath.Base(f.Name), "manifest.json") {
 			rc, err := f.Open()
 			if err == nil {
 				manifestData, _ = io.ReadAll(rc)
 				rc.Close()
+				cleaned := filepath.Clean(f.Name)
+				dir := filepath.Dir(cleaned)
+				if dir != "." && dir != "/" && dir != "" {
+					manifestPrefix = dir + "/"
+				}
 				break
 			}
 		}
@@ -148,6 +154,18 @@ func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, e
 	for _, f := range zipReader.File {
 		cleaned := filepath.Clean(f.Name)
 		if strings.HasPrefix(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
+			continue
+		}
+
+		// Strip enclosing subfolder prefix if present so manifest.json is at targetDir root
+		if manifestPrefix != "" {
+			if strings.HasPrefix(f.Name, manifestPrefix) {
+				cleaned = filepath.Clean(strings.TrimPrefix(f.Name, manifestPrefix))
+			} else {
+				continue
+			}
+		}
+		if cleaned == "" || cleaned == "." {
 			continue
 		}
 

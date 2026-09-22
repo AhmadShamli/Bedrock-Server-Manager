@@ -68,9 +68,33 @@ func ImportWorld(serverDir, worldName string, fileReader io.ReaderAt, size int64
 		return err
 	}
 
+	// Detect if files are wrapped in an enclosing folder (e.g. MyWorld/level.dat)
+	var rootPrefix string
+	for _, f := range zipReader.File {
+		cleaned := filepath.Clean(f.Name)
+		if strings.EqualFold(filepath.Base(cleaned), "level.dat") {
+			dir := filepath.Dir(cleaned)
+			if dir != "." && dir != "/" && dir != "" {
+				rootPrefix = dir + "/"
+			}
+			break
+		}
+	}
+
 	for _, f := range zipReader.File {
 		cleaned := filepath.Clean(f.Name)
 		if strings.HasPrefix(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
+			continue
+		}
+
+		if rootPrefix != "" {
+			if strings.HasPrefix(f.Name, rootPrefix) {
+				cleaned = filepath.Clean(strings.TrimPrefix(f.Name, rootPrefix))
+			} else {
+				continue
+			}
+		}
+		if cleaned == "" || cleaned == "." {
 			continue
 		}
 

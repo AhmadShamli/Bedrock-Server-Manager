@@ -17,6 +17,7 @@ type MockEngine struct {
 	ringBuffers    map[string]*RingBuffer
 	logChans       map[string][]chan string
 	circuitBreaker *CrashCircuitBreaker
+	logListener    func(serverID, line string)
 }
 
 // NewMockEngine initializes a MockEngine.
@@ -120,8 +121,19 @@ func (m *MockEngine) SendConsoleCommand(ctx context.Context, server *models.Serv
 			default:
 			}
 		}
+		if m.logListener != nil {
+			m.logListener(server.ID, line)
+		}
 	}
 	return nil
+}
+
+func (m *MockEngine) AttachLogCapture(serverID, containerID string) {}
+
+func (m *MockEngine) SetLogListener(listener func(serverID, line string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logListener = listener
 }
 
 func (m *MockEngine) GetRecentLogs(serverID string) []string {

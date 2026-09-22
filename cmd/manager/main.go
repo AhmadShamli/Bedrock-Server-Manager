@@ -117,6 +117,11 @@ func main() {
 		serverEngine = engine.NewMockEngine()
 	}
 
+	// Connect real-time container log feed to Player Hub and Chat feed parser
+	serverEngine.SetLogListener(func(serverID, line string) {
+		playerMgr.ProcessLine(serverID, line)
+	})
+
 	// 9. Initialize Port Allocator & IP Resolver
 	portAlloc := allocator.NewPortAllocator()
 	resolver := ipresolver.NewResolver(cfg.ProxyMode, cfg.TrustedProxies)

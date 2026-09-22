@@ -32,6 +32,8 @@ type DockerEngine struct {
 	mu          sync.RWMutex
 	ringBuffers map[string]*RingBuffer
 	logChans    map[string][]chan string
+	logCancels  map[string]context.CancelFunc
+	logListener func(serverID, line string)
 }
 
 // NewDockerEngine initializes a DockerEngine connected to the local socket or DOCKER_HOST.
@@ -55,6 +57,7 @@ func NewDockerEngine(dockerHost string) (*DockerEngine, error) {
 		circuitBreaker: NewCrashCircuitBreaker(5, 5*time.Minute),
 		ringBuffers:    make(map[string]*RingBuffer),
 		logChans:       make(map[string][]chan string),
+		logCancels:     make(map[string]context.CancelFunc),
 	}, nil
 }
 
@@ -198,9 +201,13 @@ func (e *DockerEngine) RestartServer(ctx context.Context, server *models.Server)
 		containerID = fmt.Sprintf("bsm-%s", server.ID)
 	}
 	stopTimeout := 15
-	return e.cli.ContainerRestart(ctx, containerID, container.StopOptions{
+	if err := e.cli.ContainerRestart(ctx, containerID, container.StopOptions{
 		Timeout: &stopTimeout,
-	})
+	}); err != nil {
+		return err
+	}
+	go e.captureContainerLogs(server.ID, containerID)
+	return nil
 }
 
 // RemoveServer stops and removes the container.
@@ -355,8 +362,27 @@ func (e *DockerEngine) SubscribeLogs(serverID string) (<-chan string, func()) {
 	return ch, unsubscribe
 }
 
+func (e *DockerEngine) AttachLogCapture(serverID, containerID string) {
+	if containerID == "" {
+		containerID = fmt.Sprintf("bsm-%s", serverID)
+	}
+	go e.captureContainerLogs(serverID, containerID)
+}
+
+func (e *DockerEngine) SetLogListener(listener func(serverID, line string)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.logListener = listener
+}
+
 func (e *DockerEngine) captureContainerLogs(serverID, containerID string) {
 	e.mu.Lock()
+	if oldCancel, exists := e.logCancels[serverID]; exists && oldCancel != nil {
+		oldCancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	e.logCancels[serverID] = cancel
+
 	rb, exists := e.ringBuffers[serverID]
 	if !exists {
 		rb = NewRingBuffer(1000)
@@ -364,8 +390,12 @@ func (e *DockerEngine) captureContainerLogs(serverID, containerID string) {
 	}
 	e.mu.Unlock()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	defer func() {
+		cancel()
+		e.mu.Lock()
+		delete(e.logCancels, serverID)
+		e.mu.Unlock()
+	}()
 
 	reader, err := e.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
 		ShowStdout: true,
@@ -393,6 +423,11 @@ func (e *DockerEngine) captureContainerLogs(serverID, containerID string) {
 			default:
 			}
 		}
+		listener := e.logListener
 		e.mu.RUnlock()
+
+		if listener != nil {
+			listener(serverID, line)
+		}
 	}
 }

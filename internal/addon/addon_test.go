@@ -79,3 +79,54 @@ func TestAddonInstallAndListFlow(t *testing.T) {
 		t.Fatalf("expected 0 packs remaining, got %d", len(remainingPacks))
 	}
 }
+
+func TestAddonInstallNestedFolder(t *testing.T) {
+	serverDir := t.TempDir()
+
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	manifestContent := `{
+		"format_version": 2,
+		"header": {
+			"name": "Nested Resource Pack",
+			"description": "Nested in folder",
+			"uuid": "22222222-3333-4444-5555-666666666666",
+			"version": [1, 0, 0]
+		},
+		"modules": [
+			{
+				"type": "resources",
+				"uuid": "77777777-8888-9999-0000-111111111111"
+			}
+		]
+	}`
+
+	// Pack wrapped in top-level directory "MyPack/"
+	w, _ := zw.Create("MyPack/manifest.json")
+	_, _ = w.Write([]byte(manifestContent))
+	w2, _ := zw.Create("MyPack/textures/item.png")
+	_, _ = w2.Write([]byte("fake_png_data"))
+	_ = zw.Close()
+
+	reader := bytes.NewReader(buf.Bytes())
+	pack, err := InstallPack(serverDir, reader, int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("InstallPack failed: %v", err)
+	}
+
+	if pack.Type != "resource" {
+		t.Fatalf("expected resource pack, got %s", pack.Type)
+	}
+
+	// Verify manifest.json is directly at the pack root on disk (not under MyPack/MyPack/manifest.json)
+	manifestOnDisk := filepath.Join(serverDir, "resource_packs", pack.Folder, "manifest.json")
+	if _, err := os.Stat(manifestOnDisk); err != nil {
+		t.Fatalf("expected manifest.json at pack root: %v", err)
+	}
+
+	textureOnDisk := filepath.Join(serverDir, "resource_packs", pack.Folder, "textures", "item.png")
+	if _, err := os.Stat(textureOnDisk); err != nil {
+		t.Fatalf("expected textures/item.png at pack root: %v", err)
+	}
+}

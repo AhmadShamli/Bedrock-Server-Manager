@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"os"
@@ -143,5 +144,38 @@ func TestWorldExportAndImport(t *testing.T) {
 	importedData, err := os.ReadFile(filepath.Join(targetServerDir, "worlds", "ImportedWorld", "world_icon.jpeg"))
 	if err != nil || string(importedData) != "fake-jpeg-data" {
 		t.Fatalf("imported file mismatch: %v", err)
+	}
+}
+
+func TestImportWorldNestedFolder(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create zip with enclosing folder: "MyNestedWorld/level.dat"
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	w, _ := zw.Create("MyNestedWorld/level.dat")
+	_, _ = w.Write([]byte("fake-level-data"))
+	w2, _ := zw.Create("MyNestedWorld/db/CURRENT")
+	_, _ = w2.Write([]byte("fake-db-current"))
+	_ = zw.Close()
+
+	targetServerDir := filepath.Join(tmpDir, "srv")
+	reader := bytes.NewReader(buf.Bytes())
+	err := ImportWorld(targetServerDir, "Bedrock level", reader, int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("ImportWorld failed: %v", err)
+	}
+
+	// Verify level.dat was extracted directly under worlds/Bedrock level/level.dat
+	levelDatPath := filepath.Join(targetServerDir, "worlds", "Bedrock level", "level.dat")
+	data, err := os.ReadFile(levelDatPath)
+	if err != nil || string(data) != "fake-level-data" {
+		t.Fatalf("expected level.dat at world root: %v", err)
+	}
+
+	dbCurrentPath := filepath.Join(targetServerDir, "worlds", "Bedrock level", "db", "CURRENT")
+	if _, err := os.Stat(dbCurrentPath); err != nil {
+		t.Fatalf("expected db/CURRENT at world root: %v", err)
 	}
 }

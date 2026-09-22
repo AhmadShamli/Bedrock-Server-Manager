@@ -21,6 +21,7 @@ type TelemetryCollector struct {
 	rollupTicker *time.Ticker
 	pruneTicker  *time.Ticker
 	stopChan     chan struct{}
+	stopOnce     sync.Once
 
 	RawRetainHours int
 	Rollup5mDays   int
@@ -64,7 +65,15 @@ func (tc *TelemetryCollector) Flush(ctx context.Context) error {
 	tc.buffer = make([]models.MetricRaw, 0, 200)
 	tc.mu.Unlock()
 
-	return tc.metricsDB.InsertRawBatch(ctx, toFlush)
+	if err := tc.metricsDB.InsertRawBatch(ctx, toFlush); err != nil {
+		tc.mu.Lock()
+		if len(tc.buffer)+len(toFlush) < 5000 {
+			tc.buffer = append(toFlush, tc.buffer...)
+		}
+		tc.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // Start launches the background flush, rollup, and prune loops.
@@ -107,18 +116,20 @@ func (tc *TelemetryCollector) Start(flushInterval, rollupInterval, pruneInterval
 
 // Stop flushes remaining metrics and halts background loops.
 func (tc *TelemetryCollector) Stop() {
-	close(tc.stopChan)
-	if tc.flushTicker != nil {
-		tc.flushTicker.Stop()
-	}
-	if tc.rollupTicker != nil {
-		tc.rollupTicker.Stop()
-	}
-	if tc.pruneTicker != nil {
-		tc.pruneTicker.Stop()
-	}
+	tc.stopOnce.Do(func() {
+		close(tc.stopChan)
+		if tc.flushTicker != nil {
+			tc.flushTicker.Stop()
+		}
+		if tc.rollupTicker != nil {
+			tc.rollupTicker.Stop()
+		}
+		if tc.pruneTicker != nil {
+			tc.pruneTicker.Stop()
+		}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = tc.Flush(ctx)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tc.Flush(ctx)
+	})
 }
