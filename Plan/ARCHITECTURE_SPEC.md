@@ -89,10 +89,12 @@ flowchart TD
 - **Circuit Breaker**: Auto-restart on unexpected exit with exponential backoff; halts auto-restart if 5 crashes occur within a 5-minute window.
 - **Resource Constraints**: Configurable per-server RAM and CPU limits (enforced via Docker container flags in Docker mode, or process monitoring alerts on bare-metal).
 
-### 5.2. Telemetry & Separate Metrics Storage
+### 5.2. Telemetry & Dedicated Metrics Storage
 - **Dedicated Metrics DB (`data/metrics.db`)**: High-write frequency time-series database isolated from relational metadata.
+- **WAL Mode (`PRAGMA journal_mode=WAL`)**: Non-blocking concurrent reads and writes; chart queries never block metric ingestion.
+- **In-Memory Batched Writes**: Ingests samples in-memory and flushes in a single batch transaction every 30 seconds to minimize disk I/O and prevent flash/SSD wear.
 - Records CPU %, RAM usage, and active player counts at regular intervals.
-- Automatic data retention policy prunes entries older than 24 hours to prevent disk bloat.
+- Automatic data retention policy prunes entries older than 24 hours to keep the database file compact (~2-4 MB).
 - Dashboard renders interactive time-series performance charts.
 
 ### 5.3. Task Scheduler & Broadcast Automations
