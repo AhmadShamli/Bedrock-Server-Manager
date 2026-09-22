@@ -7,15 +7,22 @@ This implementation plan outlines the phased development roadmap for Bedrock Ser
 ## Phase 1: Project Scaffolding & Foundation
 - [ ] Initialize Go module (`go.mod`).
 - [ ] Set up project directory structure (`cmd/`, `internal/`, `web/`, `Plan/`).
-- [ ] Implement embedded SQLite database (`internal/database`) with schema migrations:
-  - Users table (id, username, password_hash, role, created_at)
-  - Servers table (id, name, version, port, portv6, status, mode, created_at, memory_limit, cpu_limit)
-  - Backups table (id, server_id, filename, size, type, status, created_at)
-  - AuditLogs table (id, user_id, action, details, timestamp)
+- [ ] Implement dual embedded SQLite databases (`internal/database`) with schema migrations:
+  - **Primary DB (`data/manager.db`)**:
+    - Users table (id, username, password_hash, role, created_at)
+    - UserServerAccess table (user_id, server_id) for granular per-server Operator access control
+    - Servers table (id, name, version, port, portv6, status, mode, created_at, memory_limit, cpu_limit)
+    - Backups table (id, server_id, filename, size, type, status, created_at)
+    - Tasks table (id, server_id, cron_expr, action, payload, last_run, next_run, enabled)
+    - AuditLogs table (id, user_id, action, details, timestamp)
+  - **Telemetry DB (`data/metrics.db`)**:
+    - ServerMetrics table (server_id, timestamp, cpu_percent, ram_bytes, player_count)
+    - Pruning routine to automatically purge samples older than 24 hours
 - [ ] Implement JWT Authentication & User management (`internal/auth`, `internal/api/auth.go`):
   - Password hashing via Argon2id
   - Login / refresh / me endpoints
-  - RBAC middleware (`Admin` vs `Server Operator`)
+  - RBAC middleware (`Admin` vs `Server Operator` with per-server instance authorization)
+  - Strict internal-only API scope (no remote API keys / bot tokens)
   - Initial setup wizard endpoint & check (`/api/setup`) with automatic JWT secret generation and optional ENV override
 
 ---

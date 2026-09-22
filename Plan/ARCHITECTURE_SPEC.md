@@ -12,8 +12,8 @@ Bedrock Server Manager is a lightweight, self-hosted management platform for Min
 | :--- | :--- | :--- |
 | **Backend Language** | **Go (Golang 1.22+)** | Zero-dependency static compilation, low RAM/CPU footprint, strong concurrency model for process and WebSocket handling. |
 | **Frontend Framework** | **React 18 + Vite + Tailwind CSS + Lucide Icons** | Fast, responsive SPA with clean modern UI; built and embedded directly into the Go binary using `embed.FS`. |
-| **Data Persistence** | **Embedded SQLite (`modernc.org/sqlite`)** | Zero configuration, single-file storage (`data/manager.db`), ACID compliance, and automatic schema migrations without requiring CGO. |
-| **Authentication** | **JWT (JSON Web Tokens) with Argon2id Password Hashing** | Role-based access control (RBAC) with `Admin` (full system access) and `Server Operator` (per-instance control) roles. |
+| **Data Persistence** | **Dual Embedded SQLite (`modernc.org/sqlite`)** | Clean architectural separation: Primary DB (`data/manager.db`) for relational metadata & configuration; Dedicated Telemetry DB (`data/metrics.db`) for high-frequency time-series metrics with automated 24h rolling retention. |
+| **Authentication & Scope** | **JWT with Argon2id + Internal-Only API** | RBAC supporting `Admin` (full system access) and `Server Operator` with **Per-Server Access Control** (restricted to assigned instances only). No external API/remote keys; API is strictly internal to the Web UI. |
 | **Real-time Comms** | **WebSockets (`gorilla/websocket` or `coder/websocket`)** | Low-latency bi-directional communication for interactive BDS console streams, real-time player events, and system metrics. |
 | **Terminal Emulator** | **xterm.js + fit-addon** | Browser-based interactive console with 1,000-line ring buffer, ANSI coloring, and command history. |
 
@@ -50,7 +50,8 @@ flowchart TD
 
 ## 4. Bedrock Server Management & Lifecycle
 
-### 4.1. Server Installation & Updates
+### 4.1. Server Installation, Creation & Updates
+- **Guided Creation with Presets**: One-click configuration presets ('Vanilla Survival', 'Creative Building', 'Hardcore') pre-populating recommended game rules, difficulty, view distance, and tick-distance, alongside advanced custom mode.
 - **Bare-metal**: Automatic scraping/fetching of official BDS Linux zips from Mojang with version selector (`latest`, `preview`, or pin to specific version). Updates extract server binaries while preserving `server.properties`, `allowlist.json`, `permissions.json`, and the `worlds/` directory.
 - **Docker**: Version tags mapped to `itzg/minecraft-bedrock-server` (e.g. `VERSION=LATEST`, `VERSION=PREVIEW`, or specific BDS version string).
 
@@ -82,13 +83,25 @@ flowchart TD
 
 ---
 
-## 5. Reliability, Networking & Health Monitoring
+## 5. Reliability, Telemetry & Automation
 
 ### 5.1. Crash Loop Detection & Resource Management
 - **Circuit Breaker**: Auto-restart on unexpected exit with exponential backoff; halts auto-restart if 5 crashes occur within a 5-minute window.
 - **Resource Constraints**: Configurable per-server RAM and CPU limits (enforced via Docker container flags in Docker mode, or process monitoring alerts on bare-metal).
 
-### 5.2. Networking & RakNet Ping
+### 5.2. Telemetry & Separate Metrics Storage
+- **Dedicated Metrics DB (`data/metrics.db`)**: High-write frequency time-series database isolated from relational metadata.
+- Records CPU %, RAM usage, and active player counts at regular intervals.
+- Automatic data retention policy prunes entries older than 24 hours to prevent disk bloat.
+- Dashboard renders interactive time-series performance charts.
+
+### 5.3. Task Scheduler & Broadcast Automations
+- Unified cron-based scheduler supporting:
+  - Daily/weekly scheduled restarts with automated in-game warning countdown broadcasts (e.g. at 5m, 1m, 10s: `say Server restarting in X...`).
+  - Recurring zero-downtime hot backups.
+  - Timed console command executions.
+
+### 5.4. Networking & RakNet Ping
 - **Port Allocation**: Automatic suggestion and assignment of unused UDP ports starting at `19132` (IPv4) and `19133` (IPv6), with collision checks against host interfaces and existing servers.
 - **RakNet UDP Ping Poller**: Periodically sends Bedrock Unconnected Ping packets to verify server responsiveness, retrieve real-time MOTD, latency, player count, and version.
 
