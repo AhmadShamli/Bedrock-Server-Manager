@@ -41,15 +41,20 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
 
   // Server Configuration Edit state
   const [editServerName, setEditServerName] = useState('');
+  const [editServerVersion, setEditServerVersion] = useState('latest');
+  const [editServerPort, setEditServerPort] = useState(19132);
+  const [editServerPortV6, setEditServerPortV6] = useState(19133);
   const [editServerMode, setEditServerMode] = useState('survival');
   const [editServerDifficulty, setEditServerDifficulty] = useState('normal');
   const [editServerMemLimit, setEditServerMemLimit] = useState('2G');
+  const [editServerCpuLimit, setEditServerCpuLimit] = useState(2.0);
   const [editServerAutostart, setEditServerAutostart] = useState(false);
   const [editServerPortGate, setEditServerPortGate] = useState(false);
   const [editServerPortGateMode, setEditServerPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
   const [editServerPortGateTimeout, setEditServerPortGateTimeout] = useState(7200);
   const [serverUpdating, setServerUpdating] = useState(false);
   const [serverUpdatedMsg, setServerUpdatedMsg] = useState<string | null>(null);
+  const [propertyFilter, setPropertyFilter] = useState('');
 
   // Server Deletion state
   const [showDeleteServerModal, setShowDeleteServerModal] = useState(false);
@@ -203,9 +208,13 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
   useEffect(() => {
     if (server) {
       setEditServerName(server.name);
+      setEditServerVersion(server.version);
+      setEditServerPort(server.port);
+      setEditServerPortV6(server.portv6);
       setEditServerMode(server.mode);
       setEditServerDifficulty(server.difficulty);
       setEditServerMemLimit(server.memory_limit);
+      setEditServerCpuLimit(server.cpu_limit || 2.0);
       setEditServerAutostart(server.autostart_on_boot);
       setEditServerPortGate(server.port_gate_enabled);
       setEditServerPortGateMode(server.port_gate_mode);
@@ -253,9 +262,13 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
     try {
       const updated = await api.updateServer(id, {
         name: editServerName,
+        version: editServerVersion.trim() || undefined,
+        port: Number(editServerPort),
+        portv6: Number(editServerPortV6),
         mode: editServerMode,
         difficulty: editServerDifficulty,
         memory_limit: editServerMemLimit,
+        cpu_limit: Number(editServerCpuLimit),
         autostart_on_boot: editServerAutostart,
         port_gate_enabled: editServerPortGate,
         port_gate_mode: editServerPortGateMode,
@@ -1644,6 +1657,48 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                 </div>
 
                 <div>
+                  <label className="block text-slate-400 mb-1 font-bold">BDS Version</label>
+                  <input
+                    type="text"
+                    required
+                    value={editServerVersion}
+                    onChange={(e) => setEditServerVersion(e.target.value)}
+                    placeholder="latest"
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">UDP Port (IPv4)</label>
+                  <input
+                    type="number"
+                    required
+                    min="1025"
+                    max="65535"
+                    value={editServerPort}
+                    onChange={(e) => setEditServerPort(parseInt(e.target.value) || 19132)}
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">UDP Port (IPv6)</label>
+                  <input
+                    type="number"
+                    required
+                    min="1025"
+                    max="65535"
+                    value={editServerPortV6}
+                    onChange={(e) => setEditServerPortV6(parseInt(e.target.value) || 19133)}
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
                   <label className="block text-slate-400 mb-1 font-bold">RAM Limit</label>
                   <select
                     value={editServerMemLimit}
@@ -1654,6 +1709,20 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
                     <option value="2G">2 GB (Recommended)</option>
                     <option value="4G">4 GB</option>
                     <option value="8G">8 GB</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-400 mb-1 font-bold">CPU Core Limit</label>
+                  <select
+                    value={editServerCpuLimit}
+                    onChange={(e) => setEditServerCpuLimit(parseFloat(e.target.value) || 2.0)}
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                  >
+                    <option value={1.0}>1.0 Core</option>
+                    <option value={2.0}>2.0 Cores (Recommended)</option>
+                    <option value={4.0}>4.0 Cores</option>
+                    <option value={8.0}>8.0 Cores</option>
                   </select>
                 </div>
               </div>
@@ -1747,33 +1816,53 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
           {/* server.properties form */}
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
-                <Settings className="w-4 h-4 text-emerald-400" />
-                <span>server.properties Editor</span>
-              </h3>
+              <div>
+                <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
+                  <Settings className="w-4 h-4 text-emerald-400" />
+                  <span>server.properties Editor</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-normal">
+                    {propKeys.length} properties
+                  </span>
+                </h3>
+                <p className="text-xs text-slate-400 font-mono mt-0.5">
+                  Configure world seeds, view distance, tick distance, and dedicated server flags.
+                </p>
+              </div>
 
               <button
                 onClick={handleSaveProperties}
                 disabled={configSaving}
-                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5"
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5 shrink-0"
               >
                 {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : configSaved ? <Check className="w-3.5 h-3.5" /> : null}
                 <span>{configSaved ? 'Saved!' : 'Save Properties'}</span>
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs bg-obsidian-950 p-4 rounded-xl border border-obsidian-800">
-              {propKeys.slice(0, 12).map((key) => (
-                <div key={key}>
-                  <label className="block text-slate-400 mb-1 text-[11px]">{key}</label>
-                  <input
-                    type="text"
-                    value={properties[key] || ''}
-                    onChange={(e) => setProperties({ ...properties, [key]: e.target.value })}
-                    className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
-                  />
-                </div>
-              ))}
+            <div className="mb-3">
+              <input
+                type="text"
+                value={propertyFilter}
+                onChange={(e) => setPropertyFilter(e.target.value)}
+                placeholder="Filter properties (e.g. seed, cheats, view-distance, max-players)..."
+                className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-800 text-slate-200 text-xs font-mono placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 max-h-[520px] overflow-y-auto">
+              {propKeys
+                .filter((key) => key.toLowerCase().includes(propertyFilter.toLowerCase()))
+                .map((key) => (
+                  <div key={key}>
+                    <label className="block text-slate-400 mb-1 text-[11px] font-bold">{key}</label>
+                    <input
+                      type="text"
+                      value={properties[key] || ''}
+                      onChange={(e) => setProperties({ ...properties, [key]: e.target.value })}
+                      className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                    />
+                  </div>
+                ))}
             </div>
           </div>
 

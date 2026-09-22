@@ -20,7 +20,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
   const [serverName, setServerName] = useState('');
   const [port, setPort] = useState(19132);
   const [mode, setMode] = useState('survival');
+  const [difficulty, setDifficulty] = useState('normal');
   const [memLimit, setMemLimit] = useState('2G');
+  const [cpuLimit, setCpuLimit] = useState(2.0);
+  const [autostartOnBoot, setAutostartOnBoot] = useState(false);
   const [portGate, setPortGate] = useState(false);
   const [portGateMode, setPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
   const [creating, setCreating] = useState(false);
@@ -86,7 +89,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
         port: Number(port),
         portv6: Number(port) + 1,
         mode,
+        difficulty,
         memory_limit: memLimit,
+        cpu_limit: Number(cpuLimit),
+        autostart_on_boot: autostartOnBoot,
         port_gate_enabled: portGate,
         port_gate_mode: portGateMode,
         port_gate_timeout: 7200,
@@ -317,6 +323,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                   </select>
                 </div>
                 <div>
+                  <label className="block text-xs font-mono text-slate-300 mb-1">Difficulty</label>
+                  <select
+                    value={difficulty}
+                    onChange={(e) => setDifficulty(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
+                  >
+                    <option value="peaceful">Peaceful</option>
+                    <option value="easy">Easy</option>
+                    <option value="normal">Normal</option>
+                    <option value="hard">Hard</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
                   <label className="block text-xs font-mono text-slate-300 mb-1">RAM Capping</label>
                   <select
                     value={memLimit}
@@ -329,9 +351,32 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                     <option value="8G">8 GB</option>
                   </select>
                 </div>
+                <div>
+                  <label className="block text-xs font-mono text-slate-300 mb-1">CPU Allocation</label>
+                  <select
+                    value={cpuLimit}
+                    onChange={(e) => setCpuLimit(Number(e.target.value))}
+                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
+                  >
+                    <option value={1.0}>1.0 Core</option>
+                    <option value={2.0}>2.0 Cores (Recommended)</option>
+                    <option value={4.0}>4.0 Cores</option>
+                    <option value={8.0}>8.0 Cores</option>
+                  </select>
+                </div>
               </div>
 
-              <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-lg space-y-2">
+              <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-lg space-y-2.5">
+                <label className="flex items-center space-x-2 text-xs font-mono text-slate-200 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autostartOnBoot}
+                    onChange={(e) => setAutostartOnBoot(e.target.checked)}
+                    className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500"
+                  />
+                  <span>Autostart on Daemon Boot</span>
+                </label>
+
                 <label className="flex items-center space-x-2 text-xs font-mono text-slate-200 cursor-pointer">
                   <input
                     type="checkbox"
