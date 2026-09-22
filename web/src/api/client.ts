@@ -174,6 +174,27 @@ class APIClient {
     });
   }
 
+  async copyConfigs(sourceId: string, payload: {
+    target_server_ids: string[];
+    copy_allowlist: boolean;
+    copy_permissions: boolean;
+    copy_properties: boolean;
+    mode: 'replace' | 'merge';
+  }): Promise<{
+    source_server_id: string;
+    results: Array<{
+      server_id: string;
+      success: boolean;
+      error?: string;
+      copied: string[];
+    }>;
+  }> {
+    return this.request(`/api/servers/${sourceId}/copy-configs`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   // Player Hub & Live Chat
   async getPlayers(id: string): Promise<{
     online_players: Array<{ server_id: string; gamertag: string; xuid: string; joined_at: string }>;

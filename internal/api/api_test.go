@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -288,5 +289,66 @@ func TestServerAndKnockFlow(t *testing.T) {
 	router.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("stop server failed: %d", w.Code)
+	}
+}
+
+func TestAPICopyConfigs(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	ctx := t.Context()
+
+	// 1. Create admin user and token
+	adminUser, err := db.CreateUser(ctx, "admin_copy", "hashed", models.RoleAdmin)
+	if err != nil {
+		t.Fatalf("failed to create admin: %v", err)
+	}
+	token, _ := auth.GenerateJWT(jwtSecret, adminUser.ID, adminUser.Username, adminUser.Role, 1*time.Hour)
+
+	// 2. Create source and target servers in DB
+	srcServer := &models.Server{
+		ID:     "srv-alpha",
+		Name:   "Server Alpha",
+		Port:   19132,
+		PortV6: 19133,
+		Status: models.ServerStatusStopped,
+	}
+	_ = db.CreateServer(ctx, srcServer)
+
+	tgtServer := &models.Server{
+		ID:     "srv-beta",
+		Name:   "Server Beta",
+		Port:   19142,
+		PortV6: 19143,
+		Status: models.ServerStatusStopped,
+	}
+	_ = db.CreateServer(ctx, tgtServer)
+
+	// Prepare data_test/servers/srv-alpha/allowlist.json
+	srcDir := "data_test/servers/srv-alpha"
+	_ = os.MkdirAll(srcDir, 0755)
+	defer os.RemoveAll("data_test")
+
+	_ = os.WriteFile(srcDir+"/allowlist.json", []byte(`[{"name":"Steve","ignoresPlayerLimit":false}]`), 0644)
+
+	// 3. Make copy-configs request
+	reqBody := []byte(`{"target_server_ids":["srv-beta"],"copy_allowlist":true,"mode":"replace"}`)
+	req := httptest.NewRequest("POST", "/api/servers/srv-alpha/copy-configs", bytes.NewReader(reqBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("copy-configs failed: status %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify target srv-beta has allowlist.json
+	tgtAllowlist := "data_test/servers/srv-beta/allowlist.json"
+	data, err := os.ReadFile(tgtAllowlist)
+	if err != nil {
+		t.Fatalf("expected target allowlist to exist: %v", err)
+	}
+	if !bytes.Contains(data, []byte("Steve")) {
+		t.Fatalf("expected target allowlist to contain Steve, got %s", string(data))
 	}
 }

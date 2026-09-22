@@ -200,6 +200,35 @@ func (h *ServerHandler) Export(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// CopyConfigs selectively syncs allowlists, permissions, or properties to target servers.
+func (h *ServerHandler) CopyConfigs(w http.ResponseWriter, r *http.Request) {
+	srcID := chi.URLParam(r, "id")
+	var opts clone.CopyConfigOptions
+	if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	result, err := clone.CopyConfigs(r.Context(), srcID, opts, h.dataDir, h.db, h.engine)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	targetsJSON, _ := json.Marshal(opts.TargetServerIDs)
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: GetUserClaims(r).Username,
+		Action:    "copy_configs",
+		Target:    srcID,
+		Details:   fmt.Sprintf(`{"targets": %s, "allowlist": %t, "permissions": %t, "properties": %t, "mode": "%s"}`, string(targetsJSON), opts.CopyAllowlist, opts.CopyPermissions, opts.CopyProperties, opts.Mode),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
+}
+
 // ListPresets returns server creation presets.
 func ListPresets(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

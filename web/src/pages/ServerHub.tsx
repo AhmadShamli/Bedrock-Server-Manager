@@ -4,7 +4,7 @@ import {
   ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink,
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
-  Upload, Trash2
+  Upload, Trash2, Share2, Crown
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User, Backup, AddonPack, PortGateLease } from '../types';
@@ -58,13 +58,24 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
   const [propKeys, setPropKeys] = useState<string[]>([]);
   const [allowlist, setAllowlist] = useState<Array<{ name: string; xuid?: string; ignoresPlayerLimit: boolean }>>([]);
   const [newAllowlistPlayer, setNewAllowlistPlayer] = useState('');
+  const [permissions, setPermissions] = useState<Array<{ permission: string; xuid: string }>>([]);
+  const [newPermXuid, setNewPermXuid] = useState('');
+  const [newPermRole, setNewPermRole] = useState<'operator' | 'member' | 'visitor'>('operator');
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
 
-  // Clone & Export state
+  // Clone & Export & Sync state
   const [cloneId, setCloneId] = useState('');
   const [cloneName, setCloneName] = useState('');
   const [cloning, setCloning] = useState(false);
+  const [allServers, setAllServers] = useState<Server[]>([]);
+  const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
+  const [copyAllowlist, setCopyAllowlist] = useState(true);
+  const [copyPermissions, setCopyPermissions] = useState(true);
+  const [copyProperties, setCopyProperties] = useState(false);
+  const [copyMode, setCopyMode] = useState<'merge' | 'replace'>('merge');
+  const [copying, setCopying] = useState(false);
+  const [copyStatusMsg, setCopyStatusMsg] = useState<{ text: string; isError: boolean } | null>(null);
 
   // Version update info
   const [updateInfo, setUpdateInfo] = useState<{ current_version: string; latest_version: string; update_available: boolean; release_url: string } | null>(null);
@@ -150,8 +161,10 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
         setPropKeys(res.keys);
       }).catch(() => {});
       api.getAllowlist(id).then((res) => setAllowlist(res)).catch(() => {});
+      api.getPermissions(id).then((res) => setPermissions(res)).catch(() => {});
     } else if (activeTab === 'actions') {
       api.checkUpdates(server?.version || 'latest').then((res) => setUpdateInfo(res)).catch(() => {});
+      api.listServers().then((servers) => setAllServers(servers)).catch(() => {});
     }
   }, [id, activeTab, server?.version]);
 
@@ -275,6 +288,68 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
       setAllowlist(updated);
     } catch (err: any) {
       alert(err.message || 'Failed to update allowlist');
+    }
+  };
+
+  const handleAddPermission = async () => {
+    if (!id || !newPermXuid.trim()) return;
+    const cleanXuid = newPermXuid.trim();
+    const updated = [...permissions.filter((p) => p.xuid !== cleanXuid), { permission: newPermRole, xuid: cleanXuid }];
+    try {
+      await api.updatePermissions(id, updated);
+      setPermissions(updated);
+      setNewPermXuid('');
+    } catch (err: any) {
+      alert(err.message || 'Failed to update permissions');
+    }
+  };
+
+  const handleRemovePermission = async (xuid: string) => {
+    if (!id) return;
+    const updated = permissions.filter((p) => p.xuid !== xuid);
+    try {
+      await api.updatePermissions(id, updated);
+      setPermissions(updated);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update permissions');
+    }
+  };
+
+  const handleCopyConfigs = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id) return;
+    if (selectedTargetIds.length === 0) {
+      alert('Please select at least one target server');
+      return;
+    }
+    if (!copyAllowlist && !copyPermissions && !copyProperties) {
+      alert('Please select at least one configuration type (allowlist, permissions, or properties)');
+      return;
+    }
+
+    setCopying(true);
+    setCopyStatusMsg(null);
+    try {
+      const res = await api.copyConfigs(id, {
+        target_server_ids: selectedTargetIds,
+        copy_allowlist: copyAllowlist,
+        copy_permissions: copyPermissions,
+        copy_properties: copyProperties,
+        mode: copyMode,
+      });
+
+      const successCount = res.results.filter((r) => r.success).length;
+      const failCount = res.results.filter((r) => !r.success).length;
+      let text = `Successfully synced configs to ${successCount} server(s).`;
+      if (failCount > 0) {
+        text += ` (${failCount} target(s) reported an error)`;
+      }
+      setCopyStatusMsg({ text, isError: failCount > 0 && successCount === 0 });
+      setSelectedTargetIds([]);
+    } catch (err: any) {
+      setCopyStatusMsg({ text: err.message || 'Failed to sync configurations', isError: true });
+    } finally {
+      setCopying(false);
     }
   };
 
@@ -1239,6 +1314,76 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
               </div>
             </div>
           </div>
+
+          {/* permissions.json manager */}
+          <div>
+            <h3 className="font-mono text-base font-bold text-slate-100 mb-1 flex items-center gap-2">
+              <Crown className="w-4 h-4 text-amber-400" />
+              <span>Operators & Player Permissions (permissions.json)</span>
+            </h3>
+            <p className="text-xs text-slate-400 font-mono mb-3">
+              Configure operator and member roles for BDS. Operators gain access to in-game admin commands.
+            </p>
+
+            <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-3 font-mono text-xs">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={newPermXuid}
+                  onChange={(e) => setNewPermXuid(e.target.value)}
+                  placeholder="Enter Player XUID or Gamertag..."
+                  className="flex-1 px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs"
+                />
+                <select
+                  value={newPermRole}
+                  onChange={(e) => setNewPermRole(e.target.value as any)}
+                  className="px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs"
+                >
+                  <option value="operator">Operator (Op)</option>
+                  <option value="member">Member</option>
+                  <option value="visitor">Visitor</option>
+                </select>
+                <button
+                  onClick={handleAddPermission}
+                  className="px-3 py-1.5 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center space-x-1"
+                >
+                  <Crown className="w-3.5 h-3.5" />
+                  <span>Set Role</span>
+                </button>
+              </div>
+
+              <div className="space-y-1.5 pt-2">
+                {permissions.length === 0 ? (
+                  <p className="text-slate-600 italic">No custom permissions configured (all players use default member permission).</p>
+                ) : (
+                  permissions.map((p) => (
+                    <div key={p.xuid} className="flex items-center justify-between p-2 rounded bg-obsidian-900 border border-obsidian-800">
+                      <div className="flex items-center space-x-2">
+                        <span
+                          className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded font-bold border ${
+                            p.permission === 'operator'
+                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                              : p.permission === 'member'
+                              ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                              : 'bg-slate-500/10 text-slate-400 border-slate-500/30'
+                          }`}
+                        >
+                          {p.permission}
+                        </span>
+                        <span className="text-slate-200 font-bold">{p.xuid}</span>
+                      </div>
+                      <button
+                        onClick={() => handleRemovePermission(p.xuid)}
+                        className="text-rose-400 hover:underline text-[11px]"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1338,6 +1483,166 @@ export const ServerHub: React.FC<ServerHubProps> = () => {
               <Download className="w-4 h-4" />
               <span>Download .zip Bundle</span>
             </a>
+          </div>
+
+          {/* Sync & Copy Configs to Another Server */}
+          <div className="pt-6 border-t border-obsidian-800">
+            <h3 className="font-mono text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
+              <Share2 className="w-4 h-4 text-emerald-400" />
+              <span>Sync & Copy Configs to Another Server</span>
+            </h3>
+            <p className="text-xs text-slate-400 font-mono mb-4">
+              Selectively copy allowlists (<code className="text-emerald-400">allowlist.json</code>), operator permissions (<code className="text-amber-400">permissions.json</code>), or server properties to existing servers. Target network ports and world identities are strictly preserved.
+            </p>
+
+            {copyStatusMsg && (
+              <div
+                className={`p-3 rounded-lg font-mono text-xs mb-4 border ${
+                  copyStatusMsg.isError
+                    ? 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+                    : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                }`}
+              >
+                {copyStatusMsg.text}
+              </div>
+            )}
+
+            <form onSubmit={handleCopyConfigs} className="space-y-4 font-mono text-xs">
+              {/* Target Servers Selector */}
+              <div>
+                <label className="block text-slate-400 mb-1.5 font-bold">Select Target Server(s):</label>
+                {allServers.filter((s) => s.id !== server.id).length === 0 ? (
+                  <p className="text-slate-600 italic bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
+                    No other servers found. Create or clone another server first to sync configs between them.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto p-2 bg-obsidian-950 rounded-lg border border-obsidian-800">
+                    {allServers
+                      .filter((s) => s.id !== server.id)
+                      .map((s) => {
+                        const isSelected = selectedTargetIds.includes(s.id);
+                        return (
+                          <label
+                            key={s.id}
+                            className={`flex items-center justify-between p-2 rounded cursor-pointer transition-colors ${
+                              isSelected ? 'bg-emerald-950/40 border border-emerald-500/40' : 'hover:bg-obsidian-900 border border-transparent'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2.5">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedTargetIds([...selectedTargetIds, s.id]);
+                                  } else {
+                                    setSelectedTargetIds(selectedTargetIds.filter((tid) => tid !== s.id));
+                                  }
+                                }}
+                                className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                              />
+                              <div>
+                                <span className="text-slate-200 font-bold">{s.name}</span>
+                                <span className="text-slate-500 text-[10px] ml-2">({s.id} • UDP :{s.port})</span>
+                              </div>
+                            </div>
+                            <span
+                              className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                                s.status === 'running'
+                                  ? 'bg-emerald-500/10 text-emerald-400'
+                                  : 'bg-slate-500/10 text-slate-400'
+                              }`}
+                            >
+                              {s.status}
+                            </span>
+                          </label>
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+
+              {/* Items to copy */}
+              <div>
+                <label className="block text-slate-400 mb-1.5 font-bold">Configurations to Copy:</label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={copyAllowlist}
+                      onChange={(e) => setCopyAllowlist(e.target.checked)}
+                      className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                    />
+                    <span className="text-slate-200 text-xs">Allowlist</span>
+                  </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={copyPermissions}
+                      onChange={(e) => setCopyPermissions(e.target.checked)}
+                      className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                    />
+                    <span className="text-slate-200 text-xs">Ops & Permissions</span>
+                  </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={copyProperties}
+                      onChange={(e) => setCopyProperties(e.target.checked)}
+                      className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                    />
+                    <span className="text-slate-200 text-xs">server.properties</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Mode */}
+              <div>
+                <label className="block text-slate-400 mb-1.5 font-bold">Sync Mode:</label>
+                <div className="flex flex-col sm:flex-row gap-3 bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="copyMode"
+                      value="merge"
+                      checked={copyMode === 'merge'}
+                      onChange={() => setCopyMode('merge')}
+                      className="text-emerald-500 bg-obsidian-900 border-obsidian-700 focus:ring-emerald-500"
+                    />
+                    <div>
+                      <span className="text-slate-200 font-bold block">Merge</span>
+                      <span className="text-[10px] text-slate-400">Preserve existing entries on target and append new</span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="copyMode"
+                      value="replace"
+                      checked={copyMode === 'replace'}
+                      onChange={() => setCopyMode('replace')}
+                      className="text-emerald-500 bg-obsidian-900 border-obsidian-700 focus:ring-emerald-500"
+                    />
+                    <div>
+                      <span className="text-slate-200 font-bold block">Replace / Overwrite</span>
+                      <span className="text-[10px] text-slate-400">Overwrite target files completely</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={copying || selectedTargetIds.length === 0}
+                className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-2 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {copying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
+                <span>Sync Configurations</span>
+              </button>
+            </form>
           </div>
         </div>
       )}

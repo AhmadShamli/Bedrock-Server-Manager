@@ -150,6 +150,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Put("/servers/{id}", serverHandler.Update)
 				adminGroup.Delete("/servers/{id}", serverHandler.Delete)
 				adminGroup.Post("/servers/{id}/clone", serverHandler.Clone)
+				adminGroup.Post("/servers/{id}/copy-configs", serverHandler.CopyConfigs)
 				adminGroup.Get("/servers/{id}/export", serverHandler.Export)
 
 				// Task Scheduler
