@@ -47,7 +47,12 @@ func RestoreBackup(ctx context.Context, srv *models.Server, serverDir string, ba
 
 // ExportWorld packages a specific world folder as a downloadable .mcworld / .zip archive.
 func ExportWorld(serverDir, worldName, outPath string) error {
-	worldDir := filepath.Join(serverDir, "worlds", worldName)
+	cleanWorldName := filepath.Clean(worldName)
+	if strings.Contains(cleanWorldName, "..") || filepath.IsAbs(cleanWorldName) {
+		return fmt.Errorf("invalid world name: path traversal attempt")
+	}
+
+	worldDir := filepath.Join(serverDir, "worlds", cleanWorldName)
 	if _, err := os.Stat(worldDir); os.IsNotExist(err) {
 		// If specific worldDir doesn't exist, check default Bedrock "Bedrock level"
 		worldDir = filepath.Join(serverDir, "worlds")
@@ -58,12 +63,22 @@ func ExportWorld(serverDir, worldName, outPath string) error {
 
 // ImportWorld extracts an uploaded .mcworld or .zip into the server's worlds folder.
 func ImportWorld(serverDir, worldName string, fileReader io.ReaderAt, size int64) error {
+	cleanWorldName := filepath.Clean(worldName)
+	if strings.Contains(cleanWorldName, "..") || strings.Contains(cleanWorldName, "/") || strings.Contains(cleanWorldName, "\\") || filepath.IsAbs(cleanWorldName) {
+		return fmt.Errorf("invalid world name: path traversal attempt")
+	}
+
 	zipReader, err := zip.NewReader(fileReader, size)
 	if err != nil {
 		return fmt.Errorf("invalid world archive: %w", err)
 	}
 
-	targetDir := filepath.Join(serverDir, "worlds", worldName)
+	targetDir := filepath.Join(serverDir, "worlds", cleanWorldName)
+	worldsDirClean := filepath.Clean(filepath.Join(serverDir, "worlds")) + string(filepath.Separator)
+	if !strings.HasPrefix(filepath.Clean(targetDir)+string(filepath.Separator), worldsDirClean) {
+		return fmt.Errorf("path traversal attempt detected")
+	}
+
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
 		return err
 	}
@@ -99,6 +114,10 @@ func ImportWorld(serverDir, worldName string, fileReader io.ReaderAt, size int64
 		}
 
 		target := filepath.Join(targetDir, cleaned)
+		targetDirClean := filepath.Clean(targetDir) + string(filepath.Separator)
+		if !strings.HasPrefix(filepath.Clean(target), targetDirClean) {
+			continue // Zip Slip path traversal attempt blocked
+		}
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, f.Mode()); err != nil {

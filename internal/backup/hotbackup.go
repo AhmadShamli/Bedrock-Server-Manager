@@ -140,14 +140,16 @@ func zipDirectory(srcDir, destZipPath string) error {
 			return nil
 		}
 
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
+		return func() error {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
 
-		_, err = io.Copy(writer, file)
-		return err
+			_, err = io.Copy(writer, file)
+			return err
+		}()
 	})
 }
 
@@ -163,6 +165,8 @@ func Unzip(srcZipPath, destDir string) error {
 		return err
 	}
 
+	destDirClean := filepath.Clean(destDir) + string(filepath.Separator)
+
 	for _, f := range r.File {
 		cleaned := filepath.Clean(f.Name)
 		if strings.HasPrefix(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
@@ -170,6 +174,9 @@ func Unzip(srcZipPath, destDir string) error {
 		}
 
 		target := filepath.Join(destDir, cleaned)
+		if !strings.HasPrefix(filepath.Clean(target), destDirClean) {
+			continue // Zip Slip path traversal attempt blocked
+		}
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, f.Mode()); err != nil {

@@ -26,7 +26,8 @@ func SafePath(dataDir, serverID, filename string) (string, error) {
 		return "", err
 	}
 
-	if !strings.HasPrefix(targetPath, serverDir) {
+	serverDirWithSep := serverDir + string(filepath.Separator)
+	if targetPath != serverDir && !strings.HasPrefix(targetPath, serverDirWithSep) {
 		return "", fmt.Errorf("path traversal attempt detected")
 	}
 

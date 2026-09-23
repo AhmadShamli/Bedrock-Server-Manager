@@ -29,6 +29,12 @@ func TestSafePath(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected error on absolute path")
 	}
+
+	// Backslash traversal attempt on Unix/Windows
+	_, err = SafePath(tempDir, "srv-1", `..\something`)
+	if err == nil {
+		t.Errorf("expected error on backslash traversal")
+	}
 }
 
 func TestPropertiesReaderWriter(t *testing.T) {

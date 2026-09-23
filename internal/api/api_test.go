@@ -776,3 +776,111 @@ func TestAPIUsersCRUD(t *testing.T) {
 	}
 }
 
+func TestAPIManualLeaseValidation(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	defer os.RemoveAll("data_test")
+
+	// Create test server
+	server := &models.Server{
+		ID:        "srv-lease-test",
+		Name:      "Lease Test Realm",
+		Port:      19132,
+		PortV6:    19133,
+		Status:    models.ServerStatusStopped,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := db.CreateServer(context.Background(), server); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+
+	token, _ := auth.GenerateJWT(jwtSecret, 1, "admin", models.RoleAdmin, 1*time.Hour)
+
+	// Test 1: Invalid IP format
+	invalidPayload := []byte(`{"ip_address":"not-an-ip","gamertag":"Player1","duration_minutes":30}`)
+	req := httptest.NewRequest("POST", "/api/servers/srv-lease-test/leases/manual", bytes.NewReader(invalidPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for invalid IP, got %d", w.Code)
+	}
+
+	// Test 2: Valid IPv4 format
+	validPayload := []byte(`{"ip_address":"192.168.1.150","gamertag":"Player1","duration_minutes":30}`)
+	req = httptest.NewRequest("POST", "/api/servers/srv-lease-test/leases/manual", bytes.NewReader(validPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for valid IP, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRequireServerAccessSecurity(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	defer os.RemoveAll("data_test")
+
+	// Create test server
+	server := &models.Server{
+		ID:        "srv-secure-1",
+		Name:      "Secure Realm",
+		Port:      19140,
+		PortV6:    19141,
+		Status:    models.ServerStatusStopped,
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}
+	if err := db.CreateServer(context.Background(), server); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+
+	// Create operator user who does NOT have access to srv-secure-1
+	operatorToken, _ := auth.GenerateJWT(jwtSecret, 2, "operator_user", models.RoleOperator, 1*time.Hour)
+
+	req := httptest.NewRequest("GET", "/api/servers/srv-secure-1/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+operatorToken)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for unassigned server, got %d", w.Code)
+	}
+}
+
+func TestWebSocketOriginValidation(t *testing.T) {
+	// 1. Same origin
+	req1 := httptest.NewRequest("GET", "http://bsm.local:8080/api/servers/s1/console/ws", nil)
+	req1.Header.Set("Origin", "http://bsm.local:8080")
+	if !upgrader.CheckOrigin(req1) {
+		t.Errorf("expected same origin to be accepted")
+	}
+
+	// 2. Empty origin (e.g. non-browser tool)
+	req2 := httptest.NewRequest("GET", "http://bsm.local:8080/api/servers/s1/console/ws", nil)
+	if !upgrader.CheckOrigin(req2) {
+		t.Errorf("expected empty origin to be accepted")
+	}
+
+	// 3. Evil external site (CSWSH attempt)
+	req3 := httptest.NewRequest("GET", "http://bsm.local:8080/api/servers/s1/console/ws", nil)
+	req3.Header.Set("Origin", "https://evil-attacker-site.com")
+	if upgrader.CheckOrigin(req3) {
+		t.Errorf("expected cross-site evil origin to be rejected")
+	}
+
+	// 4. Local dev origin (Vite port 3000 to backend 8080)
+	req4 := httptest.NewRequest("GET", "http://localhost:8080/api/servers/s1/console/ws", nil)
+	req4.Header.Set("Origin", "http://localhost:3000")
+	if !upgrader.CheckOrigin(req4) {
+		t.Errorf("expected localhost dev origin to be accepted")
+	}
+}
+
+

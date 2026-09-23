@@ -179,3 +179,64 @@ func TestImportWorldNestedFolder(t *testing.T) {
 		t.Fatalf("expected db/CURRENT at world root: %v", err)
 	}
 }
+
+func TestZipSlipPrevention(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Malicious archive with directory traversal
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	w, _ := zw.Create("../../evil.txt")
+	_, _ = w.Write([]byte("malicious_payload"))
+	w2, _ := zw.Create("legit.txt")
+	_, _ = w2.Write([]byte("legit_content"))
+	_ = zw.Close()
+
+	destDir := filepath.Join(tmpDir, "extracted")
+	zipPath := filepath.Join(tmpDir, "test.zip")
+	_ = os.WriteFile(zipPath, buf.Bytes(), 0644)
+
+	err := Unzip(zipPath, destDir)
+	if err != nil {
+		t.Fatalf("Unzip failed: %v", err)
+	}
+
+	// Verify evil.txt was NOT written outside destDir
+	escapedFile := filepath.Join(tmpDir, "evil.txt")
+	if _, err := os.Stat(escapedFile); !os.IsNotExist(err) {
+		t.Fatalf("SECURITY VULNERABILITY: Zip slip file was written outside destination: %s", escapedFile)
+	}
+
+	// Verify legit file was extracted
+	legitFile := filepath.Join(destDir, "legit.txt")
+	if _, err := os.Stat(legitFile); err != nil {
+		t.Fatalf("expected legit.txt to be extracted inside destination: %v", err)
+	}
+}
+
+func TestWorldPathTraversalRejection(t *testing.T) {
+	tmpDir := t.TempDir()
+	serverDir := filepath.Join(tmpDir, "srv1")
+	_ = os.MkdirAll(filepath.Join(serverDir, "worlds"), 0755)
+
+	// Test ExportWorld with traversal
+	err := ExportWorld(serverDir, "../../etc", filepath.Join(tmpDir, "out.mcworld"))
+	if err == nil {
+		t.Errorf("expected ExportWorld with traversal to fail")
+	}
+
+	// Test ImportWorld with traversal
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+	w, _ := zw.Create("level.dat")
+	_, _ = w.Write([]byte("fake_dat"))
+	_ = zw.Close()
+
+	reader := bytes.NewReader(buf.Bytes())
+	err = ImportWorld(serverDir, "../../etc", reader, int64(buf.Len()))
+	if err == nil {
+		t.Errorf("expected ImportWorld with traversal to fail")
+	}
+}
+

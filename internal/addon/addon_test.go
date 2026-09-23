@@ -130,3 +130,26 @@ func TestAddonInstallNestedFolder(t *testing.T) {
 		t.Fatalf("expected textures/item.png at pack root: %v", err)
 	}
 }
+
+func TestDeletePackPathTraversal(t *testing.T) {
+	serverDir := t.TempDir()
+
+	// Should reject traversal attempts
+	traversalCases := []struct {
+		packType string
+		folder   string
+	}{
+		{"behavior", "../worlds"},
+		{"behavior", "../../servers"},
+		{"resource", ".."},
+		{"resource", "/etc/passwd"},
+		{"invalid_type", "valid_folder"},
+	}
+
+	for _, tc := range traversalCases {
+		err := DeletePack(serverDir, tc.packType, tc.folder)
+		if err == nil {
+			t.Errorf("expected error for traversal case %s / %s, got nil", tc.packType, tc.folder)
+		}
+	}
+}

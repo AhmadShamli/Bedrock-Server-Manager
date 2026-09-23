@@ -230,11 +230,10 @@ func main() {
 	// 13. Start HTTP Server
 	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv := &http.Server{
-		Addr:         serverAddr,
-		Handler:      router,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:              serverAddr,
+		Handler:           router,
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	go func() {

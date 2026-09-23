@@ -91,7 +91,7 @@ func (h *AddonHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	serverDir := filepath.Join(h.dataDir, "servers", serverID)
 
 	if err := addon.DeletePack(serverDir, packType, folder); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to delete addon: %s"}`, err.Error()), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to delete addon: %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 

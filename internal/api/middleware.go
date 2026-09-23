@@ -106,14 +106,19 @@ func (m *Middleware) RequireServerAccess(next http.Handler) http.Handler {
 			serverID = chi.URLParam(r, "server_id")
 		}
 
-		if serverID != "" {
-			hasAccess, err := m.db.CheckUserServerAccess(r.Context(), claims.UserID, serverID)
-			if err != nil || !hasAccess {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				_ = json.NewEncoder(w).Encode(map[string]string{"error": "Access denied for this server instance"})
-				return
-			}
+		if serverID == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Server ID required"})
+			return
+		}
+
+		hasAccess, err := m.db.CheckUserServerAccess(r.Context(), claims.UserID, serverID)
+		if err != nil || !hasAccess {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Access denied for this server instance"})
+			return
 		}
 
 		next.ServeHTTP(w, r)

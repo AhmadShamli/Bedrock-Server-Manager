@@ -3,7 +3,10 @@ package api
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +16,32 @@ import (
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Internal web dashboard
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		expectedHost := r.Host
+		if xfh := r.Header.Get("X-Forwarded-Host"); xfh != "" {
+			expectedHost = xfh
+		}
+		if strings.EqualFold(u.Host, expectedHost) {
+			return true
+		}
+		// Allow loopback origin matching during local development
+		originHost := u.Hostname()
+		reqHost, _, _ := net.SplitHostPort(expectedHost)
+		if reqHost == "" {
+			reqHost = expectedHost
+		}
+		if (originHost == "localhost" || originHost == "127.0.0.1" || originHost == "::1") &&
+			(reqHost == "localhost" || reqHost == "127.0.0.1" || reqHost == "::1") {
+			return true
+		}
+		return false
 	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,

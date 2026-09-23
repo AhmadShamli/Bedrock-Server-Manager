@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/backup"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
@@ -258,7 +259,13 @@ func (h *BackupHandler) ExportWorld(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
-	tempExportFile := filepath.Join(os.TempDir(), fmt.Sprintf("%s_export.mcworld", server.ID))
+	tempFile, err := os.CreateTemp("", fmt.Sprintf("%s_export_*.mcworld", server.ID))
+	if err != nil {
+		http.Error(w, `{"error": "Failed to create temporary export file"}`, http.StatusInternalServerError)
+		return
+	}
+	tempExportFile := tempFile.Name()
+	_ = tempFile.Close()
 	defer os.Remove(tempExportFile)
 
 	if err := backup.ExportWorld(serverDir, "Bedrock level", tempExportFile); err != nil {
@@ -323,9 +330,14 @@ func (h *BackupHandler) ImportWorld(w http.ResponseWriter, r *http.Request) {
 	if worldName == "" {
 		worldName = "Bedrock level"
 	}
+	cleanWorldName := filepath.Clean(worldName)
+	if strings.Contains(cleanWorldName, "..") || strings.Contains(cleanWorldName, "/") || strings.Contains(cleanWorldName, "\\") || filepath.IsAbs(cleanWorldName) {
+		http.Error(w, `{"error": "Invalid world_name: path traversal detected"}`, http.StatusBadRequest)
+		return
+	}
 
 	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
-	if err := backup.ImportWorld(serverDir, worldName, tempFile, size); err != nil {
+	if err := backup.ImportWorld(serverDir, cleanWorldName, tempFile, size); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to import world: %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}

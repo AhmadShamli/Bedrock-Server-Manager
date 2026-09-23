@@ -170,6 +170,11 @@ func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, e
 		}
 
 		destPath := filepath.Join(targetDir, cleaned)
+		targetDirClean := filepath.Clean(targetDir) + string(filepath.Separator)
+		if !strings.HasPrefix(filepath.Clean(destPath), targetDirClean) {
+			continue // Zip Slip path traversal attempt blocked
+		}
+
 		if f.FileInfo().IsDir() {
 			_ = os.MkdirAll(destPath, f.Mode())
 			continue
@@ -208,11 +213,20 @@ func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, e
 
 // DeletePack removes an installed pack folder.
 func DeletePack(serverDir, packType, folder string) error {
-	var targetDir string
-	if packType == "behavior" {
-		targetDir = filepath.Join(serverDir, "behavior_packs", filepath.Clean(folder))
-	} else {
-		targetDir = filepath.Join(serverDir, "resource_packs", filepath.Clean(folder))
+	if packType != "behavior" && packType != "resource" {
+		return fmt.Errorf("invalid pack type: must be 'behavior' or 'resource'")
+	}
+
+	cleanFolder := filepath.Clean(folder)
+	if cleanFolder == "." || cleanFolder == ".." || strings.Contains(cleanFolder, "/") || strings.Contains(cleanFolder, "\\") {
+		return fmt.Errorf("invalid folder name: directory traversal attempt")
+	}
+
+	baseDir := filepath.Join(serverDir, packType+"_packs")
+	targetDir := filepath.Join(baseDir, cleanFolder)
+	baseDirClean := filepath.Clean(baseDir) + string(filepath.Separator)
+	if !strings.HasPrefix(filepath.Clean(targetDir), baseDirClean) {
+		return fmt.Errorf("path traversal attempt detected")
 	}
 
 	return os.RemoveAll(targetDir)

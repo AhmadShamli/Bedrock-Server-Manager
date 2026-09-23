@@ -34,20 +34,22 @@ func CopyDir(src, dst string) error {
 			return os.MkdirAll(targetPath, info.Mode())
 		}
 
-		srcFile, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer srcFile.Close()
+		return func() error {
+			srcFile, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer srcFile.Close()
 
-		dstFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
-		if err != nil {
-			return err
-		}
-		defer dstFile.Close()
+			dstFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+			if err != nil {
+				return err
+			}
+			defer dstFile.Close()
 
-		_, err = io.Copy(dstFile, srcFile)
-		return err
+			_, err = io.Copy(dstFile, srcFile)
+			return err
+		}()
 	})
 }
 
@@ -176,13 +178,15 @@ func ExportServer(serverID, dataDir string, w io.Writer) error {
 			return nil
 		}
 
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
+		return func() error {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
 
-		_, err = io.Copy(writer, file)
-		return err
+			_, err = io.Copy(writer, file)
+			return err
+		}()
 	})
 }

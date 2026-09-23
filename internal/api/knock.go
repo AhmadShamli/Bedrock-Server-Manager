@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
@@ -422,10 +424,18 @@ func (h *KnockHandler) CreateManualLease(w http.ResponseWriter, r *http.Request)
 	}
 
 	var req ManualLeaseRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.IPAddress == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	cleanIP := strings.TrimSpace(req.IPAddress)
+	parsedIP := net.ParseIP(cleanIP)
+	if parsedIP == nil {
 		http.Error(w, `{"error": "Valid ip_address is required"}`, http.StatusBadRequest)
 		return
 	}
+	req.IPAddress = parsedIP.String()
 
 	if req.DurationMinutes <= 0 {
 		req.DurationMinutes = 60 // 1 hour default
