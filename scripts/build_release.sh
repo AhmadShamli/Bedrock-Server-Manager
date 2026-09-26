@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-VERSION="${1:-${VERSION:-1.2.0}}"
+VERSION="${1:-${VERSION:-1.2.1}}"
 DIST_DIR="${ROOT_DIR}/dist"
 LDFLAGS="-s -w -X github.com/AhmadShamli/Bedrock-Server-Manager/internal/version.Version=${VERSION#v}"
 
