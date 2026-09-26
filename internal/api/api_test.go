@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -380,6 +381,18 @@ func TestAPIGlobalPlayers(t *testing.T) {
 	serverDir := "data_test/servers/srv-sync-test"
 	_ = os.MkdirAll(serverDir, 0755)
 	defer os.RemoveAll("data_test")
+
+	// 2.5. Verify GET /api/global-players on empty list returns '[]' and NOT 'null'
+	reqEmpty := httptest.NewRequest("GET", "/api/global-players", nil)
+	reqEmpty.Header.Set("Authorization", "Bearer "+token)
+	wEmpty := httptest.NewRecorder()
+	router.ServeHTTP(wEmpty, reqEmpty)
+	if wEmpty.Code != http.StatusOK {
+		t.Fatalf("list global players on empty failed: %d", wEmpty.Code)
+	}
+	if strings.TrimSpace(wEmpty.Body.String()) != "[]" {
+		t.Fatalf("expected '[]' on empty global players list, got '%s'", wEmpty.Body.String())
+	}
 
 	// 3. Create Global Player via POST /api/global-players
 	createBody := []byte(`{"name":"UniversalPlayer","xuid":"999999999","is_allowlisted":true,"permission":"operator"}`)

@@ -1997,8 +1997,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   <>
                     <div className="space-y-1.5">
                       {paginatedAllowlist.map((p) => {
-                        const isGlobal = globalPlayers.some(
-                          (gp) => (gp.name.toLowerCase() === p.name.toLowerCase() || (p.xuid && gp.xuid === p.xuid)) && gp.is_allowlisted
+                        const isGlobal = (globalPlayers || []).some(
+                          (gp) => gp && (((gp.name || '').toLowerCase() === (p.name || '').toLowerCase()) || (p.xuid && gp.xuid === p.xuid)) && gp.is_allowlisted
                         );
                         const matchingPerm = permissions.find(
                           (perm) => (p.xuid && perm.xuid === p.xuid) || perm.xuid.toLowerCase() === p.name.toLowerCase()
@@ -2118,8 +2118,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                           (al) => (al.xuid && al.xuid === p.xuid) || al.name.toLowerCase() === p.xuid.toLowerCase()
                         );
                         const playerName = matchingAllow ? matchingAllow.name : p.xuid;
-                        const isGlobalOp = globalPlayers.some(
-                          (gp) => (gp.xuid === p.xuid || gp.name.toLowerCase() === playerName.toLowerCase()) && gp.permission === p.permission
+                        const isGlobalOp = (globalPlayers || []).some(
+                          (gp) => gp && (gp.xuid === p.xuid || (gp.name || '').toLowerCase() === (playerName || '').toLowerCase()) && gp.permission === p.permission
                         );
 
                         return (

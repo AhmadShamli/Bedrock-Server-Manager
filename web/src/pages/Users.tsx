@@ -56,8 +56,9 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
         api.listServers(),
         api.getSettings(),
       ]);
-      setUsers(uList);
-      setServers(sList);
+      const safeUsers = Array.isArray(uList) ? uList : [];
+      setUsers(safeUsers);
+      setServers(Array.isArray(sList) ? sList : []);
 
       if (settingsRes && settingsRes['heartbeat_interval_seconds']) {
         const val = parseInt(settingsRes['heartbeat_interval_seconds'], 10);
@@ -67,7 +68,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
       // Fetch server access for each operator user
       const accessMap: Record<number, string[]> = {};
       await Promise.all(
-        uList.map(async (u) => {
+        safeUsers.map(async (u) => {
           if (u.role === 'operator') {
             try {
               const srvs = await api.getUserServerAccess(u.id);

@@ -78,7 +78,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
   // Filtered servers based on search and status
   const filteredServers = useMemo(() => {
-    return servers.filter((s) => {
+    return (servers || []).filter((s) => {
+      if (!s) return false;
       const q = searchQuery.toLowerCase().trim();
       const matchesSearch =
         !q ||

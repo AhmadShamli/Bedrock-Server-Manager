@@ -39,6 +39,10 @@ func (h *GlobalPlayerHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if players == nil {
+		players = []*models.GlobalPlayer{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(players)
 }
@@ -221,6 +225,10 @@ func (h *GlobalPlayerHandler) SyncAll(w http.ResponseWriter, r *http.Request) {
 		Details:   fmt.Sprintf(`{"synced_count": %d}`, len(reports)),
 		ClientIP:  GetClientIP(r).String(),
 	})
+
+	if reports == nil {
+		reports = make(map[string]*player.SyncReport)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(reports)

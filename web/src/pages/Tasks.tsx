@@ -70,13 +70,15 @@ export const Tasks: React.FC = () => {
         api.listTasks(),
         api.listServers(),
       ]);
-      setTasks(tList);
-      setServers(sList);
-      if (sList.length > 0 && !serverId) {
+      setTasks(Array.isArray(tList) ? tList : []);
+      setServers(Array.isArray(sList) ? sList : []);
+      if ((sList || []).length > 0 && !serverId) {
         setServerId(sList[0].id);
       }
     } catch (err: any) {
       setError(err.message || 'Failed to load tasks');
+      setTasks([]);
+      setServers([]);
     } finally {
       setLoading(false);
     }

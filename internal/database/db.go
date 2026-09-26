@@ -200,7 +200,7 @@ func (db *ManagerDB) ListUsers(ctx context.Context) ([]models.User, error) {
 	}
 	defer rows.Close()
 
-	var users []models.User
+	users := make([]models.User, 0)
 	for rows.Next() {
 		var u models.User
 		var createdAtStr string
@@ -342,7 +342,7 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 	}
 	defer rows.Close()
 
-	var servers []models.Server
+	servers := make([]models.Server, 0)
 	for rows.Next() {
 		var s models.Server
 		var autostartInt, portGateInt int
@@ -462,7 +462,7 @@ func (db *ManagerDB) ListPortGateKeys(ctx context.Context, serverID *string) ([]
 	}
 	defer rows.Close()
 
-	var keys []models.PortGateKey
+	keys := make([]models.PortGateKey, 0)
 	for rows.Next() {
 		var k models.PortGateKey
 		var sID sql.NullString
@@ -604,7 +604,7 @@ func (db *ManagerDB) ListActiveLeases(ctx context.Context, serverID string) ([]m
 	}
 	defer rows.Close()
 
-	var leases []models.PortGateLease
+	leases := make([]models.PortGateLease, 0)
 	for rows.Next() {
 		var l models.PortGateLease
 		var keyID sql.NullInt64
@@ -760,7 +760,7 @@ func (db *ManagerDB) ListAuditLogs(ctx context.Context, limit, offset int) ([]mo
 	}
 	defer rows.Close()
 
-	var logs []models.AuditLog
+	logs := make([]models.AuditLog, 0)
 	for rows.Next() {
 		var l models.AuditLog
 		var uID sql.NullInt64
@@ -852,7 +852,7 @@ func (db *ManagerDB) ListBackups(ctx context.Context, serverID string) ([]models
 	}
 	defer rows.Close()
 
-	var backups []models.Backup
+	backups := make([]models.Backup, 0)
 	for rows.Next() {
 		var b models.Backup
 		var isLockedInt int
@@ -983,7 +983,7 @@ func (db *ManagerDB) ListTasks(ctx context.Context, serverID *string) ([]models.
 	}
 	defer rows.Close()
 
-	var tasks []models.Task
+	tasks := make([]models.Task, 0)
 	for rows.Next() {
 		var t models.Task
 		var srvID sql.NullString
@@ -1108,7 +1108,7 @@ func (db *ManagerDB) ListGlobalPlayers(ctx context.Context) ([]*models.GlobalPla
 	}
 	defer rows.Close()
 
-	var players []*models.GlobalPlayer
+	players := make([]*models.GlobalPlayer, 0)
 	for rows.Next() {
 		var (
 			p               models.GlobalPlayer

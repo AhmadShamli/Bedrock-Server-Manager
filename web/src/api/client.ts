@@ -82,7 +82,8 @@ class APIClient {
 
   // Servers
   async listServers(): Promise<Server[]> {
-    return this.request('/api/servers');
+    const res = await this.request('/api/servers');
+    return Array.isArray(res) ? res : [];
   }
 
   async getServer(id: string): Promise<Server> {
@@ -306,7 +307,8 @@ class APIClient {
 
   // --- Port Gate Leases ---
   async listLeases(serverId: string): Promise<PortGateLease[]> {
-    return this.request(`/api/servers/${serverId}/leases`);
+    const res = await this.request(`/api/servers/${serverId}/leases`);
+    return Array.isArray(res) ? res : [];
   }
 
   async revokeLease(serverId: string, leaseId: number): Promise<{ success: boolean }> {
@@ -329,7 +331,8 @@ class APIClient {
 
   // --- Port Gate Access Keys ---
   async listAccessKeys(serverId: string): Promise<PortGateKey[]> {
-    return this.request(`/api/servers/${serverId}/access-keys`);
+    const res = await this.request(`/api/servers/${serverId}/access-keys`);
+    return Array.isArray(res) ? res : [];
   }
 
   async createAccessKey(serverId: string, payload: {
@@ -353,7 +356,8 @@ class APIClient {
 
   // --- Backups & Worlds ---
   async listBackups(serverId: string): Promise<Backup[]> {
-    return this.request(`/api/servers/${serverId}/backups`);
+    const res = await this.request(`/api/servers/${serverId}/backups`);
+    return Array.isArray(res) ? res : [];
   }
 
   async createBackup(serverId: string, payload: { type?: string; is_locked?: boolean } = {}): Promise<Backup> {
@@ -415,7 +419,8 @@ class APIClient {
 
   // --- Addon / Pack Manager ---
   async listAddons(serverId: string): Promise<AddonPack[]> {
-    return this.request(`/api/servers/${serverId}/addons`);
+    const res = await this.request(`/api/servers/${serverId}/addons`);
+    return Array.isArray(res) ? res : [];
   }
 
   async installAddon(serverId: string, file: File): Promise<AddonPack> {
@@ -448,7 +453,8 @@ class APIClient {
   // --- Task Scheduler ---
   async listTasks(serverId?: string): Promise<Task[]> {
     const url = serverId ? `/api/tasks?server_id=${encodeURIComponent(serverId)}` : '/api/tasks';
-    return this.request(url);
+    const res = await this.request(url);
+    return Array.isArray(res) ? res : [];
   }
 
   async getTask(id: number): Promise<Task> {
@@ -489,7 +495,8 @@ class APIClient {
 
   // --- System Audit & Settings ---
   async listAuditLogs(limit = 50, offset = 0): Promise<AuditLog[]> {
-    return this.request(`/api/system/audit?limit=${limit}&offset=${offset}`);
+    const res = await this.request(`/api/system/audit?limit=${limit}&offset=${offset}`);
+    return Array.isArray(res) ? res : [];
   }
 
   async getSettings(): Promise<Record<string, string>> {
@@ -505,7 +512,8 @@ class APIClient {
 
   // --- User Management ---
   async listUsers(): Promise<User[]> {
-    return this.request('/api/users');
+    const res = await this.request('/api/users');
+    return Array.isArray(res) ? res : [];
   }
 
   async createUser(payload: { username: string; password: string; role: 'admin' | 'operator' }): Promise<User> {
@@ -541,7 +549,8 @@ class APIClient {
 
   // --- Multi-Level Global Player Access Control ---
   async listGlobalPlayers(): Promise<GlobalPlayer[]> {
-    return this.request('/api/global-players');
+    const res = await this.request('/api/global-players');
+    return Array.isArray(res) ? res : [];
   }
 
   async getGlobalPlayer(id: number): Promise<GlobalPlayer> {

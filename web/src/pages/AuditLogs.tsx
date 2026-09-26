@@ -16,9 +16,10 @@ export const AuditLogs: React.FC = () => {
     try {
       setLoading(true);
       const data = await api.listAuditLogs(500, 0);
-      setLogs(data);
+      setLogs(Array.isArray(data) ? data : []);
     } catch (err: any) {
       setError(err.message || 'Failed to load audit logs');
+      setLogs([]);
     } finally {
       setLoading(false);
     }
@@ -28,16 +29,17 @@ export const AuditLogs: React.FC = () => {
     loadLogs();
   }, []);
 
-  const filteredLogs = logs.filter((log) => {
+  const filteredLogs = (logs || []).filter((log) => {
+    if (!log) return false;
     if (filterAction && log.action !== filterAction) return false;
     if (search) {
       const q = search.toLowerCase();
       return (
-        log.actor_name.toLowerCase().includes(q) ||
-        log.action.toLowerCase().includes(q) ||
-        log.target.toLowerCase().includes(q) ||
-        log.client_ip.toLowerCase().includes(q) ||
-        log.details.toLowerCase().includes(q)
+        (log.actor_name || '').toLowerCase().includes(q) ||
+        (log.action || '').toLowerCase().includes(q) ||
+        (log.target || '').toLowerCase().includes(q) ||
+        (log.client_ip || '').toLowerCase().includes(q) ||
+        (log.details || '').toLowerCase().includes(q)
       );
     }
     return true;

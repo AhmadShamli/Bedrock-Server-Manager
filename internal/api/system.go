@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 )
 
 type SystemHandler struct {
@@ -67,6 +68,10 @@ func (h *SystemHandler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, `{"error": "Failed to query audit logs"}`, http.StatusInternalServerError)
 		return
+	}
+
+	if logs == nil {
+		logs = []models.AuditLog{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

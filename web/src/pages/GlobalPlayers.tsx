@@ -28,9 +28,10 @@ export const GlobalPlayers: React.FC = () => {
   const fetchPlayers = async () => {
     try {
       const data = await api.listGlobalPlayers();
-      setPlayers(data);
+      setPlayers(Array.isArray(data) ? data : []);
     } catch (err: any) {
       alert(err.message || 'Failed to load global players');
+      setPlayers([]);
     } finally {
       setLoading(false);
     }
@@ -85,12 +86,13 @@ export const GlobalPlayers: React.FC = () => {
     setSyncStatus(null);
     try {
       const results = await api.syncAllServersGlobal();
-      const serverCount = Object.keys(results).length;
+      const safeResults = results || {};
+      const serverCount = Object.keys(safeResults).length;
       let totalAdded = 0;
       let totalPerms = 0;
-      for (const key of Object.keys(results)) {
-        totalAdded += results[key].allowlist_added.length;
-        totalPerms += results[key].permissions_updated.length;
+      for (const key of Object.keys(safeResults)) {
+        totalAdded += safeResults[key]?.allowlist_added?.length || 0;
+        totalPerms += safeResults[key]?.permissions_updated?.length || 0;
       }
       setSyncStatus(`Successfully synced to ${serverCount} server(s). (${totalAdded} allowlisted, ${totalPerms} permissions updated)`);
       setTimeout(() => setSyncStatus(null), 5000);
@@ -101,10 +103,12 @@ export const GlobalPlayers: React.FC = () => {
     }
   };
 
-  const filteredPlayers = players.filter((p) => {
-    const matchesSearch =
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.xuid.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredPlayers = (players || []).filter((p) => {
+    if (!p) return false;
+    const nameStr = (p.name || '').toLowerCase();
+    const xuidStr = (p.xuid || '').toLowerCase();
+    const query = (searchQuery || '').toLowerCase().trim();
+    const matchesSearch = !query || nameStr.includes(query) || xuidStr.includes(query);
 
     if (!matchesSearch) return false;
 
