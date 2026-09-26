@@ -257,21 +257,28 @@ resolve_target_version() {
         return 0
     fi
 
-    # 1. Check local pre-compiled binary if bin/bedrock-server-manager exists
-    local bin_source="${REPO_ROOT}/bin/bedrock-server-manager"
-    if [ -f "${bin_source}" ] && [ -x "${bin_source}" ]; then
-        local bin_ver
-        bin_ver="$(timeout 3 "${bin_source}" version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?' | head -n1 || true)"
-        if [ -n "${bin_ver}" ]; then
-            if [[ "${bin_ver}" =~ ^[0-9]+\.[0-9]+ ]]; then
-                bin_ver="v${bin_ver}"
+    # 1. Check latest GitHub release tag or fallback
+    local latest
+    latest="$(get_latest_release_tag)"
+    if [ -n "${latest}" ]; then
+        echo "${latest}"
+        return 0
+    fi
+
+    # 2. Check internal/version/version.go if in source checkout
+    if [ -f "${REPO_ROOT}/internal/version/version.go" ]; then
+        local src_ver
+        src_ver="$(grep -E '^\s*var\s+Version\s*=' "${REPO_ROOT}/internal/version/version.go" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+        if [ -n "${src_ver}" ]; then
+            if [[ "${src_ver}" =~ ^[0-9]+\.[0-9]+ ]]; then
+                src_ver="v${src_ver}"
             fi
-            echo "${bin_ver}"
+            echo "${src_ver}"
             return 0
         fi
     fi
 
-    # 2. Check bundled release archive in dist/
+    # 3. Check bundled release archive in dist/
     if [ -n "${ARCH:-}" ]; then
         local dist_match
         dist_match="$(ls -1 "${REPO_ROOT}/dist/"*"-linux-${ARCH}.tar.gz" 2>/dev/null | sort -V | tail -n1 || true)"
@@ -288,25 +295,18 @@ resolve_target_version() {
         fi
     fi
 
-    # 3. Check internal/version/version.go if in source checkout
-    if [ -f "${REPO_ROOT}/internal/version/version.go" ]; then
-        local src_ver
-        src_ver="$(grep -E '^\s*var\s+Version\s*=' "${REPO_ROOT}/internal/version/version.go" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || true)"
-        if [ -n "${src_ver}" ]; then
-            if [[ "${src_ver}" =~ ^[0-9]+\.[0-9]+ ]]; then
-                src_ver="v${src_ver}"
+    # 4. Check local pre-compiled binary if bin/bedrock-server-manager exists
+    local bin_source="${REPO_ROOT}/bin/bedrock-server-manager"
+    if [ -f "${bin_source}" ] && [ -x "${bin_source}" ]; then
+        local bin_ver
+        bin_ver="$(timeout 3 "${bin_source}" version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?' | head -n1 || true)"
+        if [ -n "${bin_ver}" ]; then
+            if [[ "${bin_ver}" =~ ^[0-9]+\.[0-9]+ ]]; then
+                bin_ver="v${bin_ver}"
             fi
-            echo "${src_ver}"
+            echo "${bin_ver}"
             return 0
         fi
-    fi
-
-    # 4. Check GitHub latest release tag
-    local latest
-    latest="$(get_latest_release_tag)"
-    if [ -n "${latest}" ]; then
-        echo "${latest}"
-        return 0
     fi
 
     echo "${DEFAULT_FALLBACK_TAG}"
@@ -493,6 +493,16 @@ echo -e "  Container Engine      : ${DOCKER_STATUS}"
 echo -e "  Existing BSM Status   : ${BSM_STATUS}"
 echo -e "  Target BSM Version    : ${TARGET_VERSION}"
 echo -e "  Operation Mode        : $([ "${MODE}" = "upgrade" ] && echo "Upgrade" || echo "Fresh Installation")"
+METHOD_DESC="Interactive Selection"
+if [ -n "${INSTALL_METHOD}" ]; then
+    case "${INSTALL_METHOD}" in
+        download) METHOD_DESC="Pre-built Binary (GitHub Releases)" ;;
+        build)    METHOD_DESC="Compile from Source (Go + React)" ;;
+        local)    METHOD_DESC="Local Binary in bin/" ;;
+        *)        METHOD_DESC="${INSTALL_METHOD}" ;;
+    esac
+fi
+echo -e "  Installation Method   : ${METHOD_DESC}"
 echo "--------------------------------------------------------------------------------"
 echo -e "  Host Firewalls        :"
 echo -e "    - UFW               : ${UFW_STATUS}"
@@ -533,6 +543,69 @@ if [ "${ASSUME_YES}" = false ] && [ "${FORCE_ACTION}" = false ]; then
     fi
     echo ""
     log_info "Confirmation received. Proceeding with $([ "${MODE}" = "upgrade" ] && echo "upgrade" || echo "installation")..."
+    echo ""
+fi
+
+# -----------------------------------------------------------------------------
+# Select Installation Method: Pre-built Binary vs Compile from Source
+# -----------------------------------------------------------------------------
+BIN_SOURCE="${REPO_ROOT}/bin/bedrock-server-manager"
+
+if [ -z "${INSTALL_METHOD}" ]; then
+    if [ "${ASSUME_YES}" = false ] && [ "${FORCE_ACTION}" = false ]; then
+        echo "Choose how to obtain Bedrock Server Manager (${TARGET_VERSION}):"
+        echo -e "  ${BOLD}1) Use pre-built release binary from GitHub${RESET} (Recommended, fast, no build tools needed) [Default]"
+        echo -e "  ${BOLD}2) Build and compile from source code${RESET} (Compiles Go backend with embedded React web UI)"
+        if [ -f "${BIN_SOURCE}" ]; then
+            echo -e "  ${BOLD}3) Use existing local binary in bin/${RESET} (${BIN_SOURCE})"
+        fi
+
+        PROMPT_STR="Enter choice [1 or 2] (default: 1): "
+        if [ -f "${BIN_SOURCE}" ]; then
+            PROMPT_STR="Enter choice [1, 2, or 3] (default: 1): "
+        fi
+
+        METHOD_CHOICE=""
+        if [ -t 0 ]; then
+            read -r -p "${PROMPT_STR}" METHOD_CHOICE
+        elif [ -r /dev/tty ]; then
+            read -r -p "${PROMPT_STR}" METHOD_CHOICE < /dev/tty
+        else
+            METHOD_CHOICE="1"
+        fi
+
+        METHOD_CHOICE="$(echo "${METHOD_CHOICE}" | tr '[:upper:]' '[:lower:]' | xargs)"
+        case "${METHOD_CHOICE}" in
+            2|build|source)
+                INSTALL_METHOD="build"
+                ;;
+            3|local)
+                if [ -f "${BIN_SOURCE}" ]; then
+                    INSTALL_METHOD="local"
+                else
+                    log_warn "Local binary not found at ${BIN_SOURCE}. Falling back to pre-built GitHub binary."
+                    INSTALL_METHOD="download"
+                fi
+                ;;
+            1|download|github|release|"")
+                INSTALL_METHOD="download"
+                ;;
+            *)
+                log_warn "Unrecognized choice '${METHOD_CHOICE}'. Defaulting to pre-built GitHub release."
+                INSTALL_METHOD="download"
+                ;;
+        esac
+    else
+        # In non-interactive mode (-y / --yes), prefer pre-built binary
+        if [ -f "${BIN_SOURCE}" ]; then
+            INSTALL_METHOD="local"
+        else
+            INSTALL_METHOD="download"
+        fi
+    fi
+
+    echo ""
+    log_info "Selected installation method: $([ "${INSTALL_METHOD}" = "build" ] && echo "Compile from Source" || ([ "${INSTALL_METHOD}" = "local" ] && echo "Local Binary" || echo "Pre-built Binary from GitHub"))"
     echo ""
 fi
 
@@ -677,31 +750,7 @@ echo "[3/6] Acquiring and verifying Bedrock Server Manager static binary (${TARG
 BIN_SOURCE="${REPO_ROOT}/bin/bedrock-server-manager"
 
 if [ -z "${INSTALL_METHOD}" ]; then
-    if [ -f "${BIN_SOURCE}" ]; then
-        INSTALL_METHOD="local"
-    elif [ -f "${REPO_ROOT}/cmd/manager/main.go" ]; then
-        INSTALL_METHOD="build"
-    elif [ -t 0 ]; then
-        echo ""
-        if [ "${MODE}" = "upgrade" ]; then
-            echo "Select upgrade source:"
-        else
-            echo "Select installation method:"
-        fi
-        echo "  1) Compile and build static binary from source code [Default]"
-        echo "  2) Download pre-compiled release from GitHub (or use bundled dist archive)"
-        read -r -p "Enter choice [1 or 2] (default: 1): " USER_CHOICE
-        case "${USER_CHOICE}" in
-            2|"download")
-                INSTALL_METHOD="download"
-                ;;
-            *)
-                INSTALL_METHOD="build"
-                ;;
-        esac
-    else
-        INSTALL_METHOD="build"
-    fi
+    INSTALL_METHOD="download"
 fi
 
 BINARY_STAGED=false
@@ -715,11 +764,22 @@ fi
 
 # Method B: Download release archive or bundled dist
 if [ "${BINARY_STAGED}" = false ] && [ "${INSTALL_METHOD}" = "download" ]; then
-    # Check bundled dist archive first
+    RELEASE_TAG="${TARGET_VERSION}"
+    if [ -z "${RELEASE_TAG}" ] || [ "${RELEASE_TAG}" = "latest" ]; then
+        RELEASE_TAG="$(get_latest_release_tag)"
+    fi
+    if [[ "${RELEASE_TAG}" =~ ^[0-9]+\.[0-9]+ ]]; then
+        RELEASE_TAG="v${RELEASE_TAG}"
+    fi
+
+    # 1. Check bundled dist archive in local repo
     if [ -n "${ARCH}" ]; then
-        DIST_MATCH="$(ls -1 "${REPO_ROOT}/dist/"*"-linux-${ARCH}.tar.gz" 2>/dev/null | sort -V | tail -n1 || true)"
+        DIST_MATCH="${REPO_ROOT}/dist/bedrock-server-manager-${RELEASE_TAG}-linux-${ARCH}.tar.gz"
+        if [ ! -f "${DIST_MATCH}" ]; then
+            DIST_MATCH="$(ls -1 "${REPO_ROOT}/dist/"*"-linux-${ARCH}.tar.gz" 2>/dev/null | sort -V | tail -n1 || true)"
+        fi
         if [ -n "${DIST_MATCH}" ] && [ -f "${DIST_MATCH}" ]; then
-            log_info "Found bundled release archive in dist/ (${DIST_MATCH##*/}). Extracting..."
+            log_info "Found release archive in dist/ (${DIST_MATCH##*/}). Extracting..."
             if tar -xzf "${DIST_MATCH}" -C "${STAGING_DIR}" 2>/dev/null; then
                 FOUND_BIN="$(find "${STAGING_DIR}" -type f -name bedrock-server-manager | head -n 1)"
                 if [ -n "${FOUND_BIN}" ] && [ -f "${FOUND_BIN}" ]; then
@@ -727,25 +787,45 @@ if [ "${BINARY_STAGED}" = false ] && [ "${INSTALL_METHOD}" = "download" ]; then
                         mv "${FOUND_BIN}" "${STAGING_DIR}/bedrock-server-manager"
                     fi
                     BINARY_STAGED=true
+                    log_success "Extracted Bedrock Server Manager ${RELEASE_TAG} from ${DIST_MATCH##*/}."
                 fi
             fi
         fi
     fi
 
-    # Download from GitHub Releases if not found in dist
-    if [ "${BINARY_STAGED}" = false ] && [ -n "${ARCH}" ] && command -v curl >/dev/null 2>&1; then
-        RELEASE_TAG="${TARGET_VERSION}"
-        if [ -z "${RELEASE_TAG}" ] || [ "${RELEASE_TAG}" = "latest" ]; then
-            RELEASE_TAG="$(get_latest_release_tag)"
+    # 2. Try GitHub CLI (gh) if installed and authenticated
+    if [ "${BINARY_STAGED}" = false ] && [ -n "${ARCH}" ] && command -v gh >/dev/null 2>&1; then
+        log_info "Attempting download via GitHub CLI (gh) for tag ${RELEASE_TAG}..."
+        if gh release download "${RELEASE_TAG}" --repo "${REPO}" --pattern "*linux-${ARCH}.tar.gz" --dir "${STAGING_DIR}" 2>/dev/null; then
+            ARCHIVE_FILE="$(find "${STAGING_DIR}" -maxdepth 1 -type f -name "*linux-${ARCH}.tar.gz" | head -n1)"
+            if [ -n "${ARCHIVE_FILE}" ] && tar -xzf "${ARCHIVE_FILE}" -C "${STAGING_DIR}" 2>/dev/null; then
+                FOUND_BIN="$(find "${STAGING_DIR}" -type f -name bedrock-server-manager | head -n 1)"
+                if [ -n "${FOUND_BIN}" ] && [ -f "${FOUND_BIN}" ]; then
+                    if [ "${FOUND_BIN}" != "${STAGING_DIR}/bedrock-server-manager" ]; then
+                        mv "${FOUND_BIN}" "${STAGING_DIR}/bedrock-server-manager"
+                    fi
+                    FOUND_ENV="$(find "${STAGING_DIR}" -type f -name .env.example | head -n 1)"
+                    if [ -n "${FOUND_ENV}" ]; then
+                        cp "${FOUND_ENV}" "${STAGING_DIR}/bsm.env.example"
+                    fi
+                    BINARY_STAGED=true
+                    log_success "Downloaded and extracted Bedrock Server Manager ${RELEASE_TAG} via GitHub CLI."
+                fi
+            fi
         fi
-        if [[ "${RELEASE_TAG}" =~ ^[0-9]+\.[0-9]+ ]]; then
-            RELEASE_TAG="v${RELEASE_TAG}"
-        fi
+    fi
 
+    # 3. Download from GitHub Releases via curl
+    if [ "${BINARY_STAGED}" = false ] && [ -n "${ARCH}" ] && command -v curl >/dev/null 2>&1; then
         DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/bedrock-server-manager-${RELEASE_TAG}-linux-${ARCH}.tar.gz"
         log_info "Downloading Bedrock Server Manager ${RELEASE_TAG} from GitHub (${DOWNLOAD_URL})..."
 
-        if curl -fsSL "${DOWNLOAD_URL}" -o "${STAGING_DIR}/bsm.tar.gz" 2>/dev/null; then
+        CURL_ARGS=(-fsSL)
+        if [ -n "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]; then
+            CURL_ARGS+=(-H "Authorization: Bearer ${GITHUB_TOKEN:-${GH_TOKEN}}")
+        fi
+
+        if curl "${CURL_ARGS[@]}" "${DOWNLOAD_URL}" -o "${STAGING_DIR}/bsm.tar.gz" 2>/dev/null; then
             if tar -xzf "${STAGING_DIR}/bsm.tar.gz" -C "${STAGING_DIR}" 2>/dev/null; then
                 FOUND_BIN="$(find "${STAGING_DIR}" -type f -name bedrock-server-manager | head -n 1)"
                 if [ -n "${FOUND_BIN}" ] && [ -f "${FOUND_BIN}" ]; then
