@@ -22,13 +22,13 @@ run: build
 	./$(BINARY)
 
 check:
-	@bash ./deploy/install.sh --check
+	@bash ./install.sh --check
 
 install:
-	@bash ./deploy/install.sh
+	@bash ./install.sh
 
 update:
-	@bash ./deploy/install.sh --upgrade
+	@bash ./install.sh --upgrade
 
 release:
 	@bash ./scripts/build_release.sh

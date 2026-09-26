@@ -65,6 +65,6 @@ else
     echo "Update complete! You can run the binary directly:"
     echo "  ${ROOT_DIR}/bin/bedrock-server-manager"
     echo "Or install it as a systemd service by running:"
-    echo "  sudo ./scripts/install.sh"
+    echo "  sudo ./install.sh"
     echo "=========================================================="
 fi

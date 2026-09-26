@@ -62,44 +62,86 @@
 
 ### Option B: Standalone Host Deployment (Systemd / Linux)
 
-BSM can run directly on the host without wrapping the manager itself in Docker. It interacts with the local Docker daemon (`/var/run/docker.sock`) to orchestrate BDS containers and manages the host firewall (`ufw`/`iptables`) natively.
+BSM can run directly on the host without wrapping the manager itself in Docker. It interacts with the local Docker daemon (`/var/run/docker.sock`) to orchestrate BDS containers and manages the host firewall (`ufw`/`iptables`) natively with an isolated unprivileged system user (`bedrock`).
 
-1. **One-Command Installation (as systemd service)**:
-   ```bash
-   sudo ./scripts/install.sh
-   ```
-   *This compiles the web assets & binary, installs to `/usr/local/bin`, configures `/etc/bedrock-server-manager/bsm.env`, and starts `bedrock-server-manager.service`.*
+#### 1. One-Line Remote Installer
+Run directly on any supported Linux distribution (Ubuntu, Debian, RHEL, Rocky, Fedora, Arch, Alpine):
+```bash
+curl -fsSL https://raw.githubusercontent.com/AhmadShamli/Bedrock-Server-Manager/main/install.sh | sudo bash
+```
 
-2. **Managing the Standalone Service**:
-   ```bash
-   sudo systemctl status bedrock-server-manager
-   sudo journalctl -u bedrock-server-manager -f
-   sudo systemctl restart bedrock-server-manager
-   ```
+#### 2. Local Repository Installation
+Alternatively, install or build from a local git clone:
+```bash
+git clone https://github.com/AhmadShamli/Bedrock-Server-Manager.git
+cd Bedrock-Server-Manager
+sudo ./install.sh
+```
 
-3. **Updating the Standalone Service**:
-   ```bash
-   sudo ./scripts/update.sh
-   # Or with Makefile:
-   sudo make update
-   ```
+> [!NOTE]
+> The installer displays a comprehensive host environment diagnostic report (OS, kernel, CPU, RAM, disk space, Docker socket state, and firewall statuses for UFW, IPTables, and Firewalld) and asks for interactive confirmation before making changes. Use `-y` or `--yes` for automated, non-interactive environments.
 
-4. **Running Locally / Portable (without systemd)**:
-   ```bash
-   ./scripts/build.sh
-   ./bin/bedrock-server-manager
-   ```
+#### 3. Installer Options & Usage
+
+```bash
+sudo ./install.sh [OPTIONS]
+```
+
+| Flag | Description |
+| :--- | :--- |
+| `-y`, `--yes` | Non-interactive mode (automatically answer yes to confirmation) |
+| `-u`, `--upgrade` | Upgrade existing installation to the latest release with automatic backup |
+| `-v`, `--version <tag>` | Install or upgrade to a specific release tag (e.g. `v1.1.0`) |
+| `--check` | Check current version against latest GitHub release without changing files |
+| `-m`, `--method <method>` | Source method: `download` (GitHub release), `build` (compile from source), or `local` |
+| `--skip-backup` | Skip pre-upgrade database and configuration backup |
+| `-f`, `--force` | Force reinstall or upgrade without confirmation |
+| `-h`, `--help` | Show full installer help and options |
+
+#### 4. Managing the Standalone Service
+```bash
+sudo systemctl status bedrock-server-manager
+sudo journalctl -u bedrock-server-manager -f
+sudo systemctl restart bedrock-server-manager
+```
+
+#### 5. Updating the Standalone Service
+```bash
+# Automated upgrade to the latest GitHub release:
+sudo ./install.sh --upgrade
+
+# Or compile and update from local git repository:
+git pull
+sudo ./install.sh -m build
+
+# Or with Makefile:
+sudo make update
+```
+
+#### 6. Running Locally / Portable (without systemd)
+```bash
+./scripts/build.sh
+./bin/bedrock-server-manager
+```
 
 ---
 
 ## ⚙️ Configuration Reference
 
-BSM is configured via environment variables:
+### Host Mode Configuration (`/etc/bedrock-server-manager/bsm.env`)
 
-| Variable | Default | Description |
+When running as a systemd service, BSM automatically loads its environment from `/etc/bedrock-server-manager/bsm.env` (managed with strict `0600` permissions and owned by `bedrock:bedrock`). You can also specify any custom config file when launching the binary with `--config` or `-c`:
+
+```bash
+bedrock-server-manager --config /etc/bedrock-server-manager/bsm.env
+```
+
+### Environment Variables
+
+| Variable | Default (Host / Docker) | Description |
 | :--- | :--- | :--- |
 | `PORT` | `8080` | Web dashboard & API HTTP listening port |
-| `DATA_DIR` | `data` | Directory for SQLite databases, server configs, and backups |
+| `DATA_DIR` | `/var/lib/bedrock-server-manager/data` | Storage directory for SQLite databases (`manager.db`, `metrics.db`), server files, and backups |
 | `PROXY_MODE` | `direct` | Client IP resolution mode (`direct`, `reverse_proxy`, `cloudflare`) |
 | `TRUSTED_PROXIES` | `""` | Comma-separated list of trusted upstream CIDRs (e.g. `10.0.0.0/8,172.16.0.0/12`) |
 | `FIREWALL_DRIVER` | `ufw` | Host firewall backend (`ufw`, `iptables`, `custom`, `mock`) |
@@ -108,6 +150,38 @@ BSM is configured via environment variables:
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket URI |
 | `JWT_SECRET` | *(auto-generated)* | 256-bit secret key for JWT session tokens |
 | `PEPPER` | *(auto-generated)* | Persistent pepper for keyed HMAC-SHA256 knock keys |
+
+### Customizing `DATA_DIR` Storage Location
+
+To move server configurations, worlds, and backups to a dedicated disk mount or custom directory:
+
+1. Edit `/etc/bedrock-server-manager/bsm.env`:
+   ```bash
+   DATA_DIR=/mnt/storage/bedrock-data
+   ```
+2. Create the target directory and grant ownership to the `bedrock` service account:
+   ```bash
+   sudo mkdir -p /mnt/storage/bedrock-data
+   sudo chown -R bedrock:bedrock /mnt/storage/bedrock-data
+   ```
+3. Restart the service:
+   ```bash
+   sudo systemctl restart bedrock-server-manager
+   ```
+
+> [!TIP]
+> The systemd unit file is pre-configured with `ProtectHome=false` to ensure custom paths placed under `/home` or secondary storage mounts are fully accessible to BSM.
+
+### Firewall Drivers & Diagnostic Fallback
+
+BSM provides flexible host-level UDP firewall control:
+
+- **`ufw`**: Interacts with Ubuntu/Debian Uncomplicated Firewall. If UFW is inactive or disabled on the host, BSM automatically falls back to the `iptables` driver with an informative log notice.
+- **`iptables`**: Directly manages kernel packet filter rules in a dedicated `BSM_PORT_GATE` chain across both IPv4 (`iptables`) and IPv6 (`ip6tables`).
+- **`custom`**: Executes an external script specified by `BSM_FIREWALL_SCRIPT` with arguments `allow <ip> <port>` and `revoke <ip> <port>`.
+- **`mock`**: Operates in-memory without running system firewall commands (ideal for local development or restricted environments).
+
+The installer automatically deploys `/etc/sudoers.d/bedrock-server-manager` allowing the `bedrock` user to run required firewall commands (`ufw`, `iptables`, `ip6tables`) without password prompts.
 
 ---
 
@@ -177,7 +251,7 @@ make run
 
 # Install as systemd service on Linux host
 sudo make install
-# or: sudo ./scripts/install.sh
+# or: sudo ./install.sh
 
 # Update from git, recompile, and restart service
 sudo make update
