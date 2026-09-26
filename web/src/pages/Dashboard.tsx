@@ -56,6 +56,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
   const [autostartOnBoot, setAutostartOnBoot] = useState(false);
   const [portGate, setPortGate] = useState(false);
   const [portGateMode, setPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
+  const [seed, setSeed] = useState('');
   const [creating, setCreating] = useState(false);
 
   const fetchServers = async (isManualRefresh = false) => {
@@ -109,6 +110,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
   const openDeployModal = async () => {
     setShowModal(true);
+    setSeed('');
     try {
       const suggested = await api.suggestPorts();
       if (suggested && suggested.port) {
@@ -150,6 +152,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
       await api.createServer({
         id: serverId.trim().toLowerCase().replace(/\s+/g, '-'),
         name: serverName.trim(),
+        seed: seed.trim() || undefined,
         port: Number(port),
         portv6: Number(port) + 1,
         mode,
@@ -164,6 +167,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
       setShowModal(false);
       setServerId('');
       setServerName('');
+      setSeed('');
       fetchServers();
     } catch (err: any) {
       alert(err.message || 'Failed to create server');
@@ -373,6 +377,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                             </Link>
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="text-[11px] text-slate-400">ID: {s.id}</span>
+                              {s.seed && (
+                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-obsidian-950 border border-obsidian-800 text-slate-300 font-mono">
+                                  Seed: {s.seed}
+                                </span>
+                              )}
                               <span className="text-[10px] px-1.5 py-0.2 rounded bg-obsidian-950 border border-obsidian-800 text-slate-400 uppercase">
                                 {s.mode}
                               </span>
@@ -527,6 +536,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                           <span>{s.memory_limit}</span>
                         </div>
                       </div>
+
+                      {s.seed && (
+                        <div className="mb-3 px-2.5 py-1 rounded bg-obsidian-950 border border-obsidian-800 text-[11px] font-mono text-slate-400 flex items-center justify-between">
+                          <span className="text-slate-500">Seed:</span>
+                          <span className="text-slate-200 font-semibold truncate max-w-[160px]">{s.seed}</span>
+                        </div>
+                      )}
 
                       {s.port_gate_enabled && (
                         <div className="mb-4 flex items-center justify-between px-2.5 py-1 rounded bg-emerald-950/40 border border-emerald-500/20 text-[11px] font-mono text-emerald-400">
@@ -717,6 +733,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                     <option value={8.0}>8.0 Cores</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                  <span>World Seed</span>
+                  <span className="text-[10px] text-slate-500">Optional (Leave blank for random seed)</span>
+                </label>
+                <input
+                  type="text"
+                  value={seed}
+                  onChange={(e) => setSeed(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
+                  placeholder="e.g. 123456789 or bedrock-seed"
+                />
               </div>
 
               <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-lg space-y-2.5">

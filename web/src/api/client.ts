@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, GlobalPlayer } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, GlobalPlayer, MetricsData } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -126,6 +126,10 @@ class APIClient {
     player_count: number;
   }> {
     return this.request(`/api/servers/${id}/stats`);
+  }
+
+  async getMetrics(id: string, range: string = '1h'): Promise<MetricsData> {
+    return this.request(`/api/servers/${id}/metrics?range=${encodeURIComponent(range)}`);
   }
 
   async updateServer(id: string, server: Partial<Server>): Promise<Server> {

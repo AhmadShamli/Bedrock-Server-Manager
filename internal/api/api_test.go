@@ -529,6 +529,22 @@ func TestAPIServerUpdateAndValidation(t *testing.T) {
 		t.Errorf("expected original fields to be preserved, got port=%d mem=%s", updated.Port, updated.MemoryLimit)
 	}
 
+	// Update seed
+	seedBody := []byte(`{"seed":"custom-bedrock-seed-999"}`)
+	req = httptest.NewRequest("PUT", "/api/servers/srv-upd-test", bytes.NewReader(seedBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for seed update, got %d", w.Code)
+	}
+	var seedUpdated models.Server
+	_ = json.Unmarshal(w.Body.Bytes(), &seedUpdated)
+	if seedUpdated.Seed != "custom-bedrock-seed-999" {
+		t.Errorf("expected seed 'custom-bedrock-seed-999', got '%s'", seedUpdated.Seed)
+	}
+
 	// Create another server to test port collision
 	srv2 := &models.Server{
 		ID:      "srv-upd-collision",
@@ -893,6 +909,62 @@ func TestWebSocketOriginValidation(t *testing.T) {
 	req4.Header.Set("Origin", "http://localhost:3000")
 	if !upgrader.CheckOrigin(req4) {
 		t.Errorf("expected localhost dev origin to be accepted")
+	}
+}
+
+func TestAPIServerMetrics(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	// 1. Create admin user & token
+	pwHash, _ := auth.HashPassword("TestPass1234!", 8)
+	user, err := db.CreateUser(ctx, "admin_metrics", pwHash, models.RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	token, _ := auth.GenerateJWT(jwtSecret, user.ID, user.Username, user.Role, time.Hour)
+
+	// 2. Create server
+	srv := &models.Server{
+		ID:          "srv-metrics-1",
+		Name:        "Metrics Test Server",
+		Port:        19180,
+		PortV6:      19181,
+		Status:      models.ServerStatusRunning,
+		MemoryLimit: "4G",
+		CPULimit:    3.0,
+	}
+	if err := db.CreateServer(ctx, srv); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+
+	// 3. Query metrics endpoint
+	req := httptest.NewRequest("GET", "/api/servers/srv-metrics-1/metrics?range=15m", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for metrics endpoint, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp MetricsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to decode MetricsResponse: %v", err)
+	}
+
+	if resp.ServerID != "srv-metrics-1" {
+		t.Errorf("expected ServerID 'srv-metrics-1', got '%s'", resp.ServerID)
+	}
+	if resp.CPULimit != 3.0 {
+		t.Errorf("expected CPULimit 3.0, got %f", resp.CPULimit)
+	}
+	if resp.MaxPlayers <= 0 {
+		t.Errorf("expected MaxPlayers > 0, got %d", resp.MaxPlayers)
+	}
+	if resp.Range != "15m" {
+		t.Errorf("expected range '15m', got '%s'", resp.Range)
 	}
 }
 

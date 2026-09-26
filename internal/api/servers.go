@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/configfile"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -19,14 +22,25 @@ type ServerHandler struct {
 	engine    engine.ServerEngine
 	allocator *allocator.PortAllocator
 	dataDir   string
+	telemetry *telemetry.TelemetryCollector
+	metricsDB *database.MetricsDB
 }
 
-func NewServerHandler(db *database.ManagerDB, eng engine.ServerEngine, pa *allocator.PortAllocator, dataDir string) *ServerHandler {
+func NewServerHandler(
+	db *database.ManagerDB,
+	eng engine.ServerEngine,
+	pa *allocator.PortAllocator,
+	dataDir string,
+	tc *telemetry.TelemetryCollector,
+	mdb *database.MetricsDB,
+) *ServerHandler {
 	return &ServerHandler{
 		db:        db,
 		engine:    eng,
 		allocator: pa,
 		dataDir:   dataDir,
+		telemetry: tc,
+		metricsDB: mdb,
 	}
 }
 
@@ -39,11 +53,17 @@ func (h *ServerHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dynamic live status check
+	// Dynamic live status check & seed detection
 	for i := range servers {
 		if status, err := h.engine.GetServerStatus(r.Context(), &servers[i]); err == nil && status != servers[i].Status {
 			servers[i].Status = status
 			_ = h.db.UpdateServerStatus(r.Context(), servers[i].ID, status, servers[i].ContainerID)
+		}
+		if servers[i].Seed == "" {
+			if detected := configfile.DetectServerSeed(h.dataDir, servers[i].ID); detected != "" {
+				servers[i].Seed = detected
+				_ = h.db.UpdateServer(r.Context(), &servers[i])
+			}
 		}
 	}
 
@@ -84,6 +104,14 @@ func (h *ServerHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if status, err := h.engine.GetServerStatus(r.Context(), server); err == nil && status != server.Status {
 		server.Status = status
 		_ = h.db.UpdateServerStatus(r.Context(), server.ID, status, server.ContainerID)
+	}
+
+	// Auto-detect seed from server.properties or level.dat if not yet recorded
+	if server.Seed == "" {
+		if detected := configfile.DetectServerSeed(h.dataDir, server.ID); detected != "" {
+			server.Seed = detected
+			_ = h.db.UpdateServer(r.Context(), server)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -174,6 +202,28 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Automatically merge global allowlist and permissions on deploy/create
 	_, _ = player.SyncServerWithGlobal(r.Context(), h.dataDir, s.ID, h.db, nil)
+
+	if s.Seed != "" {
+		propPath, err := configfile.SafePath(h.dataDir, s.ID, "server.properties")
+		if err == nil {
+			props, keys, _ := configfile.ReadProperties(propPath)
+			if props == nil {
+				props = make(map[string]string)
+			}
+			props["level-seed"] = s.Seed
+			hasKey := false
+			for _, k := range keys {
+				if k == "level-seed" {
+					hasKey = true
+					break
+				}
+			}
+			if !hasKey {
+				keys = append(keys, "level-seed")
+			}
+			_ = configfile.WriteProperties(propPath, props, keys)
+		}
+	}
 
 	claims := GetUserClaims(r)
 	actorName := "admin"
@@ -336,6 +386,153 @@ func (h *ServerHandler) Stats(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(stats)
 }
 
+// MetricsResponse represents the telemetry payload for charts in instance view.
+type MetricsResponse struct {
+	ServerID         string            `json:"server_id"`
+	Range            string            `json:"range"`
+	CPULimit         float64           `json:"cpu_limit"`
+	MemoryLimitBytes int64             `json:"memory_limit_bytes"`
+	MaxPlayers       int               `json:"max_players"`
+	TotalAllowlist   int               `json:"total_allowlist"`
+	Current          *models.MetricRaw `json:"current,omitempty"`
+	Series           []MetricPoint     `json:"series"`
+}
+
+type MetricPoint struct {
+	Timestamp     string  `json:"timestamp"`
+	CPUPercent    float64 `json:"cpu_percent"`
+	RAMBytes      int64   `json:"ram_bytes"`
+	ActivePlayers int     `json:"active_players"`
+}
+
+// Metrics returns time-series telemetry data and capacity bounds for charts.
+func (h *ServerHandler) Metrics(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	server, err := h.db.GetServer(r.Context(), id)
+	if err != nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	rangeParam := r.URL.Query().Get("range")
+	var duration time.Duration
+	switch rangeParam {
+	case "15m":
+		duration = 15 * time.Minute
+	case "6h":
+		duration = 6 * time.Hour
+	case "24h":
+		duration = 24 * time.Hour
+	default:
+		rangeParam = "1h"
+		duration = 1 * time.Hour
+	}
+
+	since := time.Now().UTC().Add(-duration)
+
+	var raw []models.MetricRaw
+	if h.telemetry != nil {
+		raw, _ = h.telemetry.QueryRaw(r.Context(), server.ID, since)
+	} else if h.metricsDB != nil {
+		raw, _ = h.metricsDB.QueryRaw(r.Context(), server.ID, since)
+	}
+
+	// Max players from server.properties
+	maxPlayers := 10
+	if propPath, err := configfile.SafePath(h.dataDir, server.ID, "server.properties"); err == nil {
+		if props, _, err := configfile.ReadProperties(propPath); err == nil {
+			if mpStr, ok := props["max-players"]; ok {
+				if mp, err := strconv.Atoi(mpStr); err == nil && mp > 0 {
+					maxPlayers = mp
+				}
+			}
+		}
+	}
+
+	// Total players on allowlist
+	totalAllowlist := 0
+	if alPath, err := configfile.SafePath(h.dataDir, server.ID, "allowlist.json"); err == nil {
+		if al, err := configfile.ReadAllowlist(alPath); err == nil {
+			totalAllowlist = len(al)
+		}
+	}
+
+	memBytes, _ := engine.ParseMemoryBytes(server.MemoryLimit)
+	if memBytes <= 0 {
+		memBytes = 2 * 1024 * 1024 * 1024 // Default 2GB fallback
+	}
+
+	cpuLimit := server.CPULimit
+	if cpuLimit <= 0 {
+		cpuLimit = 2.0
+	}
+
+	// Live stats if server running
+	var currentStats *models.MetricRaw
+	if server.Status == models.ServerStatusRunning {
+		if cs, err := h.engine.GetContainerStats(r.Context(), server); err == nil && cs != nil {
+			currentStats = cs
+		}
+	}
+
+	series := make([]MetricPoint, 0, len(raw))
+	if len(raw) > 200 {
+		step := float64(len(raw)) / 150.0
+		for i := 0.0; int(i) < len(raw); i += step {
+			idx := int(i)
+			series = append(series, MetricPoint{
+				Timestamp:     database.FormatTime(raw[idx].Timestamp),
+				CPUPercent:    raw[idx].CPUPercent,
+				RAMBytes:      raw[idx].RAMBytes,
+				ActivePlayers: raw[idx].PlayerCount,
+			})
+		}
+	} else {
+		for _, m := range raw {
+			series = append(series, MetricPoint{
+				Timestamp:     database.FormatTime(m.Timestamp),
+				CPUPercent:    m.CPUPercent,
+				RAMBytes:      m.RAMBytes,
+				ActivePlayers: m.PlayerCount,
+			})
+		}
+	}
+
+	// If running, ensure latest live point is included if series is empty or last point older than 5s
+	if currentStats != nil {
+		nowStr := database.FormatTime(time.Now().UTC())
+		appendCurrent := len(series) == 0
+		if !appendCurrent {
+			lastTs, err := database.ParseTime(series[len(series)-1].Timestamp)
+			if err == nil && time.Since(lastTs) > 5*time.Second {
+				appendCurrent = true
+			}
+		}
+		if appendCurrent {
+			series = append(series, MetricPoint{
+				Timestamp:     nowStr,
+				CPUPercent:    currentStats.CPUPercent,
+				RAMBytes:      currentStats.RAMBytes,
+				ActivePlayers: currentStats.PlayerCount,
+			})
+		}
+	}
+
+	resp := MetricsResponse{
+		ServerID:         server.ID,
+		Range:            rangeParam,
+		CPULimit:         cpuLimit,
+		MemoryLimitBytes: memBytes,
+		MaxPlayers:       maxPlayers,
+		TotalAllowlist:   totalAllowlist,
+		Current:          currentStats,
+		Series:           series,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 // Update updates server configuration.
 func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -358,6 +555,7 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		PortGateTimeout *int     `json:"port_gate_timeout"`
 		MemoryLimit     *string  `json:"memory_limit"`
 		CPULimit        *float64 `json:"cpu_limit"`
+		Seed            *string  `json:"seed"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -416,6 +614,28 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CPULimit != nil && *req.CPULimit > 0 {
 		existing.CPULimit = *req.CPULimit
+	}
+	if req.Seed != nil {
+		existing.Seed = *req.Seed
+		propPath, err := configfile.SafePath(h.dataDir, existing.ID, "server.properties")
+		if err == nil {
+			props, keys, _ := configfile.ReadProperties(propPath)
+			if props == nil {
+				props = make(map[string]string)
+			}
+			props["level-seed"] = *req.Seed
+			hasKey := false
+			for _, k := range keys {
+				if k == "level-seed" {
+					hasKey = true
+					break
+				}
+			}
+			if !hasKey {
+				keys = append(keys, "level-seed")
+			}
+			_ = configfile.WriteProperties(propPath, props, keys)
+		}
 	}
 
 	if err := h.db.UpdateServer(r.Context(), existing); err != nil {

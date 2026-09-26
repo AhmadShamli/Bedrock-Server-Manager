@@ -10,6 +10,12 @@ import (
 	"strings"
 )
 
+// bsmInstalledMarker is a hidden file placed inside packs installed through BSM.
+// This distinguishes user-installed addons from the many built-in BDS packs
+// (vanilla, chemistry, experimental_*, etc.) that ship in behavior_packs/ and
+// resource_packs/ by default.
+const bsmInstalledMarker = ".bsm_installed"
+
 // PackManifest represents the minimal Bedrock pack manifest.json.
 type PackManifest struct {
 	FormatVersion int `json:"format_version"`
@@ -50,7 +56,14 @@ func ListInstalledPacks(serverDir string) ([]InstalledPack, error) {
 			if !entry.IsDir() {
 				continue
 			}
-			manifestPath := filepath.Join(fullPath, entry.Name(), "manifest.json")
+			packDir := filepath.Join(fullPath, entry.Name())
+
+			// Only list packs installed through BSM (skip built-in BDS packs)
+			if _, err := os.Stat(filepath.Join(packDir, bsmInstalledMarker)); err != nil {
+				continue
+			}
+
+			manifestPath := filepath.Join(packDir, "manifest.json")
 			data, err := os.ReadFile(manifestPath)
 			if err != nil {
 				continue
@@ -195,6 +208,9 @@ func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, e
 		rc.Close()
 		outFile.Close()
 	}
+
+	// Write marker file so ListInstalledPacks knows this is a user-installed pack
+	_ = os.WriteFile(filepath.Join(targetDir, bsmInstalledMarker), []byte("installed-by-bsm\n"), 0644)
 
 	verStr := "1.0.0"
 	if len(mf.Header.Version) >= 3 {

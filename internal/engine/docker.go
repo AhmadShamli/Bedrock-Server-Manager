@@ -105,16 +105,21 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 
 	containerName := fmt.Sprintf("bsm-%s", server.ID)
 
+	envVars := []string{
+		"EULA=TRUE",
+		fmt.Sprintf("SERVER_NAME=%s", server.Name),
+		fmt.Sprintf("GAMEMODE=%s", server.Mode),
+		fmt.Sprintf("DIFFICULTY=%s", server.Difficulty),
+		"SERVER_PORT=19132",
+		"SERVER_PORT_V6=19133",
+	}
+	if server.Seed != "" {
+		envVars = append(envVars, fmt.Sprintf("LEVEL_SEED=%s", server.Seed))
+	}
+
 	config := &container.Config{
-		Image: imageTag,
-		Env: []string{
-			"EULA=TRUE",
-			fmt.Sprintf("SERVER_NAME=%s", server.Name),
-			fmt.Sprintf("GAMEMODE=%s", server.Mode),
-			fmt.Sprintf("DIFFICULTY=%s", server.Difficulty),
-			"SERVER_PORT=19132",
-			"SERVER_PORT_V6=19133",
-		},
+		Image:     imageTag,
+		Env:       envVars,
 		Tty:       true,
 		OpenStdin: true,
 		StdinOnce: false,

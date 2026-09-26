@@ -54,6 +54,33 @@ func (tc *TelemetryCollector) Ingest(serverID string, cpuPercent float64, ramByt
 	})
 }
 
+// QueryRaw retrieves metrics for a server since a given timestamp, combining database records and in-memory buffer.
+func (tc *TelemetryCollector) QueryRaw(ctx context.Context, serverID string, since time.Time) ([]models.MetricRaw, error) {
+	var dbRecords []models.MetricRaw
+	var err error
+	if tc.metricsDB != nil {
+		dbRecords, err = tc.metricsDB.QueryRaw(ctx, serverID, since)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	tc.mu.Lock()
+	var inMemory []models.MetricRaw
+	for _, m := range tc.buffer {
+		if m.ServerID == serverID && !m.Timestamp.Before(since) {
+			inMemory = append(inMemory, m)
+		}
+	}
+	tc.mu.Unlock()
+
+	if len(inMemory) == 0 {
+		return dbRecords, nil
+	}
+
+	return append(dbRecords, inMemory...), nil
+}
+
 // Flush writes buffered samples to disk in a single transaction.
 func (tc *TelemetryCollector) Flush(ctx context.Context) error {
 	tc.mu.Lock()

@@ -13,23 +13,26 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/scheduler"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
 type RouterOptions struct {
-	DB            *database.ManagerDB
-	IPResolver    *ipresolver.Resolver
-	RateLimiter   *auth.RateLimiter
-	Engine        engine.ServerEngine
-	Firewall      firewall.FirewallDriver
-	Scheduler     *scheduler.TaskScheduler
-	PortAllocator *allocator.PortAllocator
-	PlayerManager *player.Manager
-	DataDir       string
-	JWTSecret     []byte
-	Pepper        string
-	WebFS         fs.FS
+	DB                 *database.ManagerDB
+	IPResolver         *ipresolver.Resolver
+	RateLimiter        *auth.RateLimiter
+	Engine             engine.ServerEngine
+	Firewall           firewall.FirewallDriver
+	Scheduler          *scheduler.TaskScheduler
+	PortAllocator      *allocator.PortAllocator
+	PlayerManager      *player.Manager
+	DataDir            string
+	JWTSecret          []byte
+	Pepper             string
+	WebFS              fs.FS
+	TelemetryCollector *telemetry.TelemetryCollector
+	MetricsDB          *database.MetricsDB
 }
 
 // NewRouter constructs and configures the Chi router.
@@ -43,7 +46,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	mw := NewMiddleware(opts.DB, opts.IPResolver, opts.RateLimiter, opts.JWTSecret)
 	authHandler := NewAuthHandler(opts.DB, opts.RateLimiter, opts.JWTSecret)
 	systemHandler := NewSystemHandler(opts.DB)
-	serverHandler := NewServerHandler(opts.DB, opts.Engine, opts.PortAllocator, opts.DataDir)
+	serverHandler := NewServerHandler(opts.DB, opts.Engine, opts.PortAllocator, opts.DataDir, opts.TelemetryCollector, opts.MetricsDB)
 	knockHandler := NewKnockHandler(opts.DB, opts.RateLimiter, opts.Pepper, opts.Firewall)
 	playerHubHandler := NewPlayerHubHandler(serverHandler, opts.PlayerManager)
 	backupHandler := NewBackupHandler(opts.DB, opts.Engine, opts.DataDir)
@@ -97,6 +100,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 				srvGroup.Get("/servers/{id}", serverHandler.Get)
 				srvGroup.Get("/servers/{id}/stats", serverHandler.Stats)
+				srvGroup.Get("/servers/{id}/metrics", serverHandler.Metrics)
 				srvGroup.Get("/servers/{id}/console/ws", serverHandler.ConsoleWS)
 				srvGroup.Post("/servers/{id}/start", serverHandler.Start)
 				srvGroup.Post("/servers/{id}/stop", serverHandler.Stop)

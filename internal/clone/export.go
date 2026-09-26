@@ -112,6 +112,7 @@ func CloneServer(
 		PortGateTimeout: srcServer.PortGateTimeout,
 		MemoryLimit:     srcServer.MemoryLimit,
 		CPULimit:        srcServer.CPULimit,
+		Seed:            srcServer.Seed,
 	}
 
 	// Create container in engine

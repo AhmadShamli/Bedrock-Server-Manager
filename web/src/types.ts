@@ -21,6 +21,7 @@ export interface Server {
   memory_limit: string;
   cpu_limit: number;
   container_id?: string;
+  seed?: string;
   created_at: string;
   updated_at: string;
 }
@@ -115,5 +116,27 @@ export interface GlobalPlayer {
   ignores_player_limit: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface MetricPoint {
+  timestamp: string;
+  cpu_percent: number;
+  ram_bytes: number;
+  active_players: number;
+}
+
+export interface MetricsData {
+  server_id: string;
+  range: string;
+  cpu_limit: number;
+  memory_limit_bytes: number;
+  max_players: number;
+  total_allowlist: number;
+  current?: {
+    cpu_percent: number;
+    ram_bytes: number;
+    player_count: number;
+  };
+  series: MetricPoint[];
 }
 

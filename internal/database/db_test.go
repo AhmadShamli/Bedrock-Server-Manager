@@ -57,6 +57,7 @@ func TestManagerDB(t *testing.T) {
 		PortGateTimeout: 3600,
 		MemoryLimit:     "4G",
 		CPULimit:        2.5,
+		Seed:            "1234567890",
 	}
 	if err := db.CreateServer(ctx, srv); err != nil {
 		t.Fatalf("CreateServer failed: %v", err)
@@ -66,7 +67,7 @@ func TestManagerDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetServer failed: %v", err)
 	}
-	if gotSrv.Name != "Survival World" || !gotSrv.AutostartOnBoot || !gotSrv.PortGateEnabled {
+	if gotSrv.Name != "Survival World" || !gotSrv.AutostartOnBoot || !gotSrv.PortGateEnabled || gotSrv.Seed != "1234567890" {
 		t.Errorf("unexpected server data: %+v", gotSrv)
 	}
 

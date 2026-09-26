@@ -34,4 +34,18 @@ func TestTelemetryCollector(t *testing.T) {
 	if samples[0].CPUPercent != 10.5 || samples[1].PlayerCount != 5 {
 		t.Errorf("unexpected sample values: %+v", samples)
 	}
+
+	// Ingest an in-memory sample that is not yet flushed
+	col.Ingest("srv-1", 20.0, 1024*1024*600, 6)
+
+	combined, err := col.QueryRaw(ctx, "srv-1", time.Now().Add(-1*time.Minute))
+	if err != nil {
+		t.Fatalf("col.QueryRaw failed: %v", err)
+	}
+	if len(combined) != 3 {
+		t.Fatalf("expected 3 total samples (2 disk + 1 in-memory), got %d", len(combined))
+	}
+	if combined[2].CPUPercent != 20.0 || combined[2].PlayerCount != 6 {
+		t.Errorf("unexpected combined sample: %+v", combined[2])
+	}
 }

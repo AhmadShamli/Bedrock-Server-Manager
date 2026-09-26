@@ -4,12 +4,13 @@ import {
   ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink,
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
-  Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound
+  Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer } from '../types';
+import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
+import { TelemetryCharts } from '../components/TelemetryCharts';
 
 interface ServerHubProps {
   user: User;
@@ -40,6 +41,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [newKeyDurationMinutes, setNewKeyDurationMinutes] = useState(120);
   const [createdKeySecret, setCreatedKeySecret] = useState<string | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
+  const [copiedSeed, setCopiedSeed] = useState(false);
 
   // Server Configuration Edit state
   const [editServerName, setEditServerName] = useState('');
@@ -48,6 +50,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [editServerPortV6, setEditServerPortV6] = useState(19133);
   const [editServerMode, setEditServerMode] = useState('survival');
   const [editServerDifficulty, setEditServerDifficulty] = useState('normal');
+  const [editServerSeed, setEditServerSeed] = useState('');
   const [editServerMemLimit, setEditServerMemLimit] = useState('2G');
   const [editServerCpuLimit, setEditServerCpuLimit] = useState(2.0);
   const [editServerAutostart, setEditServerAutostart] = useState(false);
@@ -80,6 +83,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   // Live Stats state
   const [stats, setStats] = useState<{ cpu_percent: number; ram_bytes: number; player_count: number } | null>(null);
+
+  // Historical Telemetry Metrics state
+  const [metrics, setMetrics] = useState<MetricsData | null>(null);
+  const [metricsRange, setMetricsRange] = useState<'15m' | '1h' | '6h' | '24h'>('1h');
+  const [metricsLoading, setMetricsLoading] = useState(false);
 
   // Player Hub & Chat state
   const [onlinePlayers, setOnlinePlayers] = useState<Array<{ gamertag: string; xuid: string; joined_at: string }>>([]);
@@ -226,6 +234,32 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     return () => clearInterval(interval);
   }, [id, server?.status]);
 
+  const fetchMetrics = async (range: '15m' | '1h' | '6h' | '24h' = metricsRange, silent = false) => {
+    if (!id) return;
+    if (!silent) setMetricsLoading(true);
+    try {
+      const data = await api.getMetrics(id, range);
+      setMetrics(data);
+    } catch {
+      // Quietly ignore telemetry fetch errors
+    } finally {
+      if (!silent) setMetricsLoading(false);
+    }
+  };
+
+  // Historical Telemetry Poller
+  useEffect(() => {
+    if (!id || activeTab !== 'overview') return;
+    fetchMetrics(metricsRange);
+
+    const intervalTime = server?.status === 'running' ? 8000 : 30000;
+    const interval = setInterval(() => {
+      fetchMetrics(metricsRange, true);
+    }, intervalTime);
+
+    return () => clearInterval(interval);
+  }, [id, activeTab, metricsRange, server?.status]);
+
   // Fetch tab data when active tab switches
   useEffect(() => {
     if (!id) return;
@@ -261,6 +295,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setEditServerPortV6(server.portv6);
       setEditServerMode(server.mode);
       setEditServerDifficulty(server.difficulty);
+      setEditServerSeed(server.seed || '');
       setEditServerMemLimit(server.memory_limit);
       setEditServerCpuLimit(server.cpu_limit || 2.0);
       setEditServerAutostart(server.autostart_on_boot);
@@ -311,6 +346,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       const updated = await api.updateServer(id, {
         name: editServerName,
         version: editServerVersion.trim() || undefined,
+        seed: editServerSeed.trim(),
         port: Number(editServerPort),
         portv6: Number(editServerPortV6),
         mode: editServerMode,
@@ -439,6 +475,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     setConfigSaving(true);
     try {
       await api.updateProperties(id, properties, propKeys);
+      if (properties && properties['level-seed'] !== undefined) {
+        setServer((prev) => (prev ? { ...prev, seed: properties['level-seed'] } : null));
+        setEditServerSeed(properties['level-seed']);
+      }
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 2500);
     } catch (err: any) {
@@ -785,8 +825,18 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 {server.status}
               </span>
             </div>
-            <div className="text-xs text-slate-400 font-mono mt-0.5">
-              ID: {server.id} | UDP: {server.port} | v{server.version}
+            <div className="text-xs text-slate-400 font-mono mt-0.5 flex flex-wrap items-center gap-x-2">
+              <span>ID: {server.id}</span>
+              <span>•</span>
+              <span>UDP: {server.port}</span>
+              <span>•</span>
+              <span>v{server.version}</span>
+              {server.seed && (
+                <>
+                  <span>•</span>
+                  <span className="text-emerald-400/90 font-medium">Seed: {server.seed}</span>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -925,7 +975,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
       {/* OVERVIEW TAB */}
       {activeTab === 'overview' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 md:col-span-2 flex flex-col h-[520px]">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
@@ -970,6 +1021,50 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
           </div>
 
           <div className="space-y-6">
+            {/* World Information & Seed */}
+            <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
+                  <Compass className="w-4 h-4 text-emerald-400" />
+                  <span>World & Environment</span>
+                </h3>
+                {server.seed && (
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(server.seed || '');
+                      setCopiedSeed(true);
+                      setTimeout(() => setCopiedSeed(false), 2000);
+                    }}
+                    title="Copy world seed"
+                    className="px-2 py-0.5 rounded bg-obsidian-950 border border-obsidian-800 hover:border-emerald-500/40 text-slate-400 hover:text-emerald-400 text-[10px] font-mono flex items-center gap-1 transition-colors"
+                  >
+                    {copiedSeed ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedSeed ? 'Copied' : 'Copy'}</span>
+                  </button>
+                )}
+              </div>
+              <div className="space-y-3 font-mono text-xs">
+                <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                  <span className="text-slate-400">World Seed</span>
+                  {server.seed ? (
+                    <span className="text-emerald-400 font-bold font-mono tracking-wide select-all">
+                      {server.seed}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500 italic">Random / Default</span>
+                  )}
+                </div>
+                <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                  <span className="text-slate-400">Game Mode</span>
+                  <span className="text-slate-200 capitalize">{server.mode}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Difficulty</span>
+                  <span className="text-slate-200 capitalize">{server.difficulty}</span>
+                </div>
+              </div>
+            </div>
+
             <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
               <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Hardware Limits</h3>
               <div className="space-y-3 font-mono text-xs">
@@ -1011,7 +1106,20 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             )}
           </div>
         </div>
-      )}
+
+        {/* Telemetry Resource & Player Charts */}
+        <TelemetryCharts
+          metrics={metrics}
+          loading={metricsLoading}
+          timeRange={metricsRange}
+          onTimeRangeChange={(r) => {
+            setMetricsRange(r);
+            fetchMetrics(r);
+          }}
+          serverStatus={server.status}
+        />
+      </div>
+    )}
 
       {/* PLAYERS & CHAT TAB */}
       {activeTab === 'players' && (
@@ -1830,6 +1938,20 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     <option value="hard">Hard</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-bold flex items-center justify-between">
+                  <span>World Seed</span>
+                  <span className="text-[10px] text-slate-500 font-normal">Seed for world generation. Changes apply to newly generated chunks.</span>
+                </label>
+                <input
+                  type="text"
+                  value={editServerSeed}
+                  onChange={(e) => setEditServerSeed(e.target.value)}
+                  placeholder="e.g. 123456789 or custom-seed (leave empty for random seed)"
+                  className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500 font-mono"
+                />
               </div>
 
               <div className="pt-2 border-t border-obsidian-800/60 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">

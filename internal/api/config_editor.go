@@ -35,6 +35,19 @@ func (h *ServerHandler) GetProperties(w http.ResponseWriter, r *http.Request) {
 		keys = []string{}
 	}
 
+	// Ensure level-seed is present in keys and properties
+	if _, exists := props["level-seed"]; !exists {
+		seedVal := ""
+		if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv != nil {
+			seedVal = srv.Seed
+		}
+		if seedVal == "" {
+			seedVal = configfile.DetectServerSeed(h.dataDir, serverID)
+		}
+		props["level-seed"] = seedVal
+		keys = append(keys, "level-seed")
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"properties": props,
@@ -63,6 +76,16 @@ func (h *ServerHandler) UpdateProperties(w http.ResponseWriter, r *http.Request)
 	if err := configfile.WriteProperties(propPath, payload.Properties, payload.Keys); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to write properties: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
+	}
+
+	// Synchronize level-seed back to server metadata record in database
+	if sVal, exists := payload.Properties["level-seed"]; exists {
+		if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv != nil {
+			if srv.Seed != sVal {
+				srv.Seed = sVal
+				_ = h.db.UpdateServer(r.Context(), srv)
+			}
+		}
 	}
 
 	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{

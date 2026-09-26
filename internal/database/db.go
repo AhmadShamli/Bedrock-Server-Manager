@@ -84,8 +84,11 @@ func OpenManagerDB(dbPath string) (*ManagerDB, error) {
 
 // Migrate executes primary schema migrations.
 func (db *ManagerDB) Migrate(ctx context.Context) error {
-	_, err := db.ExecContext(ctx, ManagerSchemaSQL)
-	return err
+	if _, err := db.ExecContext(ctx, ManagerSchemaSQL); err != nil {
+		return err
+	}
+	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN seed TEXT NOT NULL DEFAULT ''")
+	return nil
 }
 
 // OpenMetricsDB opens the telemetry time-series database and runs migrations.
@@ -293,11 +296,11 @@ func (db *ManagerDB) CreateServer(ctx context.Context, s *models.Server) error {
 		INSERT INTO servers (
 			id, name, version, port, portv6, status, mode, difficulty,
 			autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-			memory_limit, cpu_limit, container_id, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			memory_limit, cpu_limit, container_id, seed, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Name, s.Version, s.Port, s.PortV6, s.Status, s.Mode, s.Difficulty,
 		autostartInt, portGateInt, s.PortGateMode, s.PortGateTimeout,
-		s.MemoryLimit, s.CPULimit, s.ContainerID, nowStr, nowStr,
+		s.MemoryLimit, s.CPULimit, s.ContainerID, s.Seed, nowStr, nowStr,
 	)
 	return err
 }
@@ -310,12 +313,12 @@ func (db *ManagerDB) GetServer(ctx context.Context, id string) (*models.Server, 
 	err := db.QueryRowContext(ctx, `
 		SELECT id, name, version, port, portv6, status, mode, difficulty,
 		       autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-		       memory_limit, cpu_limit, container_id, created_at, updated_at
+		       memory_limit, cpu_limit, container_id, seed, created_at, updated_at
 		FROM servers WHERE id = ?`, id,
 	).Scan(
 		&s.ID, &s.Name, &s.Version, &s.Port, &s.PortV6, &s.Status, &s.Mode, &s.Difficulty,
 		&autostartInt, &portGateInt, &s.PortGateMode, &s.PortGateTimeout,
-		&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &createdAtStr, &updatedAtStr,
+		&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, err
@@ -335,7 +338,7 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, name, version, port, portv6, status, mode, difficulty,
 		       autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-		       memory_limit, cpu_limit, container_id, created_at, updated_at
+		       memory_limit, cpu_limit, container_id, seed, created_at, updated_at
 		FROM servers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -351,7 +354,7 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Version, &s.Port, &s.PortV6, &s.Status, &s.Mode, &s.Difficulty,
 			&autostartInt, &portGateInt, &s.PortGateMode, &s.PortGateTimeout,
-			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &createdAtStr, &updatedAtStr,
+			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &createdAtStr, &updatedAtStr,
 		); err != nil {
 			return nil, err
 		}
@@ -394,11 +397,11 @@ func (db *ManagerDB) UpdateServer(ctx context.Context, s *models.Server) error {
 		UPDATE servers SET
 			name = ?, version = ?, port = ?, portv6 = ?, mode = ?, difficulty = ?,
 			autostart_on_boot = ?, port_gate_enabled = ?, port_gate_mode = ?, port_gate_timeout = ?,
-			memory_limit = ?, cpu_limit = ?, updated_at = ?
+			memory_limit = ?, cpu_limit = ?, seed = ?, updated_at = ?
 		WHERE id = ?`,
 		s.Name, s.Version, s.Port, s.PortV6, s.Mode, s.Difficulty,
 		autostartInt, portGateInt, s.PortGateMode, s.PortGateTimeout,
-		s.MemoryLimit, s.CPULimit, nowStr, s.ID,
+		s.MemoryLimit, s.CPULimit, s.Seed, nowStr, s.ID,
 	)
 	return err
 }

@@ -273,10 +273,12 @@ func main() {
 		Scheduler:     taskScheduler,
 		PortAllocator: portAlloc,
 		PlayerManager: playerMgr,
-		DataDir:       cfg.DataDir,
-		JWTSecret:     []byte(jwtSecretStr),
-		Pepper:        pepperStr,
-		WebFS:         web.DistFS(),
+		DataDir:            cfg.DataDir,
+		JWTSecret:          []byte(jwtSecretStr),
+		Pepper:             pepperStr,
+		WebFS:              web.DistFS(),
+		TelemetryCollector: telemetryCollector,
+		MetricsDB:          metricsDB,
 	})
 
 	// 13. Start HTTP Server
