@@ -23,15 +23,34 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/scheduler"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/webhook"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/web"
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "version", "-v", "--version":
+			fmt.Printf("%s v%s (Linux static) - %s\n", version.AppName, version.Version, version.RepositoryURL)
+			return
+		case "help", "-h", "--help":
+			fmt.Printf("Usage: %s [serve|version|help]\n\nCommands:\n  serve    Run the Bedrock Server Manager daemon (default)\n  version  Display current version and repository info\n  help     Display usage help\n", os.Args[0])
+			return
+		case "serve":
+			// Proceed to daemon start
+		default:
+			if len(os.Args[1]) > 0 && os.Args[1][0] == '-' {
+				fmt.Fprintf(os.Stderr, "Unknown flag: %s\nRun '%s help' for usage.\n", os.Args[1], os.Args[0])
+				os.Exit(1)
+			}
+		}
+	}
+
 	cfg := config.LoadConfig()
 
 	log.Println("======================================================")
-	log.Println("     BEDROCK SERVER MANAGER (BSM) - DAEMON START      ")
+	log.Printf("     %s v%s - DAEMON START      \n", version.AppName, version.Version)
 	log.Println("======================================================")
 
 	// 1. Open Primary Database

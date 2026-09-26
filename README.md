@@ -49,21 +49,46 @@
 
 ## 🚀 Quickstart
 
-### Using Docker Compose (Recommended)
+### Option A: Using Docker Compose
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/AhmadShamli/Bedrock-Server-Manager.git
-   cd Bedrock-Server-Manager
-   ```
-
-2. Start the daemon with Docker Compose:
+1. Start the daemon with Docker Compose:
    ```bash
    docker compose up -d
    ```
+2. Open your browser to `http://localhost:8080`.
+3. Follow the initial setup wizard to create your primary administrator account.
 
-3. Open your browser to `http://localhost:8080`.
-4. Follow the initial setup wizard to create your primary administrator account.
+---
+
+### Option B: Standalone Host Deployment (Systemd / Linux)
+
+BSM can run directly on the host without wrapping the manager itself in Docker. It interacts with the local Docker daemon (`/var/run/docker.sock`) to orchestrate BDS containers and manages the host firewall (`ufw`/`iptables`) natively.
+
+1. **One-Command Installation (as systemd service)**:
+   ```bash
+   sudo ./scripts/install.sh
+   ```
+   *This compiles the web assets & binary, installs to `/usr/local/bin`, configures `/etc/bedrock-server-manager/bsm.env`, and starts `bedrock-server-manager.service`.*
+
+2. **Managing the Standalone Service**:
+   ```bash
+   sudo systemctl status bedrock-server-manager
+   sudo journalctl -u bedrock-server-manager -f
+   sudo systemctl restart bedrock-server-manager
+   ```
+
+3. **Updating the Standalone Service**:
+   ```bash
+   sudo ./scripts/update.sh
+   # Or with Makefile:
+   sudo make update
+   ```
+
+4. **Running Locally / Portable (without systemd)**:
+   ```bash
+   ./scripts/build.sh
+   ./bin/bedrock-server-manager
+   ```
 
 ---
 
@@ -137,12 +162,26 @@ Execute the full test suite across all packages:
 go test -v ./...
 ```
 
-### Building Binary
-Build the frontend assets and compile the static single-binary:
+### Building Binary & Makefile Commands
+
+BSM provides convenient build scripts and Makefile shortcuts:
+
 ```bash
-cd web && npm run build && cd ..
-go build -o bin/bedrock-server-manager ./cmd/manager
-./bin/bedrock-server-manager
+# Compile web assets and binary
+make build
+# or: ./scripts/build.sh
+
+# Run standalone binary directly
+make run
+# or: ./bin/bedrock-server-manager
+
+# Install as systemd service on Linux host
+sudo make install
+# or: sudo ./scripts/install.sh
+
+# Update from git, recompile, and restart service
+sudo make update
+# or: sudo ./scripts/update.sh
 ```
 
 ---

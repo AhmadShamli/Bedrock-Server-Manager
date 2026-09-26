@@ -1,0 +1,2 @@
+# Restricted execution rights for unprivileged 'bedrock' user
+bedrock ALL=(root) NOPASSWD: /usr/sbin/ufw *, /usr/sbin/iptables *, /usr/sbin/ip6tables *, /usr/bin/nsenter --net=/proc/1/ns/net *

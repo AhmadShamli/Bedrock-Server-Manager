@@ -1,0 +1,30 @@
+[Unit]
+Description=Bedrock Server Manager (BSM) Daemon
+Documentation=https://github.com/AhmadShamli/Bedrock-Server-Manager
+After=network.target network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+User=bedrock
+Group=bedrock
+SupplementaryGroups=docker
+EnvironmentFile=-/etc/bedrock-server-manager/bsm.env
+ExecStart=/usr/local/bin/bedrock-server-manager
+WorkingDirectory=/var/lib/bedrock-server-manager
+Restart=always
+RestartSec=3s
+LimitNOFILE=65536
+
+# Process security and networking capabilities for host firewall management
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Filesystem sandboxing
+ProtectSystem=full
+ProtectHome=true
+NoNewPrivileges=false
+ReadWritePaths=/var/lib/bedrock-server-manager /run/bedrock-server-manager -/etc/ufw
+
+[Install]
+WantedBy=multi-user.target
