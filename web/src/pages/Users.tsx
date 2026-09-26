@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Shield, UserPlus, Key, Trash2, Server, Check, Loader2, AlertCircle, Clock, Save } from 'lucide-react';
 import { api } from '../api/client';
 import { User, Server as ServerType } from '../types';
+import { Pagination } from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 interface UsersPageProps {
   currentUser: User;
@@ -13,6 +15,15 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
   const [userServerMap, setUserServerMap] = useState<Record<number, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const {
+    currentPage,
+    pageSize,
+    totalItems,
+    paginatedItems: paginatedUsers,
+    setCurrentPage,
+    setPageSize,
+  } = usePagination(users, 10);
 
   // System Settings state
   const [heartbeatSec, setHeartbeatSec] = useState(10);
@@ -212,89 +223,101 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
             <span>Loading accounts...</span>
           </div>
         ) : (
-          <table className="w-full text-left font-mono text-xs">
-            <thead className="bg-obsidian-950/80 text-slate-400 border-b border-obsidian-800 uppercase">
-              <tr>
-                <th className="px-6 py-3.5">User</th>
-                <th className="px-6 py-3.5">Role</th>
-                <th className="px-6 py-3.5">Assigned Server Access</th>
-                <th className="px-6 py-3.5">Created At</th>
-                <th className="px-6 py-3.5 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-obsidian-800">
-              {users.map((u) => {
-                const isSelf = u.id === currentUser.id;
-                const assigned = userServerMap[u.id] || [];
-                return (
-                  <tr key={u.id} className="hover:bg-obsidian-850/50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center space-x-2.5">
-                        <div className="w-7 h-7 rounded-lg bg-obsidian-800 border border-obsidian-700 flex items-center justify-center text-slate-300 font-bold">
-                          {u.username.charAt(0).toUpperCase()}
-                        </div>
-                        <div>
-                          <span className="font-bold text-slate-100">{u.username}</span>
-                          {isSelf && <span className="ml-2 text-[10px] text-emerald-400 font-bold">(You)</span>}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                          u.role === 'admin'
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                            : 'bg-cyber-cyan/10 text-cyber-cyan border border-cyber-cyan/30'
-                        }`}
-                      >
-                        {u.role}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-slate-300">
-                      {u.role === 'admin' ? (
-                        <span className="text-slate-400 italic">All Servers (Full Admin Access)</span>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <span className="text-slate-300 font-bold">
-                            {assigned.length} {assigned.length === 1 ? 'server' : 'servers'}
-                          </span>
-                          <button
-                            onClick={() => handleOpenAccessModal(u)}
-                            className="px-2 py-0.5 rounded bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 hover:text-emerald-400 text-[10px] border border-obsidian-700 transition-colors"
-                          >
-                            Configure
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-slate-400">
-                      {new Date(u.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-6 py-4 text-right space-x-2">
-                      <button
-                        onClick={() => {
-                          setPwResetUser(u);
-                          setResetPasswordVal('');
-                        }}
-                        title="Reset Password"
-                        className="p-1.5 rounded bg-obsidian-800 text-slate-300 hover:bg-emerald-600 hover:text-slate-950 transition-colors"
-                      >
-                        <Key className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteUser(u)}
-                        disabled={isSelf}
-                        title={isSelf ? 'Cannot delete your own account' : 'Delete User'}
-                        className="p-1.5 rounded bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-slate-950 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
+          <div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left font-mono text-xs">
+                <thead className="bg-obsidian-950/80 text-slate-400 border-b border-obsidian-800 uppercase">
+                  <tr>
+                    <th className="px-6 py-3.5">User</th>
+                    <th className="px-6 py-3.5">Role</th>
+                    <th className="px-6 py-3.5">Assigned Server Access</th>
+                    <th className="px-6 py-3.5">Created At</th>
+                    <th className="px-6 py-3.5 text-right">Actions</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody className="divide-y divide-obsidian-800">
+                  {paginatedUsers.map((u) => {
+                    const isSelf = u.id === currentUser.id;
+                    const assigned = userServerMap[u.id] || [];
+                    return (
+                      <tr key={u.id} className="hover:bg-obsidian-850/50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-obsidian-800 border border-obsidian-700 flex items-center justify-center text-slate-300 font-bold">
+                              {u.username.charAt(0).toUpperCase()}
+                            </div>
+                            <div>
+                              <span className="font-bold text-slate-100">{u.username}</span>
+                              {isSelf && <span className="ml-2 text-[10px] text-emerald-400 font-bold">(You)</span>}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                              u.role === 'admin'
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                                : 'bg-cyber-cyan/10 text-cyber-cyan border border-cyber-cyan/30'
+                            }`}
+                          >
+                            {u.role}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-slate-300">
+                          {u.role === 'admin' ? (
+                            <span className="text-slate-400 italic">All Servers (Full Admin Access)</span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="text-slate-300 font-bold">
+                                {assigned.length} {assigned.length === 1 ? 'server' : 'servers'}
+                              </span>
+                              <button
+                                onClick={() => handleOpenAccessModal(u)}
+                                className="px-2 py-0.5 rounded bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 hover:text-emerald-400 text-[10px] border border-obsidian-700 transition-colors"
+                              >
+                                Configure
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-slate-400">
+                          {new Date(u.created_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-6 py-4 text-right space-x-2">
+                          <button
+                            onClick={() => {
+                              setPwResetUser(u);
+                              setResetPasswordVal('');
+                            }}
+                            title="Reset Password"
+                            className="p-1.5 rounded bg-obsidian-800 text-slate-300 hover:bg-emerald-600 hover:text-slate-950 transition-colors"
+                          >
+                            <Key className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteUser(u)}
+                            disabled={isSelf}
+                            title={isSelf ? 'Cannot delete your own account' : 'Delete User'}
+                            className="p-1.5 rounded bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-slate-950 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              currentPage={currentPage}
+              totalItems={totalItems}
+              pageSize={pageSize}
+              onPageChange={setCurrentPage}
+              onPageSizeChange={setPageSize}
+              pageSizeOptions={[5, 10, 20, 50]}
+            />
+          </div>
         )}
       </div>
 

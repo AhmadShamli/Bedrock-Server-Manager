@@ -1,6 +1,6 @@
 # Binaries and local builds
 bin/
-dist/
+/dist/
 *.exe
 *.dll
 *.so

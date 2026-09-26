@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Clock, Play, Trash2, Plus, Server, AlertCircle, RefreshCw, Pencil } from 'lucide-react';
 import { api } from '../api/client';
 import { Task, Server as ServerType } from '../types';
+import { Pagination } from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 export const Tasks: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -9,6 +11,15 @@ export const Tasks: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  const {
+    currentPage,
+    pageSize,
+    totalItems,
+    paginatedItems: paginatedTasks,
+    setCurrentPage,
+    setPageSize,
+  } = usePagination(tasks, 10);
 
   // Form state
   const [name, setName] = useState('');
@@ -194,7 +205,7 @@ export const Tasks: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-obsidian-800">
-              {tasks.map((task) => {
+              {paginatedTasks.map((task) => {
                 const srv = servers.find((s) => s.id === task.server_id);
                 return (
                   <tr key={task.id} className="hover:bg-obsidian-850/50 transition-colors">
@@ -264,6 +275,14 @@ export const Tasks: React.FC = () => {
               })}
             </tbody>
           </table>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+            pageSizeOptions={[5, 10, 20, 50]}
+          />
         </div>
       )}
 

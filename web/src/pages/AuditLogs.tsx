@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { History, Search, Download, RefreshCw, AlertCircle, Shield } from 'lucide-react';
 import { api } from '../api/client';
 import { AuditLog } from '../types';
+import { Pagination } from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 export const AuditLogs: React.FC = () => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
@@ -13,7 +15,7 @@ export const AuditLogs: React.FC = () => {
   const loadLogs = async () => {
     try {
       setLoading(true);
-      const data = await api.listAuditLogs(100, 0);
+      const data = await api.listAuditLogs(500, 0);
       setLogs(data);
     } catch (err: any) {
       setError(err.message || 'Failed to load audit logs');
@@ -40,6 +42,15 @@ export const AuditLogs: React.FC = () => {
     }
     return true;
   });
+
+  const {
+    currentPage,
+    pageSize,
+    totalItems,
+    paginatedItems: paginatedLogs,
+    setCurrentPage,
+    setPageSize,
+  } = usePagination(filteredLogs, 25);
 
   const exportJSON = () => {
     const blob = new Blob([JSON.stringify(filteredLogs, null, 2)], { type: 'application/json' });
@@ -135,45 +146,55 @@ export const AuditLogs: React.FC = () => {
         </div>
       ) : (
         <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl overflow-hidden shadow-xl">
-          <table className="w-full text-left font-mono text-xs">
-            <thead className="bg-obsidian-950/80 text-slate-400 border-b border-obsidian-800 uppercase tracking-wider">
-              <tr>
-                <th className="px-6 py-3">Timestamp</th>
-                <th className="px-6 py-3">Actor</th>
-                <th className="px-6 py-3">Action</th>
-                <th className="px-6 py-3">Target</th>
-                <th className="px-6 py-3">Client IP</th>
-                <th className="px-6 py-3">Details</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-obsidian-800">
-              {filteredLogs.map((log) => (
-                <tr key={log.id} className="hover:bg-obsidian-850/50 transition-colors">
-                  <td className="px-6 py-3 text-slate-400 whitespace-nowrap">
-                    {new Date(log.timestamp).toLocaleString()}
-                  </td>
-                  <td className="px-6 py-3">
-                    <span className="font-bold text-slate-200">{log.actor_name || 'Anonymous'}</span>
-                    <span className="text-[10px] text-slate-500 ml-1.5 uppercase">({log.actor_type})</span>
-                  </td>
-                  <td className="px-6 py-3">
-                    <span className="px-2 py-0.5 rounded bg-obsidian-950 border border-obsidian-700 text-emerald-400">
-                      {log.action}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 text-slate-300">
-                    {log.target || '—'}
-                  </td>
-                  <td className="px-6 py-3 text-slate-400">
-                    {log.client_ip || '—'}
-                  </td>
-                  <td className="px-6 py-3 text-slate-400 max-w-xs truncate" title={log.details}>
-                    {log.details}
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left font-mono text-xs">
+              <thead className="bg-obsidian-950/80 text-slate-400 border-b border-obsidian-800 uppercase tracking-wider">
+                <tr>
+                  <th className="px-6 py-3">Timestamp</th>
+                  <th className="px-6 py-3">Actor</th>
+                  <th className="px-6 py-3">Action</th>
+                  <th className="px-6 py-3">Target</th>
+                  <th className="px-6 py-3">Client IP</th>
+                  <th className="px-6 py-3">Details</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-obsidian-800">
+                {paginatedLogs.map((log) => (
+                  <tr key={log.id} className="hover:bg-obsidian-850/50 transition-colors">
+                    <td className="px-6 py-3 text-slate-400 whitespace-nowrap">
+                      {new Date(log.timestamp).toLocaleString()}
+                    </td>
+                    <td className="px-6 py-3">
+                      <span className="font-bold text-slate-200">{log.actor_name || 'Anonymous'}</span>
+                      <span className="text-[10px] text-slate-500 ml-1.5 uppercase">({log.actor_type})</span>
+                    </td>
+                    <td className="px-6 py-3">
+                      <span className="px-2 py-0.5 rounded bg-obsidian-950 border border-obsidian-700 text-emerald-400">
+                        {log.action}
+                      </span>
+                    </td>
+                    <td className="px-6 py-3 text-slate-300">
+                      {log.target || '—'}
+                    </td>
+                    <td className="px-6 py-3 text-slate-400">
+                      {log.client_ip || '—'}
+                    </td>
+                    <td className="px-6 py-3 text-slate-400 max-w-xs truncate" title={log.details}>
+                      {log.details}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+            pageSizeOptions={[10, 25, 50, 100]}
+          />
         </div>
       )}
     </div>

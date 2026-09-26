@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer } from '../types';
+import { Pagination } from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 interface ServerHubProps {
   user: User;
@@ -114,6 +116,52 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   // Version update info
   const [updateInfo, setUpdateInfo] = useState<{ current_version: string; latest_version: string; update_available: boolean; release_url: string } | null>(null);
+
+  // Pagination hooks for tables
+  const {
+    currentPage: leasesPage,
+    pageSize: leasesPageSize,
+    totalItems: totalLeases,
+    paginatedItems: paginatedLeases,
+    setCurrentPage: setLeasesPage,
+    setPageSize: setLeasesPageSize,
+  } = usePagination(leases, 10);
+
+  const {
+    currentPage: keysPage,
+    pageSize: keysPageSize,
+    totalItems: totalKeys,
+    paginatedItems: paginatedKeys,
+    setCurrentPage: setKeysPage,
+    setPageSize: setKeysPageSize,
+  } = usePagination(accessKeys, 10);
+
+  const {
+    currentPage: backupsPage,
+    pageSize: backupsPageSize,
+    totalItems: totalBackups,
+    paginatedItems: paginatedBackups,
+    setCurrentPage: setBackupsPage,
+    setPageSize: setBackupsPageSize,
+  } = usePagination(backupsList, 10);
+
+  const {
+    currentPage: allowlistPage,
+    pageSize: allowlistPageSize,
+    totalItems: totalAllowlist,
+    paginatedItems: paginatedAllowlist,
+    setCurrentPage: setAllowlistPage,
+    setPageSize: setAllowlistPageSize,
+  } = usePagination(allowlist, 10);
+
+  const {
+    currentPage: permissionsPage,
+    pageSize: permissionsPageSize,
+    totalItems: totalPermissions,
+    paginatedItems: paginatedPermissions,
+    setCurrentPage: setPermissionsPage,
+    setPageSize: setPermissionsPageSize,
+  } = usePagination(permissions, 10);
 
   const fetchServer = async () => {
     if (!id) return;
@@ -1113,7 +1161,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
-                    {leases.map((lease) => (
+                    {paginatedLeases.map((lease) => (
                       <tr key={lease.id} className="hover:bg-obsidian-800/40">
                         <td className="px-4 py-2.5 text-emerald-400 font-bold">{lease.ip_address}</td>
                         <td className="px-4 py-2.5 text-slate-300">{lease.gamertag || '—'}</td>
@@ -1132,6 +1180,14 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     ))}
                   </tbody>
                 </table>
+                <Pagination
+                  currentPage={leasesPage}
+                  totalItems={totalLeases}
+                  pageSize={leasesPageSize}
+                  onPageChange={setLeasesPage}
+                  onPageSizeChange={setLeasesPageSize}
+                  pageSizeOptions={[5, 10, 25, 50]}
+                />
               </div>
             )}
           </div>
@@ -1248,7 +1304,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
-                    {accessKeys.map((k) => (
+                    {paginatedKeys.map((k) => (
                       <tr key={k.id} className="hover:bg-obsidian-800/40">
                         <td className="px-4 py-2.5 text-slate-200 font-bold">{k.label}</td>
                         <td className="px-4 py-2.5 text-emerald-400">
@@ -1281,6 +1337,14 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     ))}
                   </tbody>
                 </table>
+                <Pagination
+                  currentPage={keysPage}
+                  totalItems={totalKeys}
+                  pageSize={keysPageSize}
+                  onPageChange={setKeysPage}
+                  onPageSizeChange={setKeysPageSize}
+                  pageSizeOptions={[5, 10, 25, 50]}
+                />
               </div>
             )}
           </div>
@@ -1468,7 +1532,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
-                    {backupsList.map((b) => (
+                    {paginatedBackups.map((b) => (
                       <tr key={b.id} className="hover:bg-obsidian-800/40">
                         <td className="px-4 py-2.5">
                           <button
@@ -1522,6 +1586,14 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     ))}
                   </tbody>
                 </table>
+                <Pagination
+                  currentPage={backupsPage}
+                  totalItems={totalBackups}
+                  pageSize={backupsPageSize}
+                  onPageChange={setBackupsPage}
+                  onPageSizeChange={setBackupsPageSize}
+                  pageSizeOptions={[5, 10, 25, 50]}
+                />
               </div>
             )}
           </div>
@@ -1922,64 +1994,77 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 {allowlist.length === 0 ? (
                   <p className="text-slate-600 italic">No players in allowlist.</p>
                 ) : (
-                  allowlist.map((p) => {
-                    const isGlobal = globalPlayers.some(
-                      (gp) => (gp.name.toLowerCase() === p.name.toLowerCase() || (p.xuid && gp.xuid === p.xuid)) && gp.is_allowlisted
-                    );
-                    const matchingPerm = permissions.find(
-                      (perm) => (p.xuid && perm.xuid === p.xuid) || perm.xuid.toLowerCase() === p.name.toLowerCase()
-                    );
-                    const effectiveRole = matchingPerm ? matchingPerm.permission : 'member';
+                  <>
+                    <div className="space-y-1.5">
+                      {paginatedAllowlist.map((p) => {
+                        const isGlobal = globalPlayers.some(
+                          (gp) => (gp.name.toLowerCase() === p.name.toLowerCase() || (p.xuid && gp.xuid === p.xuid)) && gp.is_allowlisted
+                        );
+                        const matchingPerm = permissions.find(
+                          (perm) => (p.xuid && perm.xuid === p.xuid) || perm.xuid.toLowerCase() === p.name.toLowerCase()
+                        );
+                        const effectiveRole = matchingPerm ? matchingPerm.permission : 'member';
 
-                    return (
-                      <div key={p.name} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded bg-obsidian-900 border border-obsidian-800">
-                        <div className="flex items-center space-x-2.5">
-                          <span className="text-slate-200 font-bold">{p.name}</span>
-                          {p.xuid && <span className="text-slate-500 text-[10px]">({p.xuid})</span>}
-                          {isGlobal ? (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                              <Globe className="w-2.5 h-2.5" /> GLOBAL
-                            </span>
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-obsidian-950 border border-obsidian-800">
-                              LOCAL ONLY
-                            </span>
-                          )}
-                        </div>
+                        return (
+                          <div key={p.name} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded bg-obsidian-900 border border-obsidian-800">
+                            <div className="flex items-center space-x-2.5">
+                              <span className="text-slate-200 font-bold">{p.name}</span>
+                              {p.xuid && <span className="text-slate-500 text-[10px]">({p.xuid})</span>}
+                              {isGlobal ? (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                                  <Globe className="w-2.5 h-2.5" /> GLOBAL
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-obsidian-950 border border-obsidian-800">
+                                  LOCAL ONLY
+                                </span>
+                              )}
+                            </div>
 
-                        <div className="flex items-center space-x-3 text-xs">
-                          {isGlobal ? (
-                            <button
-                              onClick={() => handleRemoveFromGlobal(p.name)}
-                              title="Remove from Global Access List (remains on this server)"
-                              className="text-amber-400 hover:text-amber-300 hover:underline text-[11px] flex items-center gap-1"
-                            >
-                              <UserMinus className="w-3 h-3" />
-                              <span>Demote to Local</span>
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handlePromoteToGlobal(p.name, p.xuid, effectiveRole, true)}
-                              title="Promote to Global Access List (syncs across all servers)"
-                              className="text-emerald-400 hover:text-emerald-300 hover:underline text-[11px] flex items-center gap-1"
-                            >
-                              <Globe className="w-3 h-3" />
-                              <span>Promote to Global</span>
-                            </button>
-                          )}
+                            <div className="flex items-center space-x-3 text-xs">
+                              {isGlobal ? (
+                                <button
+                                  onClick={() => handleRemoveFromGlobal(p.name)}
+                                  title="Remove from Global Access List (remains on this server)"
+                                  className="text-amber-400 hover:text-amber-300 hover:underline text-[11px] flex items-center gap-1"
+                                >
+                                  <UserMinus className="w-3 h-3" />
+                                  <span>Demote to Local</span>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handlePromoteToGlobal(p.name, p.xuid, effectiveRole, true)}
+                                  title="Promote to Global Access List (syncs across all servers)"
+                                  className="text-emerald-400 hover:text-emerald-300 hover:underline text-[11px] flex items-center gap-1"
+                                >
+                                  <Globe className="w-3 h-3" />
+                                  <span>Promote to Global</span>
+                                </button>
+                              )}
 
-                          <span className="text-obsidian-700">|</span>
+                              <span className="text-obsidian-700">|</span>
 
-                          <button
-                            onClick={() => handleRemoveAllowlistPlayer(p.name)}
-                            className="text-rose-400 hover:underline text-[11px]"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
+                              <button
+                                onClick={() => handleRemoveAllowlistPlayer(p.name)}
+                                className="text-rose-400 hover:underline text-[11px]"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <Pagination
+                      currentPage={allowlistPage}
+                      totalItems={totalAllowlist}
+                      pageSize={allowlistPageSize}
+                      onPageChange={setAllowlistPage}
+                      onPageSizeChange={setAllowlistPageSize}
+                      pageSizeOptions={[5, 10, 20, 50]}
+                      className="rounded-lg mt-2"
+                    />
+                  </>
                 )}
               </div>
             </div>
@@ -2026,76 +2111,89 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 {permissions.length === 0 ? (
                   <p className="text-slate-600 italic">No custom permissions configured (all players use default member permission).</p>
                 ) : (
-                  permissions.map((p) => {
-                    const matchingAllow = allowlist.find(
-                      (al) => (al.xuid && al.xuid === p.xuid) || al.name.toLowerCase() === p.xuid.toLowerCase()
-                    );
-                    const playerName = matchingAllow ? matchingAllow.name : p.xuid;
-                    const isGlobalOp = globalPlayers.some(
-                      (gp) => (gp.xuid === p.xuid || gp.name.toLowerCase() === playerName.toLowerCase()) && gp.permission === p.permission
-                    );
+                  <>
+                    <div className="space-y-1.5">
+                      {paginatedPermissions.map((p) => {
+                        const matchingAllow = allowlist.find(
+                          (al) => (al.xuid && al.xuid === p.xuid) || al.name.toLowerCase() === p.xuid.toLowerCase()
+                        );
+                        const playerName = matchingAllow ? matchingAllow.name : p.xuid;
+                        const isGlobalOp = globalPlayers.some(
+                          (gp) => (gp.xuid === p.xuid || gp.name.toLowerCase() === playerName.toLowerCase()) && gp.permission === p.permission
+                        );
 
-                    return (
-                      <div key={p.xuid} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded bg-obsidian-900 border border-obsidian-800">
-                        <div className="flex items-center space-x-2.5">
-                          <span
-                            className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded font-bold border flex items-center gap-1 ${
-                              p.permission === 'operator'
-                                ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                                : p.permission === 'member'
-                                ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
-                                : 'bg-slate-500/10 text-slate-400 border-slate-500/30'
-                            }`}
-                          >
-                            {p.permission === 'operator' && <Crown className="w-3 h-3" />}
-                            <span>{p.permission}</span>
-                          </span>
-                          <span className="text-slate-200 font-bold">{playerName}</span>
-                          {matchingAllow && <span className="text-slate-500 text-[10px]">({p.xuid})</span>}
-                          {isGlobalOp ? (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
-                              <Globe className="w-2.5 h-2.5" /> GLOBAL
-                            </span>
-                          ) : (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-obsidian-950 border border-obsidian-800">
-                              LOCAL ONLY
-                            </span>
-                          )}
-                        </div>
+                        return (
+                          <div key={p.xuid} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded bg-obsidian-900 border border-obsidian-800">
+                            <div className="flex items-center space-x-2.5">
+                              <span
+                                className={`text-[10px] font-mono uppercase px-2 py-0.5 rounded font-bold border flex items-center gap-1 ${
+                                  p.permission === 'operator'
+                                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                                    : p.permission === 'member'
+                                    ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                                    : 'bg-slate-500/10 text-slate-400 border-slate-500/30'
+                                }`}
+                              >
+                                {p.permission === 'operator' && <Crown className="w-3 h-3" />}
+                                <span>{p.permission}</span>
+                              </span>
+                              <span className="text-slate-200 font-bold">{playerName}</span>
+                              {matchingAllow && <span className="text-slate-500 text-[10px]">({p.xuid})</span>}
+                              {isGlobalOp ? (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                                  <Globe className="w-2.5 h-2.5" /> GLOBAL
+                                </span>
+                              ) : (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-500 bg-obsidian-950 border border-obsidian-800">
+                                  LOCAL ONLY
+                                </span>
+                              )}
+                            </div>
 
-                        <div className="flex items-center space-x-3 text-xs">
-                          {isGlobalOp ? (
-                            <button
-                              onClick={() => handleRemoveFromGlobal(playerName)}
-                              title="Demote from Global role"
-                              className="text-amber-400 hover:text-amber-300 hover:underline text-[11px] flex items-center gap-1"
-                            >
-                              <UserMinus className="w-3 h-3" />
-                              <span>Demote from Global</span>
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handlePromoteToGlobal(playerName, p.xuid, p.permission, matchingAllow ? true : false)}
-                              title="Promote this operator role to Global"
-                              className="text-emerald-400 hover:text-emerald-300 hover:underline text-[11px] flex items-center gap-1"
-                            >
-                              <Globe className="w-3 h-3" />
-                              <span>Promote to Global Op</span>
-                            </button>
-                          )}
+                            <div className="flex items-center space-x-3 text-xs">
+                              {isGlobalOp ? (
+                                <button
+                                  onClick={() => handleRemoveFromGlobal(playerName)}
+                                  title="Demote from Global role"
+                                  className="text-amber-400 hover:text-amber-300 hover:underline text-[11px] flex items-center gap-1"
+                                >
+                                  <UserMinus className="w-3 h-3" />
+                                  <span>Demote from Global</span>
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handlePromoteToGlobal(playerName, p.xuid, p.permission, matchingAllow ? true : false)}
+                                  title="Promote this operator role to Global"
+                                  className="text-emerald-400 hover:text-emerald-300 hover:underline text-[11px] flex items-center gap-1"
+                                >
+                                  <Globe className="w-3 h-3" />
+                                  <span>Promote to Global Op</span>
+                                </button>
+                              )}
 
-                          <span className="text-obsidian-700">|</span>
+                              <span className="text-obsidian-700">|</span>
 
-                          <button
-                            onClick={() => handleRemovePermission(p.xuid)}
-                            className="text-rose-400 hover:underline text-[11px]"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
+                              <button
+                                onClick={() => handleRemovePermission(p.xuid)}
+                                className="text-rose-400 hover:underline text-[11px]"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <Pagination
+                      currentPage={permissionsPage}
+                      totalItems={totalPermissions}
+                      pageSize={permissionsPageSize}
+                      onPageChange={setPermissionsPage}
+                      onPageSizeChange={setPermissionsPageSize}
+                      pageSizeOptions={[5, 10, 20, 50]}
+                      className="rounded-lg mt-2"
+                    />
+                  </>
                 )}
               </div>
             </div>

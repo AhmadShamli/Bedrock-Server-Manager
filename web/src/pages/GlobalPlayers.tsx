@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 import { GlobalPlayer } from '../types';
+import { Pagination } from '../components/Pagination';
+import { usePagination } from '../hooks/usePagination';
 
 export const GlobalPlayers: React.FC = () => {
   const [players, setPlayers] = useState<GlobalPlayer[]>([]);
@@ -113,6 +115,15 @@ export const GlobalPlayers: React.FC = () => {
 
     return true;
   });
+
+  const {
+    currentPage,
+    pageSize,
+    totalItems,
+    paginatedItems: paginatedPlayers,
+    setCurrentPage,
+    setPageSize,
+  } = usePagination(filteredPlayers, 10);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -229,7 +240,7 @@ export const GlobalPlayers: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-obsidian-800/60 text-slate-300">
-                {filteredPlayers.map((p) => (
+                {paginatedPlayers.map((p) => (
                   <tr key={p.id} className="hover:bg-obsidian-850/60 transition-colors">
                     <td className="px-6 py-4 font-bold text-slate-100 flex items-center gap-2">
                       <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
@@ -296,6 +307,14 @@ export const GlobalPlayers: React.FC = () => {
               </tbody>
             </table>
           </div>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={totalItems}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+            pageSizeOptions={[10, 25, 50, 100]}
+          />
         </div>
       )}
 
