@@ -246,7 +246,7 @@ func (db *ManagerDB) GetUserServerAccess(ctx context.Context, userID int64) ([]s
 	}
 	defer rows.Close()
 
-	var serverIDs []string
+	serverIDs := make([]string, 0)
 	for rows.Next() {
 		var sID string
 		if err := rows.Scan(&sID); err != nil {
@@ -688,7 +688,7 @@ func (db *ManagerDB) GetExpiredActiveLeases(ctx context.Context) ([]models.PortG
 	}
 	defer rows.Close()
 
-	var leases []models.PortGateLease
+	leases := make([]models.PortGateLease, 0)
 	for rows.Next() {
 		var l models.PortGateLease
 		var keyID sql.NullInt64
@@ -917,7 +917,7 @@ func (db *ManagerDB) GetUnpinnedBackups(ctx context.Context, serverID string) ([
 	}
 	defer rows.Close()
 
-	var backups []models.Backup
+	backups := make([]models.Backup, 0)
 	for rows.Next() {
 		var b models.Backup
 		var isLockedInt int

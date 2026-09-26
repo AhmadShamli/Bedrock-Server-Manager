@@ -28,6 +28,13 @@ func (h *ServerHandler) GetProperties(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if props == nil {
+		props = make(map[string]string)
+	}
+	if keys == nil {
+		keys = []string{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"properties": props,
@@ -85,6 +92,10 @@ func (h *ServerHandler) GetAllowlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if list == nil {
+		list = []configfile.AllowlistEntry{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(list)
 }
@@ -140,6 +151,10 @@ func (h *ServerHandler) GetPermissions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, `{"error": "Failed to read permissions"}`, http.StatusInternalServerError)
 		return
+	}
+
+	if list == nil {
+		list = []configfile.PermissionEntry{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

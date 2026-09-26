@@ -230,26 +230,26 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   useEffect(() => {
     if (!id) return;
     if (activeTab === 'players') {
-      api.getPlayers(id).then((res) => setOnlinePlayers(res.online_players)).catch(() => {});
-      api.getChat(id).then((res) => setChatFeed(res)).catch(() => {});
+      api.getPlayers(id).then((res) => setOnlinePlayers(Array.isArray(res?.online_players) ? res.online_players : [])).catch(() => {});
+      api.getChat(id).then((res) => setChatFeed(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'portgate') {
-      api.listLeases(id).then(setLeases).catch(() => {});
-      api.listAccessKeys(id).then(setAccessKeys).catch(() => {});
+      api.listLeases(id).then((res) => setLeases(Array.isArray(res) ? res : [])).catch(() => {});
+      api.listAccessKeys(id).then((res) => setAccessKeys(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'backups') {
-      api.listBackups(id).then(setBackupsList).catch(() => {});
+      api.listBackups(id).then((res) => setBackupsList(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'addons') {
-      api.listAddons(id).then(setAddonsList).catch(() => {});
+      api.listAddons(id).then((res) => setAddonsList(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'settings') {
       api.getProperties(id).then((res) => {
-        setProperties(res.properties);
-        setPropKeys(res.keys);
+        setProperties(res?.properties || {});
+        setPropKeys(Array.isArray(res?.keys) ? res.keys : Object.keys(res?.properties || {}));
       }).catch(() => {});
-      api.getAllowlist(id).then((res) => setAllowlist(res)).catch(() => {});
-      api.getPermissions(id).then((res) => setPermissions(res)).catch(() => {});
-      api.listGlobalPlayers().then(setGlobalPlayers).catch(() => {});
+      api.getAllowlist(id).then((res) => setAllowlist(Array.isArray(res) ? res : [])).catch(() => {});
+      api.getPermissions(id).then((res) => setPermissions(Array.isArray(res) ? res : [])).catch(() => {});
+      api.listGlobalPlayers().then((res) => setGlobalPlayers(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'actions') {
       api.checkUpdates(server?.version || 'latest').then((res) => setUpdateInfo(res)).catch(() => {});
-      api.listServers().then((servers) => setAllServers(servers)).catch(() => {});
+      api.listServers().then((servers) => setAllServers(Array.isArray(servers) ? servers : [])).catch(() => {});
     }
   }, [id, activeTab, server?.version]);
 
@@ -285,7 +285,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setNewKeyPassphrase('');
       setNewKeyMaxUses(0);
       const updatedKeys = await api.listAccessKeys(id);
-      setAccessKeys(updatedKeys);
+      setAccessKeys(Array.isArray(updatedKeys) ? updatedKeys : []);
     } catch (err: any) {
       alert(err.message || 'Failed to create access key');
     }
@@ -296,7 +296,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     try {
       await api.deleteAccessKey(id, keyId);
       const updatedKeys = await api.listAccessKeys(id);
-      setAccessKeys(updatedKeys);
+      setAccessKeys(Array.isArray(updatedKeys) ? updatedKeys : []);
     } catch (err: any) {
       alert(err.message || 'Failed to delete access key');
     }
@@ -418,7 +418,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     try {
       await api.kickPlayer(id, gt);
       const res = await api.getPlayers(id);
-      setOnlinePlayers(res.online_players);
+      setOnlinePlayers(Array.isArray(res?.online_players) ? res.online_players : []);
     } catch (err: any) {
       alert(err.message || 'Failed to kick player');
     }
@@ -450,7 +450,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const handleAddAllowlistPlayer = async () => {
     if (!id || !newAllowlistPlayer.trim()) return;
-    const updated = [...allowlist, { name: newAllowlistPlayer.trim(), ignoresPlayerLimit: false }];
+    const updated = [...(allowlist || []), { name: newAllowlistPlayer.trim(), ignoresPlayerLimit: false }];
     try {
       await api.updateAllowlist(id, updated);
       setAllowlist(updated);
@@ -462,7 +462,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const handleRemoveAllowlistPlayer = async (name: string) => {
     if (!id) return;
-    const updated = allowlist.filter((p) => p.name !== name);
+    const updated = (allowlist || []).filter((p) => p.name !== name);
     try {
       await api.updateAllowlist(id, updated);
       setAllowlist(updated);
@@ -474,7 +474,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const handleAddPermission = async () => {
     if (!id || !newPermXuid.trim()) return;
     const cleanXuid = newPermXuid.trim();
-    const updated = [...permissions.filter((p) => p.xuid !== cleanXuid), { permission: newPermRole, xuid: cleanXuid }];
+    const updated = [...(permissions || []).filter((p) => p.xuid !== cleanXuid), { permission: newPermRole, xuid: cleanXuid }];
     try {
       await api.updatePermissions(id, updated);
       setPermissions(updated);
@@ -486,7 +486,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const handleRemovePermission = async (xuid: string) => {
     if (!id) return;
-    const updated = permissions.filter((p) => p.xuid !== xuid);
+    const updated = (permissions || []).filter((p) => p.xuid !== xuid);
     try {
       await api.updatePermissions(id, updated);
       setPermissions(updated);
@@ -501,16 +501,18 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     setSyncReportMsg(null);
     try {
       const rep = await api.syncServerGlobal(id);
-      setSyncReportMsg(`Synced with Global: Added ${rep.allowlist_added.length} players to allowlist, updated ${rep.permissions_updated.length} permissions.`);
+      const allowCount = Array.isArray(rep?.allowlist_added) ? rep.allowlist_added.length : 0;
+      const permCount = Array.isArray(rep?.permissions_updated) ? rep.permissions_updated.length : 0;
+      setSyncReportMsg(`Synced with Global: Added ${allowCount} players to allowlist, updated ${permCount} permissions.`);
       setTimeout(() => setSyncReportMsg(null), 5000);
       const [newAl, newPerms, newGps] = await Promise.all([
         api.getAllowlist(id),
         api.getPermissions(id),
         api.listGlobalPlayers(),
       ]);
-      setAllowlist(newAl);
-      setPermissions(newPerms);
-      setGlobalPlayers(newGps);
+      setAllowlist(Array.isArray(newAl) ? newAl : []);
+      setPermissions(Array.isArray(newPerms) ? newPerms : []);
+      setGlobalPlayers(Array.isArray(newGps) ? newGps : []);
     } catch (err: any) {
       alert(err.message || 'Failed to sync with global');
     } finally {
@@ -529,7 +531,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       });
       alert(`Player '${playerName}' successfully promoted to Global access list!`);
       const newGps = await api.listGlobalPlayers();
-      setGlobalPlayers(newGps);
+      setGlobalPlayers(Array.isArray(newGps) ? newGps : []);
     } catch (err: any) {
       alert(err.message || 'Failed to promote player to global');
     }
@@ -542,7 +544,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     try {
       await api.removeGlobalPlayerByName(playerName);
       const newGps = await api.listGlobalPlayers();
-      setGlobalPlayers(newGps);
+      setGlobalPlayers(Array.isArray(newGps) ? newGps : []);
     } catch (err: any) {
       alert(err.message || 'Failed to remove player from global');
     }
@@ -571,8 +573,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         mode: copyMode,
       });
 
-      const successCount = res.results.filter((r) => r.success).length;
-      const failCount = res.results.filter((r) => !r.success).length;
+      const results = Array.isArray(res?.results) ? res.results : [];
+      const successCount = results.filter((r) => r.success).length;
+      const failCount = results.filter((r) => !r.success).length;
       let text = `Successfully synced configs to ${successCount} server(s).`;
       if (failCount > 0) {
         text += ` (${failCount} target(s) reported an error)`;
@@ -936,10 +939,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             </div>
 
             <div className="flex-1 bg-obsidian-950 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto border border-obsidian-800 space-y-1">
-              {logs.length === 0 ? (
+              {(logs || []).length === 0 ? (
                 <p className="text-slate-600 italic">No console logs received yet...</p>
               ) : (
-                logs.map((line, idx) => (
+                (logs || []).map((line, idx) => (
                   <div key={idx} className="leading-relaxed hover:bg-obsidian-900/60 px-1 rounded">
                     {line}
                   </div>
@@ -1018,15 +1021,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             <h3 className="font-mono text-sm font-bold text-slate-200 mb-3 flex items-center justify-between">
               <span className="flex items-center gap-2">
                 <Users className="w-4 h-4 text-emerald-400" />
-                <span>Online Players ({onlinePlayers.length})</span>
+                <span>Online Players ({(onlinePlayers || []).length})</span>
               </span>
             </h3>
 
             <div className="flex-1 bg-obsidian-950 rounded-lg p-3 overflow-y-auto border border-obsidian-800 space-y-2 font-mono text-xs">
-              {onlinePlayers.length === 0 ? (
+              {(onlinePlayers || []).length === 0 ? (
                 <p className="text-slate-600 italic">No players online right now.</p>
               ) : (
-                onlinePlayers.map((p) => (
+                (onlinePlayers || []).map((p) => (
                   <div key={p.gamertag} className="p-2.5 bg-obsidian-900 border border-obsidian-700/80 rounded-lg flex items-center justify-between">
                     <div>
                       <div className="font-bold text-slate-100">{p.gamertag}</div>
@@ -1083,10 +1086,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             </h3>
 
             <div className="flex-1 bg-obsidian-950 rounded-lg p-3 overflow-y-auto border border-obsidian-800 space-y-2 font-mono text-xs">
-              {chatFeed.length === 0 ? (
+              {(chatFeed || []).length === 0 ? (
                 <p className="text-slate-600 italic">No chat messages captured yet.</p>
               ) : (
-                chatFeed.map((msg, i) => (
+                (chatFeed || []).map((msg, i) => (
                   <div key={i} className="p-2 rounded bg-obsidian-900/60 border border-obsidian-800 flex items-start space-x-2">
                     <span className="text-emerald-400 font-bold">&lt;{msg.gamertag}&gt;</span>
                     <span className="text-slate-200">{msg.message}</span>
@@ -1631,16 +1634,16 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             </div>
 
             <h4 className="font-mono text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
-              Installed Packs ({addonsList.length})
+              Installed Packs ({(addonsList || []).length})
             </h4>
 
-            {addonsList.length === 0 ? (
+            {(addonsList || []).length === 0 ? (
               <div className="text-center py-10 bg-obsidian-950/60 border border-obsidian-800 rounded-lg text-slate-500 font-mono text-xs">
                 No custom addons installed yet. Click "Install .mcpack / .zip" to add behavior or texture packs.
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {addonsList.map((pack) => (
+                {(addonsList || []).map((pack) => (
                   <div
                     key={`${pack.type}-${pack.folder}`}
                     className="bg-obsidian-950 border border-obsidian-800 rounded-lg p-4 flex flex-col justify-between"
@@ -1924,15 +1927,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 max-h-[520px] overflow-y-auto">
-              {propKeys
-                .filter((key) => key.toLowerCase().includes(propertyFilter.toLowerCase()))
+              {(propKeys || [])
+                .filter((key) => key && key.toLowerCase().includes(propertyFilter.toLowerCase()))
                 .map((key) => (
                   <div key={key}>
                     <label className="block text-slate-400 mb-1 text-[11px] font-bold">{key}</label>
                     <input
                       type="text"
-                      value={properties[key] || ''}
-                      onChange={(e) => setProperties({ ...properties, [key]: e.target.value })}
+                      value={(properties && properties[key]) || ''}
+                      onChange={(e) => setProperties({ ...(properties || {}), [key]: e.target.value })}
                       className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
                     />
                   </div>
@@ -1991,7 +1994,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               </div>
 
               <div className="space-y-1.5 pt-2">
-                {allowlist.length === 0 ? (
+                {(allowlist || []).length === 0 ? (
                   <p className="text-slate-600 italic">No players in allowlist.</p>
                 ) : (
                   <>
@@ -2000,8 +2003,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                         const isGlobal = (globalPlayers || []).some(
                           (gp) => gp && (((gp.name || '').toLowerCase() === (p.name || '').toLowerCase()) || (p.xuid && gp.xuid === p.xuid)) && gp.is_allowlisted
                         );
-                        const matchingPerm = permissions.find(
-                          (perm) => (p.xuid && perm.xuid === p.xuid) || perm.xuid.toLowerCase() === p.name.toLowerCase()
+                        const matchingPerm = (permissions || []).find(
+                          (perm) => perm && ((p.xuid && perm.xuid === p.xuid) || (perm.xuid || '').toLowerCase() === (p.name || '').toLowerCase())
                         );
                         const effectiveRole = matchingPerm ? matchingPerm.permission : 'member';
 
@@ -2108,14 +2111,14 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               </div>
 
               <div className="space-y-1.5 pt-2">
-                {permissions.length === 0 ? (
+                {(permissions || []).length === 0 ? (
                   <p className="text-slate-600 italic">No custom permissions configured (all players use default member permission).</p>
                 ) : (
                   <>
                     <div className="space-y-1.5">
                       {paginatedPermissions.map((p) => {
-                        const matchingAllow = allowlist.find(
-                          (al) => (al.xuid && al.xuid === p.xuid) || al.name.toLowerCase() === p.xuid.toLowerCase()
+                        const matchingAllow = (allowlist || []).find(
+                          (al) => al && ((al.xuid && al.xuid === p.xuid) || (al.name || '').toLowerCase() === (p.xuid || '').toLowerCase())
                         );
                         const playerName = matchingAllow ? matchingAllow.name : p.xuid;
                         const isGlobalOp = (globalPlayers || []).some(
@@ -2328,16 +2331,16 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 {/* Target Servers Selector */}
                 <div>
                   <label className="block text-slate-400 mb-1.5 font-bold">Select Target Server(s):</label>
-                  {allServers.filter((s) => s.id !== server.id).length === 0 ? (
+                  {(allServers || []).filter((s) => s && s.id !== server?.id).length === 0 ? (
                     <p className="text-slate-600 italic bg-obsidian-950 p-3 rounded-lg border border-obsidian-800">
                       No other servers found. Create or clone another server first to sync configs between them.
                     </p>
                   ) : (
                     <div className="space-y-1.5 max-h-48 overflow-y-auto p-2 bg-obsidian-950 rounded-lg border border-obsidian-800">
-                      {allServers
-                        .filter((s) => s.id !== server.id)
+                      {(allServers || [])
+                        .filter((s) => s && s.id !== server?.id)
                         .map((s) => {
-                          const isSelected = selectedTargetIds.includes(s.id);
+                          const isSelected = (selectedTargetIds || []).includes(s.id);
                           return (
                             <label
                               key={s.id}
@@ -2351,9 +2354,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                                   checked={isSelected}
                                   onChange={(e) => {
                                     if (e.target.checked) {
-                                      setSelectedTargetIds([...selectedTargetIds, s.id]);
+                                      setSelectedTargetIds([...(selectedTargetIds || []), s.id]);
                                     } else {
-                                      setSelectedTargetIds(selectedTargetIds.filter((tid) => tid !== s.id));
+                                      setSelectedTargetIds((selectedTargetIds || []).filter((tid) => tid !== s.id));
                                     }
                                   }}
                                   className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"

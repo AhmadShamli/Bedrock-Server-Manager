@@ -494,11 +494,11 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
 
             <form onSubmit={handleSaveAccess} className="space-y-4 font-mono text-xs">
               <div className="max-h-60 overflow-y-auto space-y-2 p-3 bg-obsidian-950 border border-obsidian-800 rounded-lg">
-                {servers.length === 0 ? (
+                {(servers || []).length === 0 ? (
                   <p className="text-slate-500 italic">No servers currently deployed.</p>
                 ) : (
-                  servers.map((s) => {
-                    const isChecked = selectedServerIds.includes(s.id);
+                  (servers || []).map((s) => {
+                    const isChecked = (selectedServerIds || []).includes(s.id);
                     return (
                       <label
                         key={s.id}
@@ -512,9 +512,9 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                             checked={isChecked}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                setSelectedServerIds([...selectedServerIds, s.id]);
+                                setSelectedServerIds([...(selectedServerIds || []), s.id]);
                               } else {
-                                setSelectedServerIds(selectedServerIds.filter((id) => id !== s.id));
+                                setSelectedServerIds((selectedServerIds || []).filter((id) => id !== s.id));
                               }
                             }}
                             className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"

@@ -37,7 +37,7 @@ func SafePath(dataDir, serverID, filename string) (string, error) {
 // ReadProperties parses a server.properties file into a map preserving order.
 func ReadProperties(filePath string) (map[string]string, []string, error) {
 	props := make(map[string]string)
-	var keys []string
+	keys := make([]string, 0)
 
 	f, err := os.Open(filePath)
 	if os.IsNotExist(err) {
@@ -110,20 +110,19 @@ type AllowlistEntry struct {
 // ReadAllowlist loads allowlist.json.
 func ReadAllowlist(filePath string) ([]AllowlistEntry, error) {
 	data, err := os.ReadFile(filePath)
-	if os.IsNotExist(err) {
+	if os.IsNotExist(err) || len(data) == 0 {
 		return []AllowlistEntry{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	var list []AllowlistEntry
-	if len(data) == 0 {
-		return list, nil
-	}
-
+	list := make([]AllowlistEntry, 0)
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, err
+	}
+	if list == nil {
+		list = []AllowlistEntry{}
 	}
 	return list, nil
 }
@@ -151,20 +150,19 @@ type PermissionEntry struct {
 // ReadPermissions loads permissions.json.
 func ReadPermissions(filePath string) ([]PermissionEntry, error) {
 	data, err := os.ReadFile(filePath)
-	if os.IsNotExist(err) {
+	if os.IsNotExist(err) || len(data) == 0 {
 		return []PermissionEntry{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	var list []PermissionEntry
-	if len(data) == 0 {
-		return list, nil
-	}
-
+	list := make([]PermissionEntry, 0)
 	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, err
+	}
+	if list == nil {
+		list = []PermissionEntry{}
 	}
 	return list, nil
 }

@@ -16,7 +16,7 @@ class APIClient {
     return this.token;
   }
 
-  private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
+  private async request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
     const headers = new Headers(options.headers || {});
     if (this.token && !headers.has('Authorization')) {
       headers.set('Authorization', `Bearer ${this.token}`);
@@ -143,7 +143,11 @@ class APIClient {
 
   // Properties, Allowlist & Permissions
   async getProperties(id: string): Promise<{ properties: Record<string, string>; keys: string[] }> {
-    return this.request(`/api/servers/${id}/properties`);
+    const res = await this.request(`/api/servers/${id}/properties`);
+    return {
+      properties: res?.properties || {},
+      keys: Array.isArray(res?.keys) ? res.keys : Object.keys(res?.properties || {}),
+    };
   }
 
   async updateProperties(id: string, properties: Record<string, string>, keys: string[]): Promise<{ status: string }> {
@@ -154,7 +158,8 @@ class APIClient {
   }
 
   async getAllowlist(id: string): Promise<Array<{ name: string; xuid?: string; ignoresPlayerLimit: boolean }>> {
-    return this.request(`/api/servers/${id}/allowlist`);
+    const res = await this.request(`/api/servers/${id}/allowlist`);
+    return Array.isArray(res) ? res : [];
   }
 
   async updateAllowlist(id: string, list: Array<{ name: string; xuid?: string; ignoresPlayerLimit: boolean }>): Promise<{ status: string }> {
@@ -165,7 +170,8 @@ class APIClient {
   }
 
   async getPermissions(id: string): Promise<Array<{ permission: string; xuid: string }>> {
-    return this.request(`/api/servers/${id}/permissions`);
+    const res = await this.request(`/api/servers/${id}/permissions`);
+    return Array.isArray(res) ? res : [];
   }
 
   async updatePermissions(id: string, list: Array<{ permission: string; xuid: string }>): Promise<{ status: string }> {
@@ -190,10 +196,14 @@ class APIClient {
       copied: string[];
     }>;
   }> {
-    return this.request(`/api/servers/${sourceId}/copy-configs`, {
+    const res = await this.request(`/api/servers/${sourceId}/copy-configs`, {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+    return {
+      source_server_id: res?.source_server_id || sourceId,
+      results: Array.isArray(res?.results) ? res.results : [],
+    };
   }
 
   // Player Hub & Live Chat
@@ -201,11 +211,16 @@ class APIClient {
     online_players: Array<{ server_id: string; gamertag: string; xuid: string; joined_at: string }>;
     online_count: number;
   }> {
-    return this.request(`/api/servers/${id}/players`);
+    const res = await this.request(`/api/servers/${id}/players`);
+    return {
+      online_players: Array.isArray(res?.online_players) ? res.online_players : [],
+      online_count: typeof res?.online_count === 'number' ? res.online_count : 0,
+    };
   }
 
   async getChat(id: string, limit = 50): Promise<Array<{ server_id: string; gamertag: string; message: string; timestamp: string }>> {
-    return this.request(`/api/servers/${id}/chat?limit=${limit}`);
+    const res = await this.request(`/api/servers/${id}/chat?limit=${limit}`);
+    return Array.isArray(res) ? res : [];
   }
 
   async broadcast(id: string, message: string, target?: string): Promise<{ status: string }> {
@@ -251,7 +266,8 @@ class APIClient {
 
   // Presets & Updates
   async getPresets(): Promise<Array<{ id: string; name: string; description: string; mode: string; difficulty: string; properties: Record<string, string> }>> {
-    return this.request('/api/presets');
+    const res = await this.request('/api/presets');
+    return Array.isArray(res) ? res : [];
   }
 
   async checkUpdates(version = 'latest'): Promise<{ current_version: string; latest_version: string; update_available: boolean; release_url: string }> {
@@ -500,7 +516,8 @@ class APIClient {
   }
 
   async getSettings(): Promise<Record<string, string>> {
-    return this.request('/api/system/settings');
+    const res = await this.request('/api/system/settings');
+    return res && typeof res === 'object' ? res : {};
   }
 
   async updateSetting(key: string, value: string): Promise<{ success: boolean }> {
@@ -537,7 +554,8 @@ class APIClient {
   }
 
   async getUserServerAccess(id: number): Promise<string[]> {
-    return this.request(`/api/users/${id}/servers`);
+    const res = await this.request(`/api/users/${id}/servers`);
+    return Array.isArray(res) ? res : [];
   }
 
   async updateUserServerAccess(id: number, serverIds: string[]): Promise<{ success: boolean }> {
@@ -585,9 +603,10 @@ class APIClient {
   }
 
   async syncAllServersGlobal(): Promise<Record<string, { server_id: string; allowlist_added: string[]; permissions_updated: string[] }>> {
-    return this.request('/api/global-players/sync-all', {
+    const res = await this.request('/api/global-players/sync-all', {
       method: 'POST',
     });
+    return res && typeof res === 'object' ? res : {};
   }
 
   async syncServerGlobal(serverId: string): Promise<{ server_id: string; allowlist_added: string[]; permissions_updated: string[] }> {

@@ -218,7 +218,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
           <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
           <span>{error}</span>
         </div>
-      ) : servers.length === 0 ? (
+      ) : (servers || []).length === 0 ? (
         <div className="text-center py-20 bg-obsidian-900/50 border border-obsidian-800 rounded-2xl p-8">
           <ServerIcon className="w-12 h-12 text-slate-600 mx-auto mb-3" />
           <h3 className="text-lg font-mono font-medium text-slate-200">No Bedrock instances running</h3>
@@ -265,9 +265,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                   }}
                   className="bg-obsidian-950 border border-obsidian-800 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-500/60"
                 >
-                  <option value="all">All ({servers.length})</option>
-                  <option value="running">Running ({servers.filter((s) => s.status === 'running').length})</option>
-                  <option value="stopped">Stopped ({servers.filter((s) => s.status !== 'running').length})</option>
+                  <option value="all">All ({(servers || []).length})</option>
+                  <option value="running">Running ({(servers || []).filter((s) => s.status === 'running').length})</option>
+                  <option value="stopped">Stopped ({(servers || []).filter((s) => s.status !== 'running').length})</option>
                 </select>
               </div>
 

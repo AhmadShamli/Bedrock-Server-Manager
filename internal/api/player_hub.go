@@ -28,6 +28,9 @@ func NewPlayerHubHandler(sh *ServerHandler, pm *player.Manager) *PlayerHubHandle
 func (h *PlayerHubHandler) GetPlayers(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	online := h.playerManager.GetOnlinePlayers(serverID)
+	if online == nil {
+		online = []player.OnlinePlayer{}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -47,6 +50,9 @@ func (h *PlayerHubHandler) GetChatFeed(w http.ResponseWriter, r *http.Request) {
 	}
 
 	feed := h.playerManager.GetChatFeed(serverID, limit)
+	if feed == nil {
+		feed = []player.ChatMessage{}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(feed)
 }

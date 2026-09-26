@@ -37,7 +37,7 @@ type InstalledPack struct {
 
 // ListInstalledPacks inspects behavior_packs and resource_packs folders for a server.
 func ListInstalledPacks(serverDir string) ([]InstalledPack, error) {
-	var packs []InstalledPack
+	packs := make([]InstalledPack, 0)
 
 	scanDir := func(dirName, packType string) {
 		fullPath := filepath.Join(serverDir, dirName)

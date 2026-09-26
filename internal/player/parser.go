@@ -135,7 +135,7 @@ func (m *Manager) GetOnlinePlayers(serverID string) []OnlinePlayer {
 		return []OnlinePlayer{}
 	}
 
-	var list []OnlinePlayer
+	list := make([]OnlinePlayer, 0)
 	for _, p := range playersMap {
 		list = append(list, *p)
 	}
@@ -148,7 +148,7 @@ func (m *Manager) GetChatFeed(serverID string, limit int) []ChatMessage {
 	defer m.mu.RUnlock()
 
 	feed, exists := m.chatFeeds[serverID]
-	if !exists {
+	if !exists || len(feed) == 0 {
 		return []ChatMessage{}
 	}
 
@@ -156,7 +156,11 @@ func (m *Manager) GetChatFeed(serverID string, limit int) []ChatMessage {
 		limit = len(feed)
 	}
 	start := len(feed) - limit
-	return feed[start:]
+	res := feed[start:]
+	if res == nil {
+		return []ChatMessage{}
+	}
+	return res
 }
 
 // ClearServer clears player state when a server stops.
