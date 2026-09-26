@@ -72,22 +72,25 @@ Usage:
 
 Options:
   -u, --upgrade            Run in upgrade mode (automatically detected if BSM is already installed)
-  -v, --version <tag>      Specify target release version (e.g. v1.0.0 or latest)
+  -v, --version <tag>      Specify target release version (e.g. v1.1.0 or latest)
   -m, --method <method>    Installation method: 'download' (GitHub release), 'build' (compile from source), or 'local'
+  -y, --yes                Automatic yes to confirmation prompt (run non-interactively)
   --check                  Check currently installed version against latest release without upgrading
   --skip-backup            Skip pre-upgrade database and configuration backup
-  -f, --force              Force reinstall/upgrade even if already on the target version
+  -f, --force              Force reinstall/upgrade without confirmation prompt
   -h, --help               Show this help message
 
 Environment Variables:
   BSM_VERSION              Target release version
   BSM_INSTALL_METHOD       'download', 'build', or 'local'
+  BSM_ASSUME_YES           Set to 'true' to run non-interactively
   BSM_SKIP_BACKUP          Set to 'true' to skip pre-upgrade backups
 
 Examples:
-  sudo bash deploy/install.sh                       # Fresh install or automatic upgrade
+  sudo bash deploy/install.sh                       # Interactive install or upgrade with diagnostics
+  sudo bash deploy/install.sh -y                    # Non-interactive automated install/upgrade
   sudo bash deploy/install.sh --upgrade             # Explicit upgrade with automated backup
-  sudo bash deploy/install.sh -v v1.0.0             # Upgrade or install specific version
+  sudo bash deploy/install.sh -v v1.1.0             # Upgrade or install specific version
   sudo bash deploy/install.sh --check               # Check for available updates
   sudo bash deploy/install.sh -m build              # Compile latest binary from local source
 EOF
@@ -112,6 +115,7 @@ fi
 # Parse Command-line Options
 TARGET_VERSION="${BSM_VERSION:-${VERSION:-}}"
 INSTALL_METHOD="${BSM_INSTALL_METHOD:-${INSTALL_METHOD:-}}"
+ASSUME_YES="${BSM_ASSUME_YES:-false}"
 FORCE_UPGRADE=false
 FORCE_ACTION=false
 SKIP_BACKUP="${BSM_SKIP_BACKUP:-false}"
@@ -121,6 +125,10 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -u|--upgrade)
             FORCE_UPGRADE=true
+            shift
+            ;;
+        -y|--yes|--assume-yes|--non-interactive)
+            ASSUME_YES=true
             shift
             ;;
         -v|--version)
@@ -322,25 +330,15 @@ if [ "${CHECK_ONLY}" = true ]; then
     exit 0
 fi
 
-# Print banner
-if [ "${MODE}" = "upgrade" ]; then
-    print_ascii_banner "Bare-Metal Linux Upgrade"
-    echo "Operation Mode          : Upgrade"
-    echo "Installed Version       : ${CURRENT_VERSION}"
-    echo "Target Version          : ${TARGET_VERSION}"
-else
-    print_ascii_banner "Bare-Metal Linux Installer"
-    echo "Operation Mode          : Fresh Installation"
-    echo "Target Version          : ${TARGET_VERSION}"
-fi
-echo "Host Architecture       : ${ARCH_RAW} (${ARCH:-unsupported for pre-compiled releases})"
-echo "================================================================================"
-echo ""
-
-# Root privilege validation
+# Root privilege validation & automatic escalation
 if [ "$(id -u)" -ne 0 ]; then
-    log_error "Installation and upgrade operations must be run as root (e.g. sudo bash deploy/install.sh)."
-    exit 1
+    if command -v sudo >/dev/null 2>&1; then
+        log_info "Root privileges required for installation/upgrade. Escalating with sudo..."
+        exec sudo bash "$0" "$@"
+    else
+        log_error "Installation and upgrade operations must be run as root (e.g. sudo bash deploy/install.sh)."
+        exit 1
+    fi
 fi
 
 # Detect Systemd Status and active state
@@ -352,6 +350,187 @@ if is_systemd_active; then
     if systemctl is-active --quiet bedrock-server-manager.service 2>/dev/null; then
         SERVICE_WAS_ACTIVE=true
     fi
+fi
+
+# -----------------------------------------------------------------------------
+# Host Diagnostics & Environment Collection
+# -----------------------------------------------------------------------------
+# 1. Operating System & Kernel
+HOST_OS="Linux"
+if [ -f /etc/os-release ]; then
+    HOST_OS="$(grep -E '^PRETTY_NAME=' /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d '"')"
+fi
+HOST_KERNEL="$(uname -sr 2>/dev/null || uname -r)"
+
+# 2. Hardware: CPU, Memory, Disk
+HOST_CPU_COUNT="$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)"
+HOST_CPU_MODEL="$(grep -m1 "model name" /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed -E 's/^[ \t]+//' || echo "")"
+if [ -n "${HOST_CPU_MODEL}" ]; then
+    HOST_CPU_STR="${HOST_CPU_COUNT} Cores (${HOST_CPU_MODEL})"
+else
+    HOST_CPU_STR="${HOST_CPU_COUNT} Cores"
+fi
+
+if [ -f /proc/meminfo ]; then
+    MEM_TOTAL_KB="$(grep -i MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}')"
+    MEM_AVAIL_KB="$(grep -i MemAvailable /proc/meminfo 2>/dev/null | awk '{print $2}')"
+    if [ -n "${MEM_TOTAL_KB}" ] && [ -n "${MEM_AVAIL_KB}" ]; then
+        MEM_TOTAL_MB=$((MEM_TOTAL_KB / 1024))
+        MEM_AVAIL_MB=$((MEM_AVAIL_KB / 1024))
+        HOST_MEM_STR="${MEM_AVAIL_MB} MB free / ${MEM_TOTAL_MB} MB total"
+    else
+        HOST_MEM_STR="$(free -h 2>/dev/null | awk '/^Mem:/ {print $7 " free / " $2 " total"}' || echo 'N/A')"
+    fi
+else
+    HOST_MEM_STR="$(free -h 2>/dev/null | awk '/^Mem:/ {print $7 " free / " $2 " total"}' || echo 'N/A')"
+fi
+
+DISK_TARGET="/var/lib/bedrock-server-manager"
+if [ ! -d "${DISK_TARGET}" ]; then
+    DISK_TARGET="/"
+fi
+HOST_DISK_STR="$(df -h "${DISK_TARGET}" 2>/dev/null | awk 'NR==2 {print $4 " available (" $5 " used) on " $6}' || echo 'N/A')"
+
+# 3. Container Engine (Docker)
+DOCKER_STATUS="Not Detected"
+if command -v docker >/dev/null 2>&1; then
+    DOCKER_VER="$(docker --version 2>/dev/null | sed -E 's/, build [a-f0-9]+//' || echo 'Installed')"
+    if [ -S /var/run/docker.sock ]; then
+        if docker info >/dev/null 2>&1; then
+            DOCKER_STATUS="Active & Accessible (${DOCKER_VER})"
+        else
+            DOCKER_STATUS="Socket Present (${DOCKER_VER})"
+        fi
+    elif systemctl is-active --quiet docker 2>/dev/null; then
+        DOCKER_STATUS="Active (${DOCKER_VER})"
+    else
+        DOCKER_STATUS="Daemon Inactive (${DOCKER_VER})"
+    fi
+fi
+
+# 4. Existing BSM Installation Status
+if [ "${IS_INSTALLED}" = true ]; then
+    if systemctl is-active --quiet bedrock-server-manager.service 2>/dev/null; then
+        BSM_STATUS="${CURRENT_VERSION} (Service: Active / Running)"
+    elif [ -f /etc/systemd/system/bedrock-server-manager.service ]; then
+        BSM_STATUS="${CURRENT_VERSION} (Service: Inactive / Stopped)"
+    else
+        BSM_STATUS="${CURRENT_VERSION} (Binary Deployed)"
+    fi
+else
+    BSM_STATUS="Not Installed"
+fi
+
+# 5. Host Firewall Subsystems
+UFW_STATUS="Not Installed"
+UFW_ACTIVE=false
+if command -v ufw >/dev/null 2>&1 || [ -x /usr/sbin/ufw ]; then
+    UFW_BIN="$(command -v ufw 2>/dev/null || echo '/usr/sbin/ufw')"
+    UFW_OUT="$("${UFW_BIN}" status 2>&1 || true)"
+    if echo "${UFW_OUT}" | grep -qi "status: active"; then
+        UFW_STATUS="Active"
+        UFW_ACTIVE=true
+    elif echo "${UFW_OUT}" | grep -qi "status: inactive"; then
+        UFW_STATUS="Installed (Inactive)"
+    elif echo "${UFW_OUT}" | grep -qi "you need to be root"; then
+        UFW_STATUS="Installed (Root check required)"
+    else
+        UFW_STATUS="Installed"
+    fi
+fi
+
+IPTABLES_STATUS="Not Installed"
+IPTABLES_AVAIL=false
+if command -v iptables >/dev/null 2>&1 || [ -x /usr/sbin/iptables ]; then
+    IPT_BIN="$(command -v iptables 2>/dev/null || echo '/usr/sbin/iptables')"
+    IPT_VER="$("${IPT_BIN}" --version 2>&1 | head -n1 || echo 'Available')"
+    IPTABLES_STATUS="${IPT_VER}"
+    IPTABLES_AVAIL=true
+fi
+
+FIREWALLD_STATUS="Not Installed"
+if command -v firewall-cmd >/dev/null 2>&1; then
+    if systemctl is-active --quiet firewalld 2>/dev/null; then
+        FIREWALLD_STATUS="Active"
+    else
+        FIREWALLD_STATUS="Installed (Inactive)"
+    fi
+fi
+
+# Determine default firewall driver that BSM will select
+if [ "${UFW_ACTIVE}" = true ]; then
+    RECOMMENDED_FW="UFW Driver (Default & Active)"
+elif [ "${UFW_STATUS}" = "Installed (Inactive)" ]; then
+    RECOMMENDED_FW="IPTables Driver (Note: UFW is inactive; run 'ufw enable' to switch)"
+elif [ "${IPTABLES_AVAIL}" = true ]; then
+    RECOMMENDED_FW="IPTables Driver (dedicated BSM_PORT_GATE chain)"
+else
+    RECOMMENDED_FW="Mock Driver (Simulated firewall)"
+fi
+
+# -----------------------------------------------------------------------------
+# Display Host Summary & Diagnostics
+# -----------------------------------------------------------------------------
+if [ "${MODE}" = "upgrade" ]; then
+    print_ascii_banner "Bare-Metal Linux Upgrade"
+else
+    print_ascii_banner "Bare-Metal Linux Installer"
+fi
+
+echo "================================================================================"
+echo -e "                   ${BOLD}Host Diagnostics & Environment Summary${RESET}"
+echo "================================================================================"
+echo -e "  Operating System      : ${HOST_OS} (${ARCH_RAW})"
+echo -e "  Linux Kernel          : ${HOST_KERNEL}"
+echo -e "  CPU Architecture      : ${HOST_CPU_STR}"
+echo -e "  System Memory         : ${HOST_MEM_STR}"
+echo -e "  Storage Space         : ${HOST_DISK_STR}"
+echo "--------------------------------------------------------------------------------"
+echo -e "  Container Engine      : ${DOCKER_STATUS}"
+echo -e "  Existing BSM Status   : ${BSM_STATUS}"
+echo -e "  Target BSM Version    : ${TARGET_VERSION}"
+echo -e "  Operation Mode        : $([ "${MODE}" = "upgrade" ] && echo "Upgrade" || echo "Fresh Installation")"
+echo "--------------------------------------------------------------------------------"
+echo -e "  Host Firewalls        :"
+echo -e "    - UFW               : ${UFW_STATUS}"
+echo -e "    - IPTables          : ${IPTABLES_STATUS}"
+echo -e "    - Firewalld         : ${FIREWALLD_STATUS}"
+echo -e "    - Selected Driver   : ${RECOMMENDED_FW}"
+echo "================================================================================"
+
+# -----------------------------------------------------------------------------
+# Interactive Confirmation Prompt (Defaults to Asking)
+# -----------------------------------------------------------------------------
+if [ "${ASSUME_YES}" = false ] && [ "${FORCE_ACTION}" = false ]; then
+    echo ""
+    if [ "${MODE}" = "upgrade" ]; then
+        PROMPT_TEXT="Proceed with Upgrade to ${TARGET_VERSION}? [Y/n] "
+    else
+        PROMPT_TEXT="Proceed with Fresh Installation of ${TARGET_VERSION}? [Y/n] "
+    fi
+
+    CONFIRM_REPLY=""
+    if [ -t 0 ]; then
+        read -r -p "${PROMPT_TEXT}" CONFIRM_REPLY
+    elif read -r -t 1 CONFIRM_REPLY 2>/dev/null; then
+        :
+    elif [ -r /dev/tty ]; then
+        read -r -p "${PROMPT_TEXT}" CONFIRM_REPLY < /dev/tty
+    else
+        log_warn "Non-interactive shell detected and no confirmation response provided."
+        log_warn "Run with -y or --yes to proceed automatically (e.g. sudo bash deploy/install.sh -y)."
+        exit 1
+    fi
+
+    CONFIRM_REPLY="$(echo "${CONFIRM_REPLY}" | tr '[:upper:]' '[:lower:]')"
+    if [ -n "${CONFIRM_REPLY}" ] && [ "${CONFIRM_REPLY}" != "y" ] && [ "${CONFIRM_REPLY}" != "yes" ]; then
+        echo ""
+        log_info "Operation cancelled by user. No changes were made to your system."
+        exit 0
+    fi
+    echo ""
+    log_info "Confirmation received. Proceeding with $([ "${MODE}" = "upgrade" ] && echo "upgrade" || echo "installation")..."
+    echo ""
 fi
 
 # Setup staging workspace with cleanup trap
