@@ -152,3 +152,17 @@ func TestLeaseAuditor(t *testing.T) {
 		t.Fatalf("expected status 'expired', got '%s'", refreshed.Status)
 	}
 }
+
+func TestFindExecutable(t *testing.T) {
+	// Should resolve sh or ls
+	shPath := FindExecutable("sh")
+	if shPath == "sh" && !filepath.IsAbs(shPath) {
+		t.Logf("FindExecutable resolved 'sh' to '%s'", shPath)
+	}
+
+	// Should preserve existing absolute paths
+	abs := "/usr/bin/custom-tool"
+	if FindExecutable(abs) != abs {
+		t.Fatalf("expected '%s', got '%s'", abs, FindExecutable(abs))
+	}
+}

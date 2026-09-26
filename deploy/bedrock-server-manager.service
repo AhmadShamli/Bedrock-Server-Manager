@@ -10,6 +10,7 @@ User=bedrock
 Group=bedrock
 SupplementaryGroups=docker
 EnvironmentFile=-/etc/bedrock-server-manager/bsm.env
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=/usr/local/bin/bedrock-server-manager
 WorkingDirectory=/var/lib/bedrock-server-manager
 Restart=always

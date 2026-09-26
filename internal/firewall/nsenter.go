@@ -5,9 +5,27 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
+
+// FindExecutable searches for an executable in PATH and standard system sbin directories.
+func FindExecutable(bin string) string {
+	if strings.Contains(bin, "/") {
+		return bin
+	}
+	if p, err := exec.LookPath(bin); err == nil {
+		return p
+	}
+	for _, dir := range []string{"/usr/sbin", "/sbin", "/usr/local/sbin", "/usr/bin", "/bin"} {
+		fullPath := filepath.Join(dir, bin)
+		if fi, err := os.Stat(fullPath); err == nil && !fi.IsDir() {
+			return fullPath
+		}
+	}
+	return bin
+}
 
 // NetNSDetector detects whether the current process is in a containerized network namespace
 // and automatically wraps firewall CLI calls with nsenter if needed.
@@ -46,13 +64,39 @@ func (d *NetNSDetector) ShouldUseNsenter() bool {
 	return selfSys.Ino != initSys.Ino
 }
 
-// WrapCommand prepends nsenter --net=/proc/1/ns/net if nsenter is needed.
+// WrapCommand prepends nsenter --net=/proc/1/ns/net if nsenter is needed,
+// and elevates commands with sudo -n if running as a non-root user (e.g. systemd bedrock user).
 func (d *NetNSDetector) WrapCommand(ctx context.Context, cmd string, args ...string) *exec.Cmd {
-	if d.ShouldUseNsenter() {
-		newArgs := append([]string{"--net=/proc/1/ns/net", cmd}, args...)
-		return exec.CommandContext(ctx, "nsenter", newArgs...)
+	resolvedCmd := FindExecutable(cmd)
+	baseName := filepath.Base(resolvedCmd)
+	isNonRoot := os.Getuid() != 0
+
+	hasSudo := false
+	if _, err := exec.LookPath("sudo"); err == nil {
+		hasSudo = true
+	} else if _, err := os.Stat("/usr/bin/sudo"); err == nil {
+		hasSudo = true
 	}
-	return exec.CommandContext(ctx, cmd, args...)
+
+	if d.ShouldUseNsenter() {
+		nsenterBin := FindExecutable("nsenter")
+		nsArgs := append([]string{"--net=/proc/1/ns/net", resolvedCmd}, args...)
+		if isNonRoot && hasSudo {
+			sudoArgs := append([]string{"-n", nsenterBin}, nsArgs...)
+			return exec.CommandContext(ctx, "sudo", sudoArgs...)
+		}
+		return exec.CommandContext(ctx, nsenterBin, nsArgs...)
+	}
+
+	// For host-level calls as non-root user:
+	// UFW's Python script explicitly validates os.getuid() == 0 and fails otherwise.
+	// Passwordless sudo is granted by /etc/sudoers.d/bedrock-server-manager.
+	if isNonRoot && hasSudo && baseName == "ufw" {
+		sudoArgs := append([]string{"-n", resolvedCmd}, args...)
+		return exec.CommandContext(ctx, "sudo", sudoArgs...)
+	}
+
+	return exec.CommandContext(ctx, resolvedCmd, args...)
 }
 
 // RunCommand executes a command with nsenter wrapping if applicable.

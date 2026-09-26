@@ -3,6 +3,7 @@ package firewall
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -28,20 +29,37 @@ func (u *UFWDriver) Name() string {
 }
 
 func (u *UFWDriver) Detect(ctx context.Context) (bool, error) {
-	_, err := exec.LookPath("ufw")
-	if err != nil {
-		return false, nil
+	bin := FindExecutable("ufw")
+	if _, err := os.Stat(bin); err != nil {
+		if _, err := exec.LookPath("ufw"); err != nil {
+			return false, fmt.Errorf("ufw executable not found in PATH or standard system directories")
+		}
 	}
+
 	out, err := u.detector.RunCommand(ctx, "ufw", "status")
 	if err != nil {
-		return false, nil
+		return false, fmt.Errorf("ufw status check failed: %w", err)
 	}
-	return strings.Contains(strings.ToLower(string(out)), "status:"), nil
+
+	outStr := strings.ToLower(string(out))
+	if strings.Contains(outStr, "status: active") {
+		return true, nil
+	}
+	if strings.Contains(outStr, "status: inactive") {
+		return false, fmt.Errorf("ufw is installed but inactive ('Status: inactive' - run 'sudo ufw enable')")
+	}
+	if strings.Contains(outStr, "status:") {
+		return true, nil
+	}
+	return false, fmt.Errorf("unexpected ufw output: %s", strings.TrimSpace(string(out)))
 }
 
 func (u *UFWDriver) Validate(ctx context.Context) error {
 	detected, err := u.Detect(ctx)
-	if err != nil || !detected {
+	if err != nil {
+		return err
+	}
+	if !detected {
 		return fmt.Errorf("ufw is not active or installed")
 	}
 	return nil

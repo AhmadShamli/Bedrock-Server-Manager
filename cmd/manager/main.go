@@ -209,9 +209,11 @@ func main() {
 			log.Println("[Firewall] Initialized UFW driver")
 		} else {
 			ipt := firewall.NewIPTablesDriver(detector)
-			if err := ipt.Validate(ctx); err == nil {
+			if iptErr := ipt.Validate(ctx); iptErr == nil {
 				fwDriver = ipt
-				log.Println("[Firewall] UFW unavailable; fallen back to IPTables driver")
+				log.Printf("[Firewall] UFW unavailable (%v); fallen back to IPTables driver", err)
+			} else {
+				log.Printf("[Firewall] UFW unavailable (%v) and IPTables failed (%v)", err, iptErr)
 			}
 		}
 	}
