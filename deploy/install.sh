@@ -610,13 +610,20 @@ if getent group docker >/dev/null 2>&1; then
     log_success "Added 'bedrock' user to 'docker' group for BDS container orchestration."
 fi
 
-mkdir -p /var/lib/bedrock-server-manager /var/lib/bedrock-server-manager/data \
-         /var/lib/bedrock-server-manager/data/servers /var/lib/bedrock-server-manager/data/backups \
-         /var/lib/bedrock-server-manager/backups /run/bedrock-server-manager /etc/bedrock-server-manager
+TARGET_DATA_DIR="/var/lib/bedrock-server-manager/data"
+if [ -f /etc/bedrock-server-manager/bsm.env ]; then
+    CUSTOM_DIR="$(grep -E '^\s*DATA_DIR=' /etc/bedrock-server-manager/bsm.env | cut -d= -f2- | tr -d '"' | tr -d "'" | sed -E 's/^[ \t]+//;s/[ \t]+$//' || true)"
+    if [ -n "${CUSTOM_DIR}" ]; then
+        TARGET_DATA_DIR="${CUSTOM_DIR}"
+    fi
+fi
 
-chown -R bedrock:bedrock /var/lib/bedrock-server-manager /run/bedrock-server-manager
-chmod 0750 /var/lib/bedrock-server-manager /run/bedrock-server-manager
-chmod 0700 /var/lib/bedrock-server-manager/backups /var/lib/bedrock-server-manager/data/backups
+mkdir -p /var/lib/bedrock-server-manager /run/bedrock-server-manager /etc/bedrock-server-manager \
+         "${TARGET_DATA_DIR}" "${TARGET_DATA_DIR}/servers" "${TARGET_DATA_DIR}/backups"
+
+chown -R bedrock:bedrock /var/lib/bedrock-server-manager /run/bedrock-server-manager "${TARGET_DATA_DIR}"
+chmod 0750 /var/lib/bedrock-server-manager /run/bedrock-server-manager "${TARGET_DATA_DIR}"
+chmod 0700 "${TARGET_DATA_DIR}/backups"
 
 # -----------------------------------------------------------------------------
 # 3. Pre-Upgrade Backup (if upgrading)
@@ -989,9 +996,9 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=false
 NoNewPrivileges=false
-ReadWritePaths=/var/lib/bedrock-server-manager /run/bedrock-server-manager -/etc/ufw
+ReadWritePaths=-/etc/ufw
 
 [Install]
 WantedBy=multi-user.target

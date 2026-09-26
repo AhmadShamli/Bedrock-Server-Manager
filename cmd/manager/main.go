@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,29 +31,58 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 {
-		switch os.Args[1] {
-		case "version", "-v", "--version":
+	var customConfigFile string
+
+	for i := 1; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		switch {
+		case arg == "version" || arg == "-v" || arg == "--version":
 			fmt.Printf("%s v%s (Linux static) - %s\n", version.AppName, version.Version, version.RepositoryURL)
 			return
-		case "help", "-h", "--help":
-			fmt.Printf("Usage: %s [serve|version|help]\n\nCommands:\n  serve    Run the Bedrock Server Manager daemon (default)\n  version  Display current version and repository info\n  help     Display usage help\n", os.Args[0])
+		case arg == "help" || arg == "-h" || arg == "--help":
+			fmt.Printf("Usage: %s [serve] [options]\n\nCommands:\n  serve               Run the Bedrock Server Manager daemon (default)\n  version             Display current version and repository info\n  help                Display usage help\n\nOptions:\n  -c, --config <file> Specify custom environment/configuration file path\n", os.Args[0])
 			return
-		case "serve":
+		case arg == "serve":
 			// Proceed to daemon start
+		case arg == "-c" || arg == "--config":
+			if i+1 < len(os.Args) {
+				customConfigFile = os.Args[i+1]
+				i++
+			} else {
+				fmt.Fprintf(os.Stderr, "Error: %s requires a file path\n", arg)
+				os.Exit(1)
+			}
+		case strings.HasPrefix(arg, "--config="):
+			customConfigFile = strings.TrimPrefix(arg, "--config=")
 		default:
-			if len(os.Args[1]) > 0 && os.Args[1][0] == '-' {
+			if strings.HasPrefix(arg, "-") {
 				fmt.Fprintf(os.Stderr, "Unknown flag: %s\nRun '%s help' for usage.\n", os.Args[1], os.Args[0])
 				os.Exit(1)
 			}
 		}
 	}
 
-	cfg := config.LoadConfig()
+	cfg := config.LoadConfig(customConfigFile)
 
 	log.Println("======================================================")
 	log.Printf("     %s v%s - DAEMON START      \n", version.AppName, version.Version)
 	log.Println("======================================================")
+	if cfg.ConfigFile != "" {
+		log.Printf("[Config] Loaded configuration from %s", cfg.ConfigFile)
+	}
+	log.Printf("[Config] Active DATA_DIR: %s", cfg.DataDir)
+
+	// Ensure DATA_DIR and necessary subdirectories exist
+	subdirs := []string{
+		cfg.DataDir,
+		filepath.Join(cfg.DataDir, "servers"),
+		filepath.Join(cfg.DataDir, "backups"),
+	}
+	for _, dir := range subdirs {
+		if err := os.MkdirAll(dir, 0750); err != nil {
+			log.Fatalf("[FATAL] Failed to initialize DATA_DIR directory '%s': %v (ensure the directory exists and is writable)", dir, err)
+		}
+	}
 
 	// 1. Open Primary Database
 	mgrDB, err := database.OpenManagerDB(cfg.ManagerDBPath)

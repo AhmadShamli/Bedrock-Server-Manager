@@ -21,11 +21,11 @@ LimitNOFILE=65536
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
-# Filesystem sandboxing
+# Filesystem sandboxing (protects OS binaries while allowing custom DATA_DIR paths)
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=false
 NoNewPrivileges=false
-ReadWritePaths=/var/lib/bedrock-server-manager /run/bedrock-server-manager -/etc/ufw
+ReadWritePaths=-/etc/ufw
 
 [Install]
 WantedBy=multi-user.target
