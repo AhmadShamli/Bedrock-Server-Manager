@@ -99,6 +99,10 @@ export const App: React.FC = () => {
             element={user ? <Dashboard user={user} /> : <Navigate to="/login" replace />}
           />
           <Route
+            path="/servers"
+            element={user ? <Dashboard user={user} /> : <Navigate to="/login" replace />}
+          />
+          <Route
             path="/servers/:id"
             element={user ? <ServerHub user={user} /> : <Navigate to="/login" replace />}
           />
