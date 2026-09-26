@@ -91,7 +91,7 @@ sudo ./install.sh [OPTIONS]
 | :--- | :--- |
 | `-y`, `--yes` | Non-interactive mode (automatically answer yes to confirmation) |
 | `-u`, `--upgrade` | Upgrade existing installation to the latest release with automatic backup |
-| `-v`, `--version <tag>` | Install or upgrade to a specific release tag (e.g. `v1.1.0`) |
+| `-v`, `--version <tag>` | Install or upgrade to a specific release tag (e.g. `v1.2.0`) |
 | `--check` | Check current version against latest GitHub release without changing files |
 | `-m`, `--method <method>` | Source method: `download` (GitHub release), `build` (compile from source), or `local` |
 | `--skip-backup` | Skip pre-upgrade database and configuration backup |

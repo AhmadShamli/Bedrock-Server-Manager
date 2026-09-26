@@ -5,7 +5,7 @@ set -euo pipefail
 # Supported: Debian/Ubuntu, RHEL/Rocky/Fedora, Arch Linux, Alpine
 
 REPO="AhmadShamli/Bedrock-Server-Manager"
-DEFAULT_FALLBACK_TAG="v1.1.0"
+DEFAULT_FALLBACK_TAG="v1.2.0"
 
 # Ensure standard binary directories are in PATH (important under sudo/secure_path)
 for extra_path in /usr/local/go/bin /usr/local/bin /usr/bin; do
@@ -73,7 +73,7 @@ Usage:
 
 Options:
   -u, --upgrade            Run in upgrade mode (automatically detected if BSM is already installed)
-  -v, --version <tag>      Specify target release version (e.g. v1.1.0 or latest)
+  -v, --version <tag>      Specify target release version (e.g. v1.2.0 or latest)
   -m, --method <method>    Installation method: 'download' (GitHub release), 'build' (compile from source), or 'local'
   -y, --yes                Automatic yes to confirmation prompt (run non-interactively)
   --check                  Check currently installed version against latest release without upgrading
@@ -91,7 +91,7 @@ Examples:
   sudo ./install.sh                                 # Interactive install or upgrade with diagnostics
   sudo ./install.sh -y                              # Non-interactive automated install/upgrade
   sudo ./install.sh --upgrade                       # Explicit upgrade with automated backup
-  sudo ./install.sh -v v1.1.0                       # Upgrade or install specific version
+  sudo ./install.sh -v v1.2.0                       # Upgrade or install specific version
   sudo ./install.sh --check                         # Check for available updates
   sudo ./install.sh -m build                        # Compile latest binary from local source
 EOF
