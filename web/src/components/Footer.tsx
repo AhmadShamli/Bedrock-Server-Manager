@@ -5,7 +5,7 @@ import { api } from '../api/client';
 export const Footer: React.FC = () => {
   const currentYear = new Date().getFullYear();
   const [version, setVersion] = useState<string>(
-    typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.8'
+    typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.9'
   );
 
   useEffect(() => {

@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"runtime"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
@@ -15,6 +19,11 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
 )
 
+type cpuStat struct {
+	idle  uint64
+	total uint64
+}
+
 // DashboardHandler provides aggregate metrics and stats for the manager dashboard.
 type DashboardHandler struct {
 	db                 *database.ManagerDB
@@ -22,6 +31,10 @@ type DashboardHandler struct {
 	playerManager      *player.Manager
 	telemetryCollector *telemetry.TelemetryCollector
 	startTime          time.Time
+	mu                 sync.Mutex
+	lastCPUStat        cpuStat
+	lastCPUTime        time.Time
+	lastCPUPercent     float64
 }
 
 // NewDashboardHandler initializes a new DashboardHandler.
@@ -31,13 +44,18 @@ func NewDashboardHandler(
 	pm *player.Manager,
 	tc *telemetry.TelemetryCollector,
 ) *DashboardHandler {
-	return &DashboardHandler{
+	h := &DashboardHandler{
 		db:                 db,
 		engine:             eng,
 		playerManager:      pm,
 		telemetryCollector: tc,
 		startTime:          time.Now(),
+		lastCPUTime:        time.Now(),
 	}
+	if tot, idl, ok := readRawCPUStat(); ok {
+		h.lastCPUStat = cpuStat{total: tot, idle: idl}
+	}
+	return h
 }
 
 // ServerSummary represents quick overview information for a server.
@@ -56,17 +74,25 @@ type ServerSummary struct {
 	RAMBytes        int64   `json:"ram_bytes"`
 }
 
-// HostSystemSummary holds Go runtime and host OS telemetry.
+// HostSystemSummary holds Go runtime and host OS physical telemetry.
 type HostSystemSummary struct {
-	Version    string  `json:"version"`
-	AppName    string  `json:"app_name"`
-	GoVersion  string  `json:"go_version"`
-	Goroutines int     `json:"goroutines"`
-	OS         string  `json:"os"`
-	Arch       string  `json:"arch"`
-	UptimeSec  int64   `json:"uptime_sec"`
-	AllocMB    float64 `json:"alloc_mb"`
-	SysMB      float64 `json:"sys_mb"`
+	Version           string  `json:"version"`
+	AppName           string  `json:"app_name"`
+	GoVersion         string  `json:"go_version"`
+	Goroutines        int     `json:"goroutines"`
+	OS                string  `json:"os"`
+	Arch              string  `json:"arch"`
+	UptimeSec         int64   `json:"uptime_sec"`
+	AllocMB           float64 `json:"alloc_mb"`
+	SysMB             float64 `json:"sys_mb"`
+	HostCPUCores      int     `json:"host_cpu_cores"`
+	HostCPUPercent    float64 `json:"host_cpu_percent"`
+	HostTotalRAMBytes int64   `json:"host_total_ram_bytes"`
+	HostUsedRAMBytes  int64   `json:"host_used_ram_bytes"`
+	HostRAMPercent    float64 `json:"host_ram_percent"`
+	HostLoadAvg1      float64 `json:"host_load_avg_1"`
+	HostLoadAvg5      float64 `json:"host_load_avg_5"`
+	HostLoadAvg15     float64 `json:"host_load_avg_15"`
 }
 
 // DashboardSummaryResponse is the comprehensive payload for the dashboard overview.
@@ -81,6 +107,8 @@ type DashboardSummaryResponse struct {
 	TotalAllocatedCores float64            `json:"total_allocated_cores"`
 	TotalAllocatedRAM   int64              `json:"total_allocated_ram"`
 	TotalUsedRAM        int64              `json:"total_used_ram"`
+	TotalUsedCPUPercent float64            `json:"total_used_cpu_percent"`
+	TotalUsedCPUCores   float64            `json:"total_used_cpu_cores"`
 	AverageCPUPercent   float64            `json:"average_cpu_percent"`
 	HostSystem          HostSystemSummary  `json:"host_system"`
 	TotalBackupsCount   int64              `json:"total_backups_count"`
@@ -89,6 +117,123 @@ type DashboardSummaryResponse struct {
 	AllowRulesCount     int                `json:"allow_rules_count"`
 	PortGateBansCount   int                `json:"portgate_bans_count"`
 	Servers             []ServerSummary    `json:"servers"`
+}
+
+// readHostMemory extracts real physical memory metrics on Linux with cross-platform fallback.
+func readHostMemory() (totalBytes int64, usedBytes int64, percent float64) {
+	if runtime.GOOS != "linux" {
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		return int64(m.Sys), int64(m.Alloc), float64(m.Alloc) / float64(m.Sys) * 100.0
+	}
+
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, 0, 0
+	}
+
+	var memTotalKb, memAvailKb int64
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			switch fields[0] {
+			case "MemTotal:":
+				memTotalKb, _ = strconv.ParseInt(fields[1], 10, 64)
+			case "MemAvailable:":
+				memAvailKb, _ = strconv.ParseInt(fields[1], 10, 64)
+			}
+		}
+	}
+
+	if memTotalKb > 0 {
+		totalBytes = memTotalKb * 1024
+		availBytes := memAvailKb * 1024
+		usedBytes = totalBytes - availBytes
+		if usedBytes < 0 {
+			usedBytes = 0
+		}
+		percent = (float64(usedBytes) / float64(totalBytes)) * 100.0
+	}
+	return
+}
+
+// readHostLoadAvg parses 1m, 5m, 15m system load averages on Linux.
+func readHostLoadAvg() (l1, l5, l15 float64) {
+	if runtime.GOOS != "linux" {
+		return 0, 0, 0
+	}
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0, 0, 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) >= 3 {
+		l1, _ = strconv.ParseFloat(fields[0], 64)
+		l5, _ = strconv.ParseFloat(fields[1], 64)
+		l15, _ = strconv.ParseFloat(fields[2], 64)
+	}
+	return
+}
+
+// readRawCPUStat reads aggregate CPU ticks from /proc/stat.
+func readRawCPUStat() (total, idle uint64, ok bool) {
+	if runtime.GOOS != "linux" {
+		return 0, 0, false
+	}
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0, 0, false
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 {
+		return 0, 0, false
+	}
+	fields := strings.Fields(lines[0])
+	if len(fields) < 5 || fields[0] != "cpu" {
+		return 0, 0, false
+	}
+	for i := 1; i < len(fields); i++ {
+		val, err := strconv.ParseUint(fields[i], 10, 64)
+		if err != nil {
+			continue
+		}
+		total += val
+		if i == 4 || i == 5 { // idle + iowait
+			idle += val
+		}
+	}
+	return total, idle, true
+}
+
+// sampleHostCPU computes host CPU utilization percentage since the last sample.
+func (h *DashboardHandler) sampleHostCPU() float64 {
+	total, idle, ok := readRawCPUStat()
+	if !ok {
+		return 0
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	now := time.Now()
+	if h.lastCPUStat.total > 0 && total > h.lastCPUStat.total {
+		diffTotal := float64(total - h.lastCPUStat.total)
+		diffIdle := float64(idle - h.lastCPUStat.idle)
+		if diffTotal > 0 {
+			pct := (1.0 - (diffIdle / diffTotal)) * 100.0
+			if pct < 0 {
+				pct = 0
+			} else if pct > 100 {
+				pct = 100
+			}
+			h.lastCPUPercent = pct
+		}
+	}
+
+	h.lastCPUStat = cpuStat{idle: idle, total: total}
+	h.lastCPUTime = now
+	return h.lastCPUPercent
 }
 
 // Summary compiles aggregate server, runtime, host, player, and storage statistics.
@@ -229,16 +374,28 @@ func (h *DashboardHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
+	hostTotRAM, hostUsedRAM, hostRAMPct := readHostMemory()
+	hostL1, hostL5, hostL15 := readHostLoadAvg()
+	hostCPUPct := h.sampleHostCPU()
+
 	hostSystem := HostSystemSummary{
-		Version:    version.Version,
-		AppName:    version.AppName,
-		GoVersion:  runtime.Version(),
-		Goroutines: runtime.NumGoroutine(),
-		OS:         runtime.GOOS,
-		Arch:       runtime.GOARCH,
-		UptimeSec:  int64(time.Since(h.startTime).Seconds()),
-		AllocMB:    float64(m.Alloc) / (1024 * 1024),
-		SysMB:      float64(m.Sys) / (1024 * 1024),
+		Version:           version.Version,
+		AppName:           version.AppName,
+		GoVersion:         runtime.Version(),
+		Goroutines:        runtime.NumGoroutine(),
+		OS:                runtime.GOOS,
+		Arch:              runtime.GOARCH,
+		UptimeSec:         int64(time.Since(h.startTime).Seconds()),
+		AllocMB:           float64(m.Alloc) / (1024 * 1024),
+		SysMB:             float64(m.Sys) / (1024 * 1024),
+		HostCPUCores:      runtime.NumCPU(),
+		HostCPUPercent:    hostCPUPct,
+		HostTotalRAMBytes: hostTotRAM,
+		HostUsedRAMBytes:  hostUsedRAM,
+		HostRAMPercent:    hostRAMPct,
+		HostLoadAvg1:      hostL1,
+		HostLoadAvg5:      hostL5,
+		HostLoadAvg15:     hostL15,
 	}
 
 	res := DashboardSummaryResponse{
@@ -252,6 +409,8 @@ func (h *DashboardHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		TotalAllocatedCores: totalAllocatedCores,
 		TotalAllocatedRAM:   totalAllocatedRAM,
 		TotalUsedRAM:        totalUsedRAM,
+		TotalUsedCPUPercent: totalCPUPercent,
+		TotalUsedCPUCores:   totalCPUPercent / 100.0,
 		AverageCPUPercent:   avgCPU,
 		HostSystem:          hostSystem,
 		TotalBackupsCount:   dbStats.TotalBackupsCount,

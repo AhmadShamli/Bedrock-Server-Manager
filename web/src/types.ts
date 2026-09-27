@@ -230,6 +230,14 @@ export interface HostSystemSummary {
   uptime_sec: number;
   alloc_mb: number;
   sys_mb: number;
+  host_cpu_cores: number;
+  host_cpu_percent: number;
+  host_total_ram_bytes: number;
+  host_used_ram_bytes: number;
+  host_ram_percent: number;
+  host_load_avg_1: number;
+  host_load_avg_5: number;
+  host_load_avg_15: number;
 }
 
 export interface DashboardSummary {
@@ -243,6 +251,8 @@ export interface DashboardSummary {
   total_allocated_cores: number;
   total_allocated_ram: number;
   total_used_ram: number;
+  total_used_cpu_percent: number;
+  total_used_cpu_cores: number;
   average_cpu_percent: number;
   host_system: HostSystemSummary;
   total_backups_count: number;

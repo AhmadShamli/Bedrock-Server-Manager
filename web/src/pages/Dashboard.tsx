@@ -99,6 +99,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     ? Math.round((summary.running_servers / summary.total_servers) * 100) 
     : 0;
 
+  const ramAllocated = summary?.total_allocated_ram ?? 0;
+  const ramUsed = summary?.total_used_ram ?? 0;
+  const ramPercentOfAllocated = ramAllocated > 0
+    ? Math.min(100, Math.round((ramUsed / ramAllocated) * 100))
+    : 0;
+
+  const coresAllocated = summary?.total_allocated_cores ?? 0;
+  const coresUsed = summary?.total_used_cpu_cores ?? 0;
+  const cpuPercentOfAllocated = coresAllocated > 0
+    ? Math.min(100, Math.round((coresUsed / coresAllocated) * 100))
+    : 0;
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
       {/* Top Header */}
@@ -108,7 +120,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
             <h1 className="text-2xl font-bold tracking-tight text-slate-100 flex items-center gap-2">
               <span>Overview Dashboard</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-normal">
-                v{summary?.host_system?.version || '1.5.8'}
+                v{summary?.host_system?.version || '1.5.9'}
               </span>
             </h1>
           </div>
@@ -164,7 +176,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
       )}
 
       {/* Primary KPI Metrics Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {/* Card 1: Server Fleet */}
         <div className="bg-obsidian-900 border border-obsidian-750/80 hover:border-obsidian-600/80 rounded-xl p-5 shadow-sm transition-all relative overflow-hidden group">
           <div className="flex items-center justify-between">
@@ -225,31 +237,79 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
           </div>
         </div>
 
-        {/* Card 3: Memory Allocation & Usage */}
+        {/* Card 3: Total Container CPU (Separated from RAM) */}
         <div className="bg-obsidian-900 border border-obsidian-750/80 hover:border-obsidian-600/80 rounded-xl p-5 shadow-sm transition-all relative overflow-hidden group">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">RAM Allocation</span>
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Container CPU</span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <Activity className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3 flex items-baseline gap-2">
+            <span className="text-2xl font-mono font-bold text-slate-100">
+              {coresUsed.toFixed(2)}
+            </span>
+            <span className="text-xs font-mono text-slate-400">
+              / {coresAllocated.toFixed(1)} vCPU
+            </span>
+          </div>
+          <div className="mt-3 w-full bg-obsidian-800 rounded-full h-1.5 overflow-hidden">
+            <div
+              className={`h-1.5 rounded-full transition-all duration-500 ${
+                cpuPercentOfAllocated > 90
+                  ? 'bg-rose-500'
+                  : cpuPercentOfAllocated > 75
+                  ? 'bg-amber-500'
+                  : 'bg-emerald-500'
+              }`}
+              style={{ width: `${cpuPercentOfAllocated}%` }}
+            ></div>
+          </div>
+          <div className="mt-2.5 flex items-center justify-between text-xs text-slate-400">
+            <span>Load vs Cap:</span>
+            <span className="font-mono text-slate-300 font-medium">
+              {(summary?.total_used_cpu_percent ?? 0).toFixed(1)}% ({cpuPercentOfAllocated}% cap)
+            </span>
+          </div>
+        </div>
+
+        {/* Card 4: Container RAM (Separated from CPU) */}
+        <div className="bg-obsidian-900 border border-obsidian-750/80 hover:border-obsidian-600/80 rounded-xl p-5 shadow-sm transition-all relative overflow-hidden group">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Container RAM</span>
             <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
               <Cpu className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
             <span className="text-2xl font-mono font-bold text-slate-100">
-              {formatBytes(summary?.total_used_ram ?? 0)}
+              {formatBytes(ramUsed)}
             </span>
             <span className="text-xs font-mono text-slate-400">
-              / {formatBytes(summary?.total_allocated_ram ?? 0)} cap
+              / {formatBytes(ramAllocated)} cap
             </span>
           </div>
-          <div className="mt-4 flex items-center justify-between text-xs text-slate-400 border-t border-obsidian-800/80 pt-2.5">
-            <span>Allocated Cores:</span>
+          <div className="mt-3 w-full bg-obsidian-800 rounded-full h-1.5 overflow-hidden">
+            <div
+              className={`h-1.5 rounded-full transition-all duration-500 ${
+                ramPercentOfAllocated > 90
+                  ? 'bg-rose-500'
+                  : ramPercentOfAllocated > 75
+                  ? 'bg-amber-500'
+                  : 'bg-emerald-500'
+              }`}
+              style={{ width: `${ramPercentOfAllocated}%` }}
+            ></div>
+          </div>
+          <div className="mt-2.5 flex items-center justify-between text-xs text-slate-400">
+            <span>Headroom:</span>
             <span className="font-mono text-slate-300 font-medium">
-              {(summary?.total_allocated_cores ?? 0).toFixed(1)} vCPU
+              {formatBytes(Math.max(0, ramAllocated - ramUsed))} free
             </span>
           </div>
         </div>
 
-        {/* Card 4: Backups & Storage */}
+        {/* Card 5: Backups & Storage */}
         <div className="bg-obsidian-900 border border-obsidian-750/80 hover:border-obsidian-600/80 rounded-xl p-5 shadow-sm transition-all relative overflow-hidden group">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Backups Archive</span>
@@ -378,40 +438,105 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                 <span>Host Environment</span>
               </h2>
               <span className="text-[10px] font-mono uppercase bg-obsidian-800 px-2 py-0.5 rounded border border-obsidian-700 text-slate-400">
-                {summary?.host_system.os} / {summary?.host_system.arch}
+                {summary?.host_system.os} / {summary?.host_system.arch} · {summary?.host_system.host_cpu_cores ?? 1} Cores
               </span>
             </div>
 
-            <div className="space-y-3 text-xs">
-              <div className="flex items-center justify-between py-1.5 border-b border-obsidian-800/80">
-                <span className="text-slate-400">Uptime</span>
-                <span className="font-mono text-slate-200 font-medium">
-                  {formatUptime(summary?.host_system.uptime_sec ?? 0)}
-                </span>
+            <div className="space-y-3.5 text-xs">
+              {/* Host Actual CPU */}
+              <div className="bg-obsidian-850/80 border border-obsidian-800 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300 font-medium flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                    Host Physical CPU
+                  </span>
+                  <span className="font-mono text-slate-100 font-bold">
+                    {(summary?.host_system.host_cpu_percent ?? 0).toFixed(1)}%
+                  </span>
+                </div>
+                <div className="w-full bg-obsidian-950 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-1.5 rounded-full transition-all duration-500 ${
+                      (summary?.host_system.host_cpu_percent ?? 0) > 85
+                        ? 'bg-rose-500'
+                        : (summary?.host_system.host_cpu_percent ?? 0) > 65
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-500'
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, summary?.host_system.host_cpu_percent ?? 0))}%` }}
+                  ></div>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-0.5">
+                  <span>Load Avg (1m, 5m, 15m):</span>
+                  <span>
+                    {(summary?.host_system.host_load_avg_1 ?? 0).toFixed(2)}, {(summary?.host_system.host_load_avg_5 ?? 0).toFixed(2)}, {(summary?.host_system.host_load_avg_15 ?? 0).toFixed(2)}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center justify-between py-1.5 border-b border-obsidian-800/80">
-                <span className="text-slate-400">Go Runtime</span>
-                <span className="font-mono text-slate-200">
-                  {summary?.host_system.go_version}
-                </span>
+
+              {/* Host Actual RAM */}
+              <div className="bg-obsidian-850/80 border border-obsidian-800 rounded-lg p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-300 font-medium flex items-center gap-1.5">
+                    <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+                    Host Physical RAM
+                  </span>
+                  <span className="font-mono text-slate-100 font-bold">
+                    {(summary?.host_system.host_ram_percent ?? 0).toFixed(1)}%
+                  </span>
+                </div>
+                <div className="w-full bg-obsidian-950 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className={`h-1.5 rounded-full transition-all duration-500 ${
+                      (summary?.host_system.host_ram_percent ?? 0) > 85
+                        ? 'bg-rose-500'
+                        : (summary?.host_system.host_ram_percent ?? 0) > 70
+                        ? 'bg-amber-500'
+                        : 'bg-emerald-500'
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(0, summary?.host_system.host_ram_percent ?? 0))}%` }}
+                  ></div>
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono pt-0.5">
+                  <span>Used / Total:</span>
+                  <span>
+                    {formatBytes(summary?.host_system.host_used_ram_bytes ?? 0)} / {formatBytes(summary?.host_system.host_total_ram_bytes ?? 0)}
+                  </span>
+                </div>
               </div>
-              <div className="flex items-center justify-between py-1.5 border-b border-obsidian-800/80">
-                <span className="text-slate-400">Active Goroutines</span>
-                <span className="font-mono text-slate-200">
-                  {summary?.host_system.goroutines ?? 0}
-                </span>
-              </div>
-              <div className="flex items-center justify-between py-1.5 border-b border-obsidian-800/80">
-                <span className="text-slate-400">Go Heap Alloc / Sys</span>
-                <span className="font-mono text-slate-200">
-                  {(summary?.host_system.alloc_mb ?? 0).toFixed(1)} MB / {(summary?.host_system.sys_mb ?? 0).toFixed(1)} MB
-                </span>
-              </div>
-              <div className="flex items-center justify-between py-1.5">
-                <span className="text-slate-400">Manager Core</span>
-                <span className="font-mono text-emerald-400 font-medium">
-                  {summary?.host_system.app_name}
-                </span>
+
+              {/* System Runtime Details */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between py-1 border-b border-obsidian-800/80">
+                  <span className="text-slate-400">Host Uptime</span>
+                  <span className="font-mono text-slate-200 font-medium">
+                    {formatUptime(summary?.host_system.uptime_sec ?? 0)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-1 border-b border-obsidian-800/80">
+                  <span className="text-slate-400">Go Runtime</span>
+                  <span className="font-mono text-slate-200">
+                    {summary?.host_system.go_version}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-1 border-b border-obsidian-800/80">
+                  <span className="text-slate-400">Active Goroutines</span>
+                  <span className="font-mono text-slate-200">
+                    {summary?.host_system.goroutines ?? 0}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-1 border-b border-obsidian-800/80">
+                  <span className="text-slate-400">Go Heap Alloc / Sys</span>
+                  <span className="font-mono text-slate-200">
+                    {(summary?.host_system.alloc_mb ?? 0).toFixed(1)} MB / {(summary?.host_system.sys_mb ?? 0).toFixed(1)} MB
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-1">
+                  <span className="text-slate-400">Manager Core</span>
+                  <span className="font-mono text-emerald-400 font-medium">
+                    {summary?.host_system.app_name}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
