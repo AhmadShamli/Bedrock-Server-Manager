@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2, Copy, Check } from 'lucide-react';
+import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2, Copy, Check, Timer } from 'lucide-react';
 import { api } from '../api/client';
 import { KnockConfig } from '../types';
 
@@ -27,10 +27,47 @@ export const KnockPortal: React.FC = () => {
   const [heartbeatStatus, setHeartbeatStatus] = useState<string>('Active');
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
+  // Live Countdown Timer states
+  const [secondsRemaining, setSecondsRemaining] = useState<number | null>(null);
+  const [initialLeaseDuration, setInitialLeaseDuration] = useState<number>(7200);
+
   const copyToClipboard = (text: string, fieldId: string) => {
     navigator.clipboard.writeText(text);
     setCopiedField(fieldId);
     setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const formatTimerDigital = (totalSec: number | null): string => {
+    if (totalSec === null) return '--:--:--';
+    if (totalSec <= 0) return '00:00:00';
+    const hours = Math.floor(totalSec / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const formatTimerHuman = (totalSec: number | null): string => {
+    if (totalSec === null) return '';
+    if (totalSec <= 0) return 'Expired';
+    const hours = Math.floor(totalSec / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  };
+
+  const formatDurationFriendly = (sec?: number): string => {
+    if (!sec || sec <= 0) return '2 hours';
+    const hrs = Math.floor(sec / 3600);
+    const mins = Math.floor((sec % 3600) / 60);
+    if (hrs > 0 && mins > 0) return `${hrs}h ${mins}m`;
+    if (hrs > 0) return `${hrs} hour${hrs > 1 ? 's' : ''}`;
+    return `${mins} minute${mins > 1 ? 's' : ''}`;
   };
 
   useEffect(() => {
@@ -75,16 +112,48 @@ export const KnockPortal: React.FC = () => {
     init();
   }, [id]);
 
+  // Live Timer Countdown Effect (ticks every second for temporary leases)
+  useEffect(() => {
+    if (!activeLease || activeLease.always_allowed) {
+      setSecondsRemaining(null);
+      return;
+    }
+
+    const duration = activeLease.expires_in_seconds || config?.port_gate_timeout || 7200;
+    setInitialLeaseDuration((prev) => Math.max(prev, duration));
+
+    const expiryTime = Date.now() + duration * 1000;
+
+    const tick = () => {
+      const remaining = Math.max(0, Math.floor((expiryTime - Date.now()) / 1000));
+      setSecondsRemaining(remaining);
+      if (remaining <= 0) {
+        setHeartbeatStatus('Lease Expired');
+      }
+    };
+
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [activeLease?.expires_in_seconds, activeLease?.always_allowed, config?.port_gate_timeout]);
+
   // Background Heartbeat for Mobile 4G/5G Roaming (only for temporary leases)
   useEffect(() => {
-    if (!id || !activeLease || activeLease.always_allowed) return;
+    if (!id || !activeLease?.session_token || activeLease.always_allowed) return;
 
     const intervalSec = config?.heartbeat_interval_seconds || 10;
     const interval = setInterval(async () => {
       try {
         const hb = await api.sendHeartbeat(id, activeLease.session_token);
+        setActiveLease((prev) => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            ip_address: hb.ip_updated ? hb.ip_address : prev.ip_address,
+            expires_in_seconds: typeof hb.expires_in_seconds === 'number' ? hb.expires_in_seconds : prev.expires_in_seconds,
+          };
+        });
         if (hb.ip_updated) {
-          setActiveLease((prev) => prev ? { ...prev, ip_address: hb.ip_address } : null);
           setHeartbeatStatus(`Roaming handoff: IP updated to ${hb.ip_address}`);
         } else {
           setHeartbeatStatus('Synced');
@@ -95,7 +164,7 @@ export const KnockPortal: React.FC = () => {
     }, intervalSec * 1000);
 
     return () => clearInterval(interval);
-  }, [id, activeLease, config]);
+  }, [id, activeLease?.session_token, activeLease?.always_allowed, config?.heartbeat_interval_seconds]);
 
   const handleKnock = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,7 +204,11 @@ export const KnockPortal: React.FC = () => {
     setError(null);
     try {
       const hb = await api.sendHeartbeat(id, activeLease?.session_token);
-      setActiveLease((prev) => prev ? { ...prev, ip_address: hb.ip_address } : null);
+      setActiveLease((prev) => prev ? {
+        ...prev,
+        ip_address: hb.ip_address,
+        expires_in_seconds: typeof hb.expires_in_seconds === 'number' ? hb.expires_in_seconds : prev.expires_in_seconds,
+      } : null);
     } catch (err: any) {
       setError('Session expired. Please re-enter your knock credentials.');
       setActiveLease(null);
@@ -278,11 +351,18 @@ export const KnockPortal: React.FC = () => {
                     <span>Permanently Open</span>
                   </span>
                 </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Lease Timer:</span>
+                  <span className="text-emerald-400 font-semibold flex items-center space-x-1.5">
+                    <Timer className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Permanent Whitelist</span>
+                  </span>
+                </div>
               </div>
             </div>
           ) : (
             /* TEMPORARY LEASE UNLOCKED SCREEN */
-            <div className="space-y-6">
+            <div className="space-y-5">
               <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 text-center">
                 <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 mb-2">
                   <CheckCircle2 className="w-6 h-6" />
@@ -291,6 +371,77 @@ export const KnockPortal: React.FC = () => {
                 <p className="text-xs text-slate-300 mt-1 font-mono">
                   Your IP <span className="text-emerald-300 font-bold">{activeLease.ip_address}</span> is authorized on the firewall.
                 </p>
+              </div>
+
+              {/* Live Countdown Timer Card */}
+              <div className={`p-4 rounded-xl border text-center transition-all ${
+                secondsRemaining !== null && secondsRemaining <= 0
+                  ? 'bg-rose-950/40 border-rose-500/50 shadow-[0_0_25px_rgba(244,63,94,0.2)]'
+                  : secondsRemaining !== null && secondsRemaining < 300
+                  ? 'bg-amber-950/40 border-amber-500/50 shadow-[0_0_25px_rgba(245,158,11,0.2)]'
+                  : 'bg-emerald-950/40 border-emerald-500/40 shadow-[0_0_25px_rgba(16,185,129,0.15)]'
+              }`}>
+                <div className="flex items-center justify-center space-x-2 mb-1.5">
+                  <Timer className={`w-4 h-4 ${
+                    secondsRemaining !== null && secondsRemaining <= 0
+                      ? 'text-rose-400'
+                      : secondsRemaining !== null && secondsRemaining < 300
+                      ? 'text-amber-400 animate-pulse'
+                      : 'text-emerald-400 animate-pulse'
+                  }`} />
+                  <span className="text-[11px] font-mono uppercase tracking-widest text-slate-300 font-bold">
+                    {secondsRemaining !== null && secondsRemaining <= 0
+                      ? 'Firewall Lease Expired'
+                      : 'Firewall Access Lease Timer'}
+                  </span>
+                </div>
+
+                <div className={`font-mono text-3xl sm:text-4xl font-black tracking-wider my-2 tabular-nums ${
+                  secondsRemaining !== null && secondsRemaining <= 0
+                    ? 'text-rose-400'
+                    : secondsRemaining !== null && secondsRemaining < 300
+                    ? 'text-amber-400'
+                    : 'text-emerald-400'
+                }`}>
+                  {formatTimerDigital(secondsRemaining)}
+                </div>
+
+                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 mt-2 px-1">
+                  <span>Port Gating Active</span>
+                  <span className={secondsRemaining !== null && secondsRemaining < 300 ? 'text-amber-300 font-bold' : 'text-slate-300'}>
+                    {formatTimerHuman(secondsRemaining)}
+                  </span>
+                </div>
+
+                {/* Animated Progress Bar */}
+                {initialLeaseDuration > 0 && secondsRemaining !== null && (
+                  <div className="w-full h-2 bg-obsidian-950 rounded-full mt-2.5 overflow-hidden border border-obsidian-800">
+                    <div
+                      className={`h-full transition-all duration-1000 rounded-full ${
+                        secondsRemaining <= 0
+                          ? 'bg-rose-500 w-full'
+                          : secondsRemaining < 300
+                          ? 'bg-amber-400'
+                          : 'bg-emerald-400'
+                      }`}
+                      style={{
+                        width: `${Math.min(100, Math.max(0, (secondsRemaining / initialLeaseDuration) * 100))}%`,
+                      }}
+                    />
+                  </div>
+                )}
+
+                {/* If Expired, show Re-knock / Renew button */}
+                {secondsRemaining !== null && secondsRemaining <= 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveLease(null)}
+                    className="w-full mt-3 py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-slate-950 font-bold font-mono text-xs flex items-center justify-center space-x-1.5 transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Renew Access (Knock Again)</span>
+                  </button>
+                )}
               </div>
 
               {/* Direct Launch Button */}
@@ -339,6 +490,19 @@ export const KnockPortal: React.FC = () => {
                     <span>Unlocked for {activeLease.ip_address}</span>
                   </span>
                 </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Lease Timer:</span>
+                  <span className={`font-semibold flex items-center space-x-1.5 tabular-nums ${
+                    secondsRemaining !== null && secondsRemaining <= 0
+                      ? 'text-rose-400'
+                      : secondsRemaining !== null && secondsRemaining < 300
+                      ? 'text-amber-400'
+                      : 'text-emerald-400'
+                  }`}>
+                    <Clock className="w-3.5 h-3.5 inline" />
+                    <span>{formatTimerHuman(secondsRemaining)}</span>
+                  </span>
+                </div>
               </div>
 
               {/* Mobile Roaming & Heartbeat indicator */}
@@ -373,6 +537,16 @@ export const KnockPortal: React.FC = () => {
         ) : (
           /* UNLOCK FORM */
           <form onSubmit={handleKnock} className="space-y-4">
+            {/* Session Lease Timer Badge */}
+            <div className="flex items-center justify-between p-2.5 rounded-lg bg-obsidian-950 border border-obsidian-800 text-[11px] font-mono text-slate-400">
+              <span className="flex items-center gap-1.5">
+                <Timer className="w-3.5 h-3.5 text-cyber-cyan" />
+                <span>Session Lease Duration:</span>
+              </span>
+              <span className="text-emerald-400 font-semibold">
+                {formatDurationFriendly(config?.port_gate_timeout || 7200)}
+              </span>
+            </div>
             {(config?.port_gate_mode === 'gamertag' || config?.port_gate_mode === 'combined') && (
               <div>
                 <label className="block text-xs font-mono text-slate-300 mb-1.5 uppercase tracking-wider">

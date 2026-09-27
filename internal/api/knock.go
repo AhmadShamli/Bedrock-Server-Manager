@@ -41,6 +41,7 @@ type KnockConfigResponse struct {
 	GameServerAddress        string `json:"game_server_address"`
 	PortGateEnabled          bool   `json:"port_gate_enabled"`
 	PortGateMode             string `json:"port_gate_mode"`
+	PortGateTimeout          int    `json:"port_gate_timeout"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
 	ClientIP                 string `json:"client_ip"`
 	AlwaysAllowed            bool   `json:"always_allowed"`
@@ -95,6 +96,7 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 			GameServerAddress:        gameHost,
 			PortGateEnabled:          server.PortGateEnabled,
 			PortGateMode:             server.PortGateMode,
+			PortGateTimeout:          server.PortGateTimeout,
 			HeartbeatIntervalSeconds: hbSec,
 			ClientIP:                 clientIP,
 			IsBanned:                 true,
@@ -117,6 +119,7 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		GameServerAddress:        gameHost,
 		PortGateEnabled:          server.PortGateEnabled,
 		PortGateMode:             server.PortGateMode,
+		PortGateTimeout:          server.PortGateTimeout,
 		HeartbeatIntervalSeconds: hbSec,
 		ClientIP:                 clientIP,
 		AlwaysAllowed:            alwaysAllowed,

@@ -78,6 +78,7 @@ export interface KnockConfig {
   game_server_address?: string;
   port_gate_enabled: boolean;
   port_gate_mode: 'gamertag' | 'passphrase' | 'combined';
+  port_gate_timeout?: number;
   heartbeat_interval_seconds: number;
   client_ip?: string;
   always_allowed?: boolean;
