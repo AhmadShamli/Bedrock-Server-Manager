@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, GlobalPlayer, MetricsData } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, GlobalPlayer, MetricsData } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -402,6 +402,46 @@ class APIClient {
     const url = serverId ? `/api/servers/${serverId}/portgate/allowlist/${ruleId}` : `/api/portgate/allowlist/${ruleId}`;
     return this.request(url, {
       method: 'DELETE',
+    });
+  }
+
+  // --- Port Gate Banlist ---
+  async listPortGateBans(serverId?: string): Promise<PortGateBanRule[]> {
+    const url = serverId ? `/api/servers/${serverId}/portgate/bans` : '/api/portgate/bans';
+    const res = await this.request(url);
+    return Array.isArray(res) ? res : [];
+  }
+
+  async createPortGateBan(payload: {
+    server_id?: string | null;
+    is_global?: boolean;
+    ip_or_subnet: string;
+    reason?: string;
+  }, serverId?: string): Promise<PortGateBanRule> {
+    const url = serverId ? `/api/servers/${serverId}/portgate/bans` : '/api/portgate/bans';
+    return this.request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePortGateBan(banId: number, serverId?: string): Promise<{ success: boolean }> {
+    const url = serverId ? `/api/servers/${serverId}/portgate/bans/${banId}` : `/api/portgate/bans/${banId}`;
+    return this.request(url, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- Centralized Leases ---
+  async listAllPortGateLeases(serverId?: string): Promise<PortGateLease[]> {
+    const url = serverId ? `/api/portgate/leases?server_id=${encodeURIComponent(serverId)}` : '/api/portgate/leases';
+    const res = await this.request(url);
+    return Array.isArray(res) ? res : [];
+  }
+
+  async revokeCentralizedLease(leaseId: number): Promise<{ success: boolean }> {
+    return this.request(`/api/portgate/leases/${leaseId}/revoke`, {
+      method: 'POST',
     });
   }
 

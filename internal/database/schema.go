@@ -85,6 +85,17 @@ CREATE TABLE IF NOT EXISTS port_gate_allowlist (
 CREATE INDEX IF NOT EXISTS idx_port_gate_allowlist_server ON port_gate_allowlist(server_id);
 CREATE INDEX IF NOT EXISTS idx_port_gate_allowlist_ip ON port_gate_allowlist(ip_or_subnet);
 
+CREATE TABLE IF NOT EXISTS port_gate_bans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id TEXT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    ip_or_subnet TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    banned_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_port_gate_bans_server ON port_gate_bans(server_id);
+CREATE INDEX IF NOT EXISTS idx_port_gate_bans_ip ON port_gate_bans(ip_or_subnet);
+
 CREATE TABLE IF NOT EXISTS backups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,

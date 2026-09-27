@@ -47,6 +47,14 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
             {user.role === 'admin' && (
               <>
                 <Link
+                  to="/portgate"
+                  className="px-3 py-1.5 text-sm font-medium text-slate-300 hover:text-emerald-400 flex items-center space-x-1.5 transition-colors"
+                >
+                  <Shield className="w-4 h-4" />
+                  <span className="hidden sm:inline">Port Gate</span>
+                </Link>
+
+                <Link
                   to="/tasks"
                   className="px-3 py-1.5 text-sm font-medium text-slate-300 hover:text-emerald-400 flex items-center space-x-1.5 transition-colors"
                 >

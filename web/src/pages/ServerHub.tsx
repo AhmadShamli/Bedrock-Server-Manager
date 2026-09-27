@@ -1739,18 +1739,27 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   IP addresses and CIDR subnets that are permanently authorized on the firewall. Players from these networks can connect directly without logging in or using a knock passphrase.
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  setNewAllowIP(detectedClientIP || '');
-                  setNewAllowComment('');
-                  setNewAllowScope('server');
-                  setShowAddAllowModal(true);
-                }}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 shrink-0 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>+ Add Allowed IP / Range</span>
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Link
+                  to="/portgate"
+                  className="px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-mono text-xs flex items-center space-x-1.5 transition-colors"
+                >
+                  <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Port Gate Manager</span>
+                </Link>
+                <button
+                  onClick={() => {
+                    setNewAllowIP(detectedClientIP || '');
+                    setNewAllowComment('');
+                    setNewAllowScope('server');
+                    setShowAddAllowModal(true);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Add Allowed IP / Range</span>
+                </button>
+              </div>
             </div>
 
             {allowRules.length === 0 ? (

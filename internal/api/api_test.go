@@ -1018,4 +1018,129 @@ func TestAPIServerMetrics(t *testing.T) {
 	}
 }
 
+func TestPortGateBansAndCentralizedEndpoints(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	u, _ := db.CreateUser(ctx, "admin", "hash", models.RoleAdmin)
+	token, _ := auth.GenerateJWT(jwtSecret, u.ID, u.Username, u.Role, 1*time.Hour)
+
+	// 1. Create server with port gate enabled
+	srv := &models.Server{
+		ID:              "srv-pg-test",
+		Name:            "Port Gate Test Server",
+		Port:            19132,
+		PortV6:          19133,
+		Status:          models.ServerStatusRunning,
+		PortGateEnabled: true,
+		PortGateMode:    models.PortGateModePassphrase,
+	}
+	if err := db.CreateServer(ctx, srv); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+
+	// 2. Ban IP globally via POST /api/portgate/bans
+	banReqBody := []byte(`{
+		"ip_or_subnet": "198.51.100.77",
+		"is_global": true,
+		"reason": "Test Ban Policy Violation"
+	}`)
+	req := httptest.NewRequest("POST", "/api/portgate/bans", bytes.NewReader(banReqBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created for ban creation, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var createdBan models.PortGateBanRule
+	if err := json.Unmarshal(w.Body.Bytes(), &createdBan); err != nil || createdBan.ID == 0 {
+		t.Fatalf("failed to decode created ban: %v", err)
+	}
+
+	// 3. List bans via GET /api/portgate/bans
+	req = httptest.NewRequest("GET", "/api/portgate/bans", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for list bans, got %d", w.Code)
+	}
+	var bans []models.PortGateBanRule
+	_ = json.Unmarshal(w.Body.Bytes(), &bans)
+	if len(bans) != 1 || bans[0].IPOrSubnet != "198.51.100.77" {
+		t.Fatalf("expected 1 ban with 198.51.100.77, got %+v", bans)
+	}
+
+	// 4. Knock Portal Config for banned IP: should return is_banned: true
+	req = httptest.NewRequest("GET", "/api/knock/srv-pg-test/config", nil)
+	req.Header.Set("X-Forwarded-For", "198.51.100.77")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for knock config, got %d", w.Code)
+	}
+	var conf KnockConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &conf)
+	if !conf.IsBanned || conf.BanReason != "Test Ban Policy Violation" {
+		t.Fatalf("expected IsBanned=true, got %+v", conf)
+	}
+
+	// 5. Knock attempt from banned IP: should be 403 Forbidden
+	knockBody := []byte(`{"passphrase": "any-secret"}`)
+	req = httptest.NewRequest("POST", "/api/knock/srv-pg-test/knock", bytes.NewReader(knockBody))
+	req.Header.Set("X-Forwarded-For", "198.51.100.77")
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for banned knock, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 6. Status check from banned IP: should be 403 Forbidden
+	req = httptest.NewRequest("GET", "/api/knock/srv-pg-test/status", nil)
+	req.Header.Set("X-Forwarded-For", "198.51.100.77")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for status check, got %d", w.Code)
+	}
+
+	// 7. Centralized list leases: GET /api/portgate/leases
+	req = httptest.NewRequest("GET", "/api/portgate/leases", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for /api/portgate/leases, got %d", w.Code)
+	}
+
+	// 8. Delete ban via DELETE /api/portgate/bans/{banId}
+	req = httptest.NewRequest("DELETE", fmt.Sprintf("/api/portgate/bans/%d", createdBan.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for unban, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 9. Verify caller is no longer banned in config
+	req = httptest.NewRequest("GET", "/api/knock/srv-pg-test/config", nil)
+	req.Header.Set("X-Forwarded-For", "198.51.100.77")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	var confAfter KnockConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &confAfter)
+	if confAfter.IsBanned {
+		t.Fatalf("expected IsBanned=false after unban")
+	}
+}
+
 

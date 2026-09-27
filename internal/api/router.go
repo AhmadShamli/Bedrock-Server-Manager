@@ -72,6 +72,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 		api.Route("/knock/{id}", func(k chi.Router) {
 			k.Get("/config", knockHandler.GetConfig)
 			k.Post("/", knockHandler.Knock)
+			k.Post("/knock", knockHandler.Knock)
 			k.Post("/heartbeat", knockHandler.Heartbeat)
 			k.Get("/status", knockHandler.Status)
 		})
@@ -136,6 +137,9 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				srvGroup.Get("/servers/{id}/portgate/allowlist", knockHandler.ListAllowRules)
 				srvGroup.Post("/servers/{id}/portgate/allowlist", knockHandler.CreateAllowRule)
 				srvGroup.Delete("/servers/{id}/portgate/allowlist/{ruleId}", knockHandler.DeleteAllowRule)
+				srvGroup.Get("/servers/{id}/portgate/bans", knockHandler.ListBanRules)
+				srvGroup.Post("/servers/{id}/portgate/bans", knockHandler.CreateBanRule)
+				srvGroup.Delete("/servers/{id}/portgate/bans/{banId}", knockHandler.DeleteBanRule)
 
 				// Backups & Worlds
 				srvGroup.Get("/servers/{id}/backups", backupHandler.ListBackups)
@@ -199,10 +203,15 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)
 				adminGroup.Post("/system/settings", systemHandler.UpdateSetting)
 
-				// Global Port Gate Allowlist
+				// Centralized Port Gate Management (Global & Multi-Server)
 				adminGroup.Get("/portgate/allowlist", knockHandler.ListAllowRules)
 				adminGroup.Post("/portgate/allowlist", knockHandler.CreateAllowRule)
 				adminGroup.Delete("/portgate/allowlist/{ruleId}", knockHandler.DeleteAllowRule)
+				adminGroup.Get("/portgate/bans", knockHandler.ListBanRules)
+				adminGroup.Post("/portgate/bans", knockHandler.CreateBanRule)
+				adminGroup.Delete("/portgate/bans/{banId}", knockHandler.DeleteBanRule)
+				adminGroup.Get("/portgate/leases", knockHandler.ListAllLeases)
+				adminGroup.Post("/portgate/leases/{leaseId}/revoke", knockHandler.RevokeLeaseByID)
 			})
 		})
 	})

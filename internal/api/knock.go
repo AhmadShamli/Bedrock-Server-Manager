@@ -43,6 +43,8 @@ type KnockConfigResponse struct {
 	ClientIP                 string `json:"client_ip"`
 	AlwaysAllowed            bool   `json:"always_allowed"`
 	RuleComment              string `json:"rule_comment,omitempty"`
+	IsBanned                 bool   `json:"is_banned,omitempty"`
+	BanReason                string `json:"ban_reason,omitempty"`
 }
 
 // GetConfig returns public knock settings for a given server.
@@ -63,6 +65,24 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientIP := GetClientIP(r).String()
+
+	// Check if caller's IP is banned
+	if banned, banReason, _ := h.db.IsIPBanned(r.Context(), serverID, clientIP); banned {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(KnockConfigResponse{
+			ServerID:                 server.ID,
+			ServerName:               server.Name,
+			Port:                     server.Port,
+			PortGateEnabled:          server.PortGateEnabled,
+			PortGateMode:             server.PortGateMode,
+			HeartbeatIntervalSeconds: hbSec,
+			ClientIP:                 clientIP,
+			IsBanned:                 true,
+			BanReason:                banReason,
+		})
+		return
+	}
+
 	matchRule, alwaysAllowed, _ := h.db.IsIPAllowed(r.Context(), serverID, clientIP)
 	var ruleComment string
 	if matchRule != nil {
@@ -104,6 +124,19 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientIP := GetClientIP(r).String()
+
+	// Check if caller's IP is banned
+	if banned, banReason, _ := h.db.IsIPBanned(r.Context(), serverID, clientIP); banned {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  fmt.Sprintf("Access denied: Your IP address is banned. Reason: %s", banReason),
+			"banned": true,
+			"reason": banReason,
+		})
+		return
+	}
+
 	now := time.Now().UTC()
 
 	// Check if caller's IP is already permanently allowed
@@ -306,6 +339,19 @@ func (h *KnockHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	currentIP := GetClientIP(r).String()
+
+	// Check if caller's IP is banned
+	if banned, banReason, _ := h.db.IsIPBanned(r.Context(), serverID, currentIP); banned {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  fmt.Sprintf("Access denied: Your IP address is banned. Reason: %s", banReason),
+			"banned": true,
+			"reason": banReason,
+		})
+		return
+	}
+
 	ipUpdated := false
 
 	if lease.IPAddress != currentIP {
@@ -357,6 +403,20 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	currentIP := GetClientIP(r).String()
+
+	// Check if caller's IP is banned
+	if banned, banReason, _ := h.db.IsIPBanned(r.Context(), serverID, currentIP); banned {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"active":     false,
+			"banned":     true,
+			"ban_reason": banReason,
+			"ip_address": currentIP,
+			"error":      fmt.Sprintf("Access denied: Your IP address is banned. Reason: %s", banReason),
+		})
+		return
+	}
 
 	// 1. Check if caller IP is in permanent allowlist
 	if matchRule, allowed, err := h.db.IsIPAllowed(r.Context(), serverID, currentIP); err == nil && allowed && matchRule != nil {
@@ -846,6 +906,217 @@ func (h *KnockHandler) DeleteAllowRule(w http.ResponseWriter, r *http.Request) {
 		Action:    "portgate_allow_rule_deleted",
 		Target:    fmt.Sprintf("%d", ruleID),
 		Details:   fmt.Sprintf(`{"ip_or_subnet": "%s"}`, rule.IPOrSubnet),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// ListBanRules returns IP/subnet ban rules.
+func (h *KnockHandler) ListBanRules(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	if serverID == "" {
+		serverID = r.URL.Query().Get("server_id")
+	}
+	var sIDPtr *string
+	if serverID != "" {
+		sIDPtr = &serverID
+	}
+
+	bans, err := h.db.ListPortGateBans(r.Context(), sIDPtr)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to list ban rules"}`, http.StatusInternalServerError)
+		return
+	}
+	if bans == nil {
+		bans = []models.PortGateBanRule{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(bans)
+}
+
+// CreateBanRule adds a new banned IP or CIDR subnet rule.
+func (h *KnockHandler) CreateBanRule(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+
+	var req struct {
+		IPOrSubnet string  `json:"ip_or_subnet"`
+		IsGlobal   bool    `json:"is_global"`
+		ServerID   *string `json:"server_id,omitempty"`
+		Reason     string  `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.IPOrSubnet) == "" {
+		http.Error(w, `{"error": "ip_or_subnet is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	target := strings.TrimSpace(req.IPOrSubnet)
+	// Validate IP or CIDR
+	if strings.Contains(target, "/") {
+		_, _, err := net.ParseCIDR(target)
+		if err != nil {
+			http.Error(w, `{"error": "Invalid CIDR subnet format (e.g. 192.168.1.0/24 or 10.0.0.0/16)"}`, http.StatusBadRequest)
+			return
+		}
+	} else {
+		ip := net.ParseIP(target)
+		if ip == nil {
+			http.Error(w, `{"error": "Invalid IP address format (e.g. 192.168.1.100 or 2001:db8::1)"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	if claims != nil {
+		actorName = claims.Username
+	}
+
+	ban := models.PortGateBanRule{
+		IPOrSubnet: target,
+		Reason:     strings.TrimSpace(req.Reason),
+		BannedBy:   actorName,
+	}
+
+	if !req.IsGlobal && serverID != "" {
+		ban.ServerID = &serverID
+	} else if !req.IsGlobal && req.ServerID != nil && *req.ServerID != "" {
+		ban.ServerID = req.ServerID
+	}
+
+	if err := h.db.CreatePortGateBan(r.Context(), &ban); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to create ban: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	// Immediately revoke matching active leases and firewall rules
+	revokedLeases, _ := h.db.RevokeMatchingLeases(r.Context(), ban.ServerID, ban.IPOrSubnet)
+	if h.firewall != nil {
+		for _, l := range revokedLeases {
+			if s, err := h.db.GetServer(r.Context(), l.ServerID); err == nil && s != nil {
+				comment := fmt.Sprintf("bsm_%s_%d", s.ID, l.ID)
+				_ = h.firewall.RevokePort(r.Context(), l.IPAddress, s.Port, comment)
+				if s.PortV6 > 0 {
+					_ = h.firewall.RevokePort(r.Context(), l.IPAddress, s.PortV6, comment)
+				}
+			}
+		}
+	}
+
+	targetScope := "global"
+	if ban.ServerID != nil {
+		targetScope = *ban.ServerID
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "portgate_ip_banned",
+		Target:    targetScope,
+		Details:   fmt.Sprintf(`{"ban_id": %d, "target": "%s", "reason": "%s", "revoked_leases_count": %d}`, ban.ID, target, ban.Reason, len(revokedLeases)),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(ban)
+}
+
+// DeleteBanRule removes an IP/subnet ban.
+func (h *KnockHandler) DeleteBanRule(w http.ResponseWriter, r *http.Request) {
+	banIDStr := chi.URLParam(r, "banId")
+	banID, err := strconv.ParseInt(banIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid ban ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	ban, err := h.db.GetPortGateBan(r.Context(), banID)
+	if err != nil || ban == nil {
+		http.Error(w, `{"error": "Ban not found"}`, http.StatusNotFound)
+		return
+	}
+
+	if err := h.db.DeletePortGateBan(r.Context(), banID); err != nil {
+		http.Error(w, `{"error": "Failed to delete ban rule"}`, http.StatusInternalServerError)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	if claims != nil {
+		actorName = claims.Username
+	}
+	targetScope := "global"
+	if ban.ServerID != nil {
+		targetScope = *ban.ServerID
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "portgate_ip_unbanned",
+		Target:    targetScope,
+		Details:   fmt.Sprintf(`{"ban_id": %d, "target": "%s"}`, ban.ID, ban.IPOrSubnet),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// ListAllLeases returns active leases across all servers (or filtered by ?server_id=).
+func (h *KnockHandler) ListAllLeases(w http.ResponseWriter, r *http.Request) {
+	serverID := r.URL.Query().Get("server_id")
+	leases, err := h.db.ListActiveLeases(r.Context(), serverID)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to list active leases"}`, http.StatusInternalServerError)
+		return
+	}
+	if leases == nil {
+		leases = []models.PortGateLease{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(leases)
+}
+
+// RevokeLeaseByID revokes a lease given its lease ID centrally without requiring server_id in URL.
+func (h *KnockHandler) RevokeLeaseByID(w http.ResponseWriter, r *http.Request) {
+	leaseIDStr := chi.URLParam(r, "leaseId")
+	leaseID, err := strconv.ParseInt(leaseIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid lease ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	lease, err := h.db.GetLease(r.Context(), leaseID)
+	if err != nil || lease == nil {
+		http.Error(w, `{"error": "Lease not found"}`, http.StatusNotFound)
+		return
+	}
+
+	server, err := h.db.GetServer(r.Context(), lease.ServerID)
+	if err == nil && server != nil && h.firewall != nil {
+		comment := fmt.Sprintf("bsm_%s_%d", server.ID, lease.ID)
+		_ = h.firewall.RevokePort(r.Context(), lease.IPAddress, server.Port, comment)
+		if server.PortV6 > 0 {
+			_ = h.firewall.RevokePort(r.Context(), lease.IPAddress, server.PortV6, comment)
+		}
+	}
+
+	_ = h.db.SetLeaseStatus(r.Context(), leaseID, "revoked")
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	if claims != nil {
+		actorName = claims.Username
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "knock_lease_revoked",
+		Target:    lease.ServerID,
+		Details:   fmt.Sprintf(`{"lease_id": %d, "ip": "%s"}`, leaseID, lease.IPAddress),
 		ClientIP:  GetClientIP(r).String(),
 	})
 

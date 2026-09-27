@@ -33,18 +33,27 @@ export const KnockPortal: React.FC = () => {
         const conf = await api.getKnockConfig(id);
         setConfig(conf);
 
+        if (conf.is_banned) {
+          setLoading(false);
+          return;
+        }
+
         // Check if caller already has an active lease or is permanently allowed
-        const status = await api.getKnockStatus(id);
-        if (status.active || conf.always_allowed) {
-          setActiveLease({
-            ip_address: status.ip_address || conf.client_ip || '',
-            expires_in_seconds: status.expires_in_seconds || 0,
-            direct_launch_url: status.direct_launch_url || `minecraft://?addExternalServer=${encodeURIComponent(conf.server_name)}|${window.location.hostname}:${conf.port}`,
-            server_name: conf.server_name,
-            server_port: conf.port,
-            always_allowed: status.always_allowed || conf.always_allowed,
-            rule_comment: status.rule_comment || conf.rule_comment,
-          });
+        try {
+          const status = await api.getKnockStatus(id);
+          if (status.active || conf.always_allowed) {
+            setActiveLease({
+              ip_address: status.ip_address || conf.client_ip || '',
+              expires_in_seconds: status.expires_in_seconds || 0,
+              direct_launch_url: status.direct_launch_url || `minecraft://?addExternalServer=${encodeURIComponent(conf.server_name)}|${window.location.hostname}:${conf.port}`,
+              server_name: conf.server_name,
+              server_port: conf.port,
+              always_allowed: status.always_allowed || conf.always_allowed,
+              rule_comment: status.rule_comment || conf.rule_comment,
+            });
+          }
+        } catch (statusErr: any) {
+          // If status returned banned or error, ignore if config already handled it
         }
       } catch (err: any) {
         setError(err.message || 'Failed to connect to Knock Portal');
@@ -157,7 +166,31 @@ export const KnockPortal: React.FC = () => {
           </div>
         )}
 
-        {activeLease ? (
+        {config?.is_banned ? (
+          /* BANNED IP SCREEN */
+          <div className="space-y-6">
+            <div className="p-5 rounded-xl bg-rose-950/40 border border-rose-500/50 text-center shadow-[0_0_25px_rgba(244,63,94,0.15)]">
+              <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-rose-500/20 text-rose-400 mb-3 border border-rose-500/30">
+                <AlertCircle className="w-7 h-7" />
+              </div>
+              <div className="block mb-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-400 text-[10px] font-bold font-mono uppercase tracking-widest border border-rose-500/30">
+                  Access Blocked
+                </span>
+              </div>
+              <h2 className="text-base font-bold font-mono text-rose-300">YOUR IP ADDRESS IS BANNED</h2>
+              <p className="text-xs text-slate-300 mt-2 font-mono leading-relaxed">
+                Your IP address <span className="text-rose-400 font-bold bg-obsidian-950 px-2 py-0.5 rounded border border-rose-500/30">{config.client_ip}</span> is banned from accessing this server.
+              </p>
+              {config.ban_reason && (
+                <div className="mt-3 p-3 bg-obsidian-950/80 rounded-lg border border-rose-500/20 text-left">
+                  <span className="text-[10px] uppercase tracking-wider text-slate-400 block font-mono">Reason for Ban</span>
+                  <p className="text-xs text-rose-300 font-mono mt-0.5">"{config.ban_reason}"</p>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : activeLease ? (
           activeLease.always_allowed ? (
             /* PERMANENT ACCESS UNLOCKED SCREEN */
             <div className="space-y-6">

@@ -61,6 +61,15 @@ export interface PortGateAllowRule {
   created_at: string;
 }
 
+export interface PortGateBanRule {
+  id: number;
+  server_id?: string | null;
+  ip_or_subnet: string;
+  reason: string;
+  banned_by: string;
+  created_at: string;
+}
+
 export interface KnockConfig {
   server_id: string;
   server_name: string;
@@ -71,6 +80,8 @@ export interface KnockConfig {
   client_ip?: string;
   always_allowed?: boolean;
   rule_comment?: string;
+  is_banned?: boolean;
+  ban_reason?: string;
 }
 
 export interface Backup {

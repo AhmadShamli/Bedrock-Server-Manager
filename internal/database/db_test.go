@@ -323,3 +323,126 @@ func TestPortGateAllowRules(t *testing.T) {
 	}
 }
 
+func TestPortGateBans(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenManagerDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open in-memory db: %v", err)
+	}
+	defer db.Close()
+
+	serverID := "srv-survival"
+	_ = db.CreateServer(ctx, &models.Server{
+		ID:   serverID,
+		Name: "Survival World",
+	})
+
+	// 1. Create a global ban on a CIDR subnet
+	globalBan := &models.PortGateBanRule{
+		ServerID:   nil,
+		IPOrSubnet: "198.51.100.0/24",
+		Reason:     "Malicious subnet scanner",
+		BannedBy:   "admin",
+	}
+	if err := db.CreatePortGateBan(ctx, globalBan); err != nil {
+		t.Fatalf("CreatePortGateBan (global) failed: %v", err)
+	}
+	if globalBan.ID == 0 {
+		t.Errorf("expected valid ban ID")
+	}
+
+	// 2. Create an instance-specific ban for srv-survival
+	srvBan := &models.PortGateBanRule{
+		ServerID:   &serverID,
+		IPOrSubnet: "203.0.113.50",
+		Reason:     "Griefer IP",
+		BannedBy:   "admin",
+	}
+	if err := db.CreatePortGateBan(ctx, srvBan); err != nil {
+		t.Fatalf("CreatePortGateBan (srv) failed: %v", err)
+	}
+
+	// 3. List bans for srv-survival (should return global + instance = 2)
+	bans, err := db.ListPortGateBans(ctx, &serverID)
+	if err != nil {
+		t.Fatalf("ListPortGateBans failed: %v", err)
+	}
+	if len(bans) != 2 {
+		t.Fatalf("expected 2 bans for srv-survival, got %d", len(bans))
+	}
+
+	// 4. List bans globally (nil serverID): returns all 2
+	allBans, err := db.ListPortGateBans(ctx, nil)
+	if err != nil || len(allBans) != 2 {
+		t.Fatalf("expected 2 all bans, got %d", len(allBans))
+	}
+
+	// 5. Check IsIPBanned on global CIDR
+	banned, reason, err := db.IsIPBanned(ctx, "srv-survival", "198.51.100.42")
+	if err != nil || !banned || reason != "Malicious subnet scanner" {
+		t.Fatalf("expected 198.51.100.42 to be banned, got banned=%v, reason=%s", banned, reason)
+	}
+
+	// Global CIDR also blocks on other servers
+	banned2, _, _ := db.IsIPBanned(ctx, "srv-creative", "198.51.100.99")
+	if !banned2 {
+		t.Fatalf("expected global CIDR to ban on other server too")
+	}
+
+	// 6. Check single IP ban on srv-survival
+	banned3, reason3, _ := db.IsIPBanned(ctx, "srv-survival", "203.0.113.50")
+	if !banned3 || reason3 != "Griefer IP" {
+		t.Fatalf("expected 203.0.113.50 to be banned on srv-survival, got %v", banned3)
+	}
+
+	// Single IP ban does NOT affect srv-creative
+	banned4, _, _ := db.IsIPBanned(ctx, "srv-creative", "203.0.113.50")
+	if banned4 {
+		t.Fatalf("expected 203.0.113.50 to NOT be banned on srv-creative")
+	}
+
+	// Unbanned IP
+	banned5, _, _ := db.IsIPBanned(ctx, "srv-survival", "8.8.8.8")
+	if banned5 {
+		t.Fatalf("expected 8.8.8.8 to NOT be banned")
+	}
+
+	// 7. Test RevokeMatchingLeases
+	now := time.Now().UTC()
+	lease1 := &models.PortGateLease{
+		ServerID:    serverID,
+		IPAddress:   "203.0.113.50",
+		Gamertag:    "BadPlayer",
+		KnockMethod: "passphrase",
+		GrantedAt:   now,
+		ExpiresAt:   now.Add(2 * time.Hour),
+		Status:      "active",
+	}
+	if err := db.CreatePortGateLease(ctx, lease1); err != nil {
+		t.Fatalf("CreatePortGateLease failed: %v", err)
+	}
+
+	revoked, err := db.RevokeMatchingLeases(ctx, &serverID, "203.0.113.50")
+	if err != nil {
+		t.Fatalf("RevokeMatchingLeases failed: %v", err)
+	}
+	if len(revoked) != 1 || revoked[0].ID != lease1.ID {
+		t.Fatalf("expected lease %d to be revoked, got %v", lease1.ID, revoked)
+	}
+
+	// Verify lease is now revoked in db
+	checkLease, err := db.GetLease(ctx, lease1.ID)
+	if err != nil || checkLease.Status != "revoked" {
+		t.Fatalf("expected lease status revoked, got %s", checkLease.Status)
+	}
+
+	// 8. Delete ban (unban)
+	if err := db.DeletePortGateBan(ctx, srvBan.ID); err != nil {
+		t.Fatalf("DeletePortGateBan failed: %v", err)
+	}
+	bannedAfter, _, _ := db.IsIPBanned(ctx, "srv-survival", "203.0.113.50")
+	if bannedAfter {
+		t.Fatalf("expected IP to no longer be banned after deletion")
+	}
+}
+

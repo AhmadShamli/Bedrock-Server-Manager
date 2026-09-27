@@ -596,14 +596,26 @@ func (db *ManagerDB) GetActiveLeaseBySessionToken(ctx context.Context, serverID,
 
 func (db *ManagerDB) ListActiveLeases(ctx context.Context, serverID string) ([]models.PortGateLease, error) {
 	nowStr := FormatTime(time.Now().UTC())
-	rows, err := db.QueryContext(ctx, `
+	var query string
+	var args []interface{}
+	if serverID != "" && serverID != "*" {
+		query = `
 		SELECT id, server_id, key_id, ip_address, gamertag, knock_method,
 		       session_token_hash, granted_at, expires_at, comment, status
 		FROM port_gate_leases
 		WHERE server_id = ? AND status = 'active' AND expires_at > ?
-		ORDER BY id DESC`,
-		serverID, nowStr,
-	)
+		ORDER BY id DESC`
+		args = append(args, serverID, nowStr)
+	} else {
+		query = `
+		SELECT id, server_id, key_id, ip_address, gamertag, knock_method,
+		       session_token_hash, granted_at, expires_at, comment, status
+		FROM port_gate_leases
+		WHERE status = 'active' AND expires_at > ?
+		ORDER BY id DESC`
+		args = append(args, nowStr)
+	}
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -876,6 +888,148 @@ func (db *ManagerDB) IsIPAllowed(ctx context.Context, serverID, clientIP string)
 		}
 	}
 	return nil, false, nil
+}
+
+// --- Port Gate Banlist ---
+
+// CreatePortGateBan inserts a new IP/subnet ban rule.
+func (db *ManagerDB) CreatePortGateBan(ctx context.Context, ban *models.PortGateBanRule) error {
+	now := FormatTime(time.Now().UTC())
+	ban.CreatedAt = time.Now().UTC()
+
+	var serverIDVal sql.NullString
+	if ban.ServerID != nil && *ban.ServerID != "" {
+		serverIDVal = sql.NullString{String: *ban.ServerID, Valid: true}
+	}
+
+	res, err := db.ExecContext(ctx, `
+		INSERT INTO port_gate_bans (server_id, ip_or_subnet, reason, banned_by, created_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		serverIDVal, strings.TrimSpace(ban.IPOrSubnet), strings.TrimSpace(ban.Reason), strings.TrimSpace(ban.BannedBy), now,
+	)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err == nil {
+		ban.ID = id
+	}
+	return nil
+}
+
+// ListPortGateBans queries ban rules. If serverID is provided, returns bans for this server plus global bans.
+// If serverID is nil, returns all ban rules.
+func (db *ManagerDB) ListPortGateBans(ctx context.Context, serverID *string) ([]models.PortGateBanRule, error) {
+	var query string
+	var args []interface{}
+
+	if serverID != nil && *serverID != "" {
+		query = `
+			SELECT id, server_id, ip_or_subnet, reason, banned_by, created_at
+			FROM port_gate_bans
+			WHERE server_id IS NULL OR server_id = '' OR server_id = ?
+			ORDER BY id DESC`
+		args = append(args, *serverID)
+	} else {
+		query = `
+			SELECT id, server_id, ip_or_subnet, reason, banned_by, created_at
+			FROM port_gate_bans
+			ORDER BY id DESC`
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bans := make([]models.PortGateBanRule, 0)
+	for rows.Next() {
+		var b models.PortGateBanRule
+		var sID sql.NullString
+		var createdAtStr string
+
+		if err := rows.Scan(&b.ID, &sID, &b.IPOrSubnet, &b.Reason, &b.BannedBy, &createdAtStr); err != nil {
+			return nil, err
+		}
+		if sID.Valid && sID.String != "" {
+			val := sID.String
+			b.ServerID = &val
+		}
+		if t, err := ParseTime(createdAtStr); err == nil {
+			b.CreatedAt = t
+		}
+		bans = append(bans, b)
+	}
+	return bans, rows.Err()
+}
+
+// GetPortGateBan retrieves a single ban rule by ID.
+func (db *ManagerDB) GetPortGateBan(ctx context.Context, id int64) (*models.PortGateBanRule, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT id, server_id, ip_or_subnet, reason, banned_by, created_at
+		FROM port_gate_bans
+		WHERE id = ?`, id,
+	)
+
+	var b models.PortGateBanRule
+	var sID sql.NullString
+	var createdAtStr string
+
+	if err := row.Scan(&b.ID, &sID, &b.IPOrSubnet, &b.Reason, &b.BannedBy, &createdAtStr); err != nil {
+		return nil, err
+	}
+	if sID.Valid && sID.String != "" {
+		val := sID.String
+		b.ServerID = &val
+	}
+	if t, err := ParseTime(createdAtStr); err == nil {
+		b.CreatedAt = t
+	}
+	return &b, nil
+}
+
+// DeletePortGateBan deletes a ban rule by ID (unban).
+func (db *ManagerDB) DeletePortGateBan(ctx context.Context, id int64) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM port_gate_bans WHERE id = ?", id)
+	return err
+}
+
+// IsIPBanned checks if clientIP matches any ban rule (global or instance-specific).
+func (db *ManagerDB) IsIPBanned(ctx context.Context, serverID, clientIP string) (bool, string, error) {
+	bans, err := db.ListPortGateBans(ctx, &serverID)
+	if err != nil {
+		return false, "", err
+	}
+
+	for _, ban := range bans {
+		if MatchIPOrCIDR(ban.IPOrSubnet, clientIP) {
+			return true, ban.Reason, nil
+		}
+	}
+	return false, "", nil
+}
+
+// RevokeMatchingLeases revokes all active leases matching the given ipOrSubnet for serverID (or all if nil).
+func (db *ManagerDB) RevokeMatchingLeases(ctx context.Context, serverID *string, ipOrSubnet string) ([]models.PortGateLease, error) {
+	var sID string
+	if serverID != nil {
+		sID = *serverID
+	}
+	activeLeases, err := db.ListActiveLeases(ctx, sID)
+	if err != nil {
+		return nil, err
+	}
+
+	revoked := make([]models.PortGateLease, 0)
+	for _, lease := range activeLeases {
+		if MatchIPOrCIDR(ipOrSubnet, lease.IPAddress) {
+			_ = db.SetLeaseStatus(ctx, lease.ID, "revoked")
+			lease.Status = "revoked"
+			revoked = append(revoked, lease)
+		}
+	}
+	return revoked, nil
 }
 
 // --- Audit Logs ---

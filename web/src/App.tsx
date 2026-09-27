@@ -12,6 +12,7 @@ import { Tasks } from './pages/Tasks';
 import { AuditLogs } from './pages/AuditLogs';
 import { GlobalPlayers } from './pages/GlobalPlayers';
 import { UsersPage } from './pages/Users';
+import { PortGateManager } from './pages/PortGateManager';
 import { Footer } from './components/Footer';
 import { Loader2 } from 'lucide-react';
 
@@ -106,6 +107,10 @@ export const App: React.FC = () => {
           <Route
             path="/servers/:id"
             element={user ? <ServerHub user={user} /> : <Navigate to="/login" replace />}
+          />
+          <Route
+            path="/portgate"
+            element={user && user.role === 'admin' ? <PortGateManager /> : <Navigate to="/" replace />}
           />
           <Route
             path="/tasks"

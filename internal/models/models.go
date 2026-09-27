@@ -102,6 +102,16 @@ type PortGateAllowRule struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// PortGateBanRule represents a banned IP or CIDR subnet for all instances or a single instance.
+type PortGateBanRule struct {
+	ID         int64     `json:"id"`
+	ServerID   *string   `json:"server_id,omitempty"` // nil or empty means global (all instances)
+	IPOrSubnet string    `json:"ip_or_subnet"`
+	Reason     string    `json:"reason"`
+	BannedBy   string    `json:"banned_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // Backup represents a hot or cold server archive.
 type Backup struct {
 	ID        int64     `json:"id"`
