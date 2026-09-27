@@ -285,7 +285,57 @@ func TestServerAndKnockFlow(t *testing.T) {
 		t.Fatalf("expected revoked lease firewall rule to be removed")
 	}
 
-	// 10. Stop Server
+	// 10. Test Permanent Allowlist Rule (Always Allowed CIDR / IP)
+	allowReq := map[string]interface{}{
+		"ip_or_subnet": "10.50.0.0/16",
+		"is_global":    true,
+		"comment":      "Permanent Office Subnet",
+	}
+	aBody, _ := json.Marshal(allowReq)
+	req = httptest.NewRequest("POST", "/api/servers/bsm-world/portgate/allowlist", bytes.NewReader(aBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create allow rule failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify firewall rule created for the subnet
+	if !mockFw.HasRule("10.50.0.0/16", 19132) {
+		t.Fatalf("expected firewall rule for 10.50.0.0/16:19132")
+	}
+
+	// 11. Visitor from IP in 10.50.0.0/16 checks status: should be always_allowed = true
+	req = httptest.NewRequest("GET", "/api/knock/bsm-world/status", nil)
+	req.RemoteAddr = "10.50.12.34:55123"
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("knock status failed: %d", w.Code)
+	}
+	var statusRes map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&statusRes)
+	if statusRes["always_allowed"] != true || statusRes["active"] != true {
+		t.Fatalf("expected always_allowed: true, got %+v", statusRes)
+	}
+
+	// 12. Visitor from IP in 10.50.0.0/16 knocks: should succeed without passphrase/gamertag
+	req = httptest.NewRequest("POST", "/api/knock/bsm-world", bytes.NewReader([]byte("{}")))
+	req.RemoteAddr = "10.50.12.34:55123"
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("knock for always-allowed IP failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var knockPermRes map[string]interface{}
+	_ = json.NewDecoder(w.Body).Decode(&knockPermRes)
+	if knockPermRes["always_allowed"] != true {
+		t.Fatalf("expected knockPermRes always_allowed: true, got %+v", knockPermRes)
+	}
+
+	// 13. Stop Server
 	req = httptest.NewRequest("POST", "/api/servers/bsm-world/stop", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w = httptest.NewRecorder()

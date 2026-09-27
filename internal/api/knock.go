@@ -40,6 +40,9 @@ type KnockConfigResponse struct {
 	PortGateEnabled          bool   `json:"port_gate_enabled"`
 	PortGateMode             string `json:"port_gate_mode"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
+	ClientIP                 string `json:"client_ip"`
+	AlwaysAllowed            bool   `json:"always_allowed"`
+	RuleComment              string `json:"rule_comment,omitempty"`
 }
 
 // GetConfig returns public knock settings for a given server.
@@ -59,6 +62,13 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	clientIP := GetClientIP(r).String()
+	matchRule, alwaysAllowed, _ := h.db.IsIPAllowed(r.Context(), serverID, clientIP)
+	var ruleComment string
+	if matchRule != nil {
+		ruleComment = matchRule.Comment
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(KnockConfigResponse{
 		ServerID:                 server.ID,
@@ -67,6 +77,9 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		PortGateEnabled:          server.PortGateEnabled,
 		PortGateMode:             server.PortGateMode,
 		HeartbeatIntervalSeconds: hbSec,
+		ClientIP:                 clientIP,
+		AlwaysAllowed:            alwaysAllowed,
+		RuleComment:              ruleComment,
 	})
 }
 
@@ -92,6 +105,30 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 
 	clientIP := GetClientIP(r).String()
 	now := time.Now().UTC()
+
+	// Check if caller's IP is already permanently allowed
+	if matchRule, allowed, _ := h.db.IsIPAllowed(r.Context(), serverID, clientIP); allowed && matchRule != nil {
+		if h.firewall != nil {
+			comment := fmt.Sprintf("bsm_perm_%d", matchRule.ID)
+			_ = h.firewall.AllowPort(r.Context(), matchRule.IPOrSubnet, server.Port, comment)
+			if server.PortV6 > 0 {
+				_ = h.firewall.AllowPort(r.Context(), matchRule.IPOrSubnet, server.PortV6, comment)
+			}
+		}
+		directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, r.Host, server.Port)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":            true,
+			"always_allowed":     true,
+			"message":            "Your IP address is permanently authorized. Port is open without knocking.",
+			"ip_address":         clientIP,
+			"direct_launch_url":  directURL,
+			"server_name":        server.Name,
+			"server_port":        server.Port,
+			"expires_in_seconds": 86400 * 365,
+		})
+		return
+	}
 
 	// Rate limiter check
 	rateCheck := h.rateLimiter.CheckKnockAttempt(clientIP, now)
@@ -320,6 +357,25 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	currentIP := GetClientIP(r).String()
+
+	// 1. Check if caller IP is in permanent allowlist
+	if matchRule, allowed, err := h.db.IsIPAllowed(r.Context(), serverID, currentIP); err == nil && allowed && matchRule != nil {
+		directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, r.Host, server.Port)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"active":             true,
+			"always_allowed":     true,
+			"ip_address":         currentIP,
+			"rule_comment":       matchRule.Comment,
+			"is_global":          matchRule.ServerID == nil || *matchRule.ServerID == "",
+			"direct_launch_url":  directURL,
+			"server_name":        server.Name,
+			"server_port":        server.Port,
+			"expires_in_seconds": 86400 * 365,
+		})
+		return
+	}
+
 	lease, err := h.db.GetActiveLeaseByIP(r.Context(), serverID, currentIP)
 	if err != nil || lease == nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -616,6 +672,180 @@ func (h *KnockHandler) DeleteAccessKey(w http.ResponseWriter, r *http.Request) {
 		Action:    "port_gate_key_deleted",
 		Target:    serverID,
 		Details:   fmt.Sprintf(`{"key_id": %d}`, keyID),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// ListAllowRules returns permanent allowed IP/subnet rules.
+func (h *KnockHandler) ListAllowRules(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	var sIDPtr *string
+	if serverID != "" {
+		sIDPtr = &serverID
+	}
+
+	rules, err := h.db.ListPortGateAllowRules(r.Context(), sIDPtr)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to list allow rules"}`, http.StatusInternalServerError)
+		return
+	}
+	if rules == nil {
+		rules = []models.PortGateAllowRule{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(rules)
+}
+
+// CreateAllowRule adds a new permanent allowed IP or subnet rule.
+func (h *KnockHandler) CreateAllowRule(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+
+	var req struct {
+		IPOrSubnet string  `json:"ip_or_subnet"`
+		IsGlobal   bool    `json:"is_global"`
+		ServerID   *string `json:"server_id,omitempty"`
+		Comment    string  `json:"comment"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.IPOrSubnet) == "" {
+		http.Error(w, `{"error": "ip_or_subnet is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	target := strings.TrimSpace(req.IPOrSubnet)
+	// Validate IP or CIDR
+	if strings.Contains(target, "/") {
+		_, _, err := net.ParseCIDR(target)
+		if err != nil {
+			http.Error(w, `{"error": "Invalid CIDR subnet format (e.g. 192.168.1.0/24 or 10.0.0.0/16)"}`, http.StatusBadRequest)
+			return
+		}
+	} else {
+		ip := net.ParseIP(target)
+		if ip == nil {
+			http.Error(w, `{"error": "Invalid IP address format (e.g. 192.168.1.100 or 2001:db8::1)"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	rule := models.PortGateAllowRule{
+		IPOrSubnet: target,
+		Comment:    strings.TrimSpace(req.Comment),
+	}
+
+	if !req.IsGlobal && serverID != "" {
+		rule.ServerID = &serverID
+	} else if !req.IsGlobal && req.ServerID != nil && *req.ServerID != "" {
+		rule.ServerID = req.ServerID
+	}
+
+	if err := h.db.CreatePortGateAllowRule(r.Context(), &rule); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to create rule: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	// Apply firewall rules immediately for matching server(s)
+	if h.firewall != nil {
+		comment := fmt.Sprintf("bsm_perm_%d", rule.ID)
+		if rule.ServerID != nil && *rule.ServerID != "" {
+			if s, err := h.db.GetServer(r.Context(), *rule.ServerID); err == nil && s != nil {
+				_ = h.firewall.AllowPort(r.Context(), rule.IPOrSubnet, s.Port, comment)
+				if s.PortV6 > 0 {
+					_ = h.firewall.AllowPort(r.Context(), rule.IPOrSubnet, s.PortV6, comment)
+				}
+			}
+		} else {
+			// Global rule: apply to all active servers
+			if servers, err := h.db.ListServers(r.Context()); err == nil {
+				for _, s := range servers {
+					_ = h.firewall.AllowPort(r.Context(), rule.IPOrSubnet, s.Port, comment)
+					if s.PortV6 > 0 {
+						_ = h.firewall.AllowPort(r.Context(), rule.IPOrSubnet, s.PortV6, comment)
+					}
+				}
+			}
+		}
+	}
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	if claims != nil {
+		actorName = claims.Username
+	}
+	targetID := "global"
+	if rule.ServerID != nil {
+		targetID = *rule.ServerID
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "portgate_allow_rule_created",
+		Target:    targetID,
+		Details:   fmt.Sprintf(`{"rule_id": %d, "target": "%s", "comment": "%s"}`, rule.ID, target, rule.Comment),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(rule)
+}
+
+// DeleteAllowRule revokes and deletes a permanent allow rule.
+func (h *KnockHandler) DeleteAllowRule(w http.ResponseWriter, r *http.Request) {
+	ruleIDStr := chi.URLParam(r, "ruleId")
+	ruleID, err := strconv.ParseInt(ruleIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid rule ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	rule, err := h.db.GetPortGateAllowRule(r.Context(), ruleID)
+	if err != nil || rule == nil {
+		http.Error(w, `{"error": "Rule not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// Revoke firewall rules
+	if h.firewall != nil {
+		comment := fmt.Sprintf("bsm_perm_%d", rule.ID)
+		if rule.ServerID != nil && *rule.ServerID != "" {
+			if s, err := h.db.GetServer(r.Context(), *rule.ServerID); err == nil && s != nil {
+				_ = h.firewall.RevokePort(r.Context(), rule.IPOrSubnet, s.Port, comment)
+				if s.PortV6 > 0 {
+					_ = h.firewall.RevokePort(r.Context(), rule.IPOrSubnet, s.PortV6, comment)
+				}
+			}
+		} else {
+			if servers, err := h.db.ListServers(r.Context()); err == nil {
+				for _, s := range servers {
+					_ = h.firewall.RevokePort(r.Context(), rule.IPOrSubnet, s.Port, comment)
+					if s.PortV6 > 0 {
+						_ = h.firewall.RevokePort(r.Context(), rule.IPOrSubnet, s.PortV6, comment)
+					}
+				}
+			}
+		}
+	}
+
+	if err := h.db.DeletePortGateAllowRule(r.Context(), ruleID); err != nil {
+		http.Error(w, `{"error": "Failed to delete rule"}`, http.StatusInternalServerError)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	if claims != nil {
+		actorName = claims.Username
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "portgate_allow_rule_deleted",
+		Target:    fmt.Sprintf("%d", ruleID),
+		Details:   fmt.Sprintf(`{"ip_or_subnet": "%s"}`, rule.IPOrSubnet),
 		ClientIP:  GetClientIP(r).String(),
 	})
 

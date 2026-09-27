@@ -126,13 +126,16 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				// RakNet Ping
 				srvGroup.Get("/servers/{id}/ping", playerHubHandler.Ping)
 
-				// Port Gate Leases & Keys
+				// Port Gate Leases, Keys & Permanent Allowlist
 				srvGroup.Get("/servers/{id}/leases", knockHandler.ListLeases)
 				srvGroup.Post("/servers/{id}/leases/{leaseId}/revoke", knockHandler.RevokeLease)
 				srvGroup.Post("/servers/{id}/leases/manual", knockHandler.CreateManualLease)
 				srvGroup.Get("/servers/{id}/access-keys", knockHandler.ListAccessKeys)
 				srvGroup.Post("/servers/{id}/access-keys", knockHandler.CreateAccessKey)
 				srvGroup.Delete("/servers/{id}/access-keys/{keyId}", knockHandler.DeleteAccessKey)
+				srvGroup.Get("/servers/{id}/portgate/allowlist", knockHandler.ListAllowRules)
+				srvGroup.Post("/servers/{id}/portgate/allowlist", knockHandler.CreateAllowRule)
+				srvGroup.Delete("/servers/{id}/portgate/allowlist/{ruleId}", knockHandler.DeleteAllowRule)
 
 				// Backups & Worlds
 				srvGroup.Get("/servers/{id}/backups", backupHandler.ListBackups)
@@ -195,6 +198,11 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Get("/system/audit", systemHandler.ListAuditLogs)
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)
 				adminGroup.Post("/system/settings", systemHandler.UpdateSetting)
+
+				// Global Port Gate Allowlist
+				adminGroup.Get("/portgate/allowlist", knockHandler.ListAllowRules)
+				adminGroup.Post("/portgate/allowlist", knockHandler.CreateAllowRule)
+				adminGroup.Delete("/portgate/allowlist/{ruleId}", knockHandler.DeleteAllowRule)
 			})
 		})
 	})

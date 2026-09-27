@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 )
@@ -80,13 +81,21 @@ func (h *ServerHandler) ConsoleWS(w http.ResponseWriter, r *http.Request) {
 		return conn.WriteJSON(v)
 	}
 
-	// 1. Send recent 1,000-line history
+	// Ensure log capture is running if server is active
+	if server.Status == models.ServerStatusRunning {
+		h.engine.AttachLogCapture(server.ID, server.ContainerID)
+	}
+
+	// 1. Send recent history
 	history := h.engine.GetRecentLogs(serverID)
 	for _, line := range history {
 		msg := WSMessage{Type: "history", Payload: line}
 		if err := safeWriteJSON(msg); err != nil {
 			return
 		}
+	}
+	if len(history) == 0 && server.Status != models.ServerStatusRunning {
+		_ = safeWriteJSON(WSMessage{Type: "log", Payload: "[SYSTEM] Server is currently offline. Start the server to stream live BDS logs."})
 	}
 
 	// 2. Subscribe to real-time logs
@@ -120,6 +129,10 @@ func (h *ServerHandler) ConsoleWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if wsMsg.Type == "command" && wsMsg.Payload != "" {
+			if server.Status != models.ServerStatusRunning {
+				_ = safeWriteJSON(WSMessage{Type: "error", Payload: "Server is offline. Start the server before sending console commands."})
+				continue
+			}
 			if err := h.engine.SendConsoleCommand(ctx, server, wsMsg.Payload); err != nil {
 				_ = safeWriteJSON(WSMessage{Type: "error", Payload: "Failed to send command: " + err.Error()})
 			}

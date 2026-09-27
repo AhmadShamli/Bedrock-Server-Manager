@@ -305,6 +305,16 @@ func (e *DockerEngine) GetContainerStats(ctx context.Context, server *models.Ser
 	}, nil
 }
 
+// cleanDockerLogLine strips Docker multiplex framing headers and unprintable characters.
+func cleanDockerLogLine(raw []byte) string {
+	// Docker demux header: byte 1 (stdout) or 2 (stderr), 3 zeroes, 4 length bytes
+	if len(raw) >= 8 && (raw[0] == 1 || raw[0] == 2) && raw[1] == 0 && raw[2] == 0 && raw[3] == 0 {
+		raw = raw[8:]
+	}
+	s := strings.TrimRight(string(raw), "\r\n")
+	return strings.ReplaceAll(s, "\x00", "")
+}
+
 // SendConsoleCommand pipes a command into the Bedrock server stdin.
 func (e *DockerEngine) SendConsoleCommand(ctx context.Context, server *models.Server, cmd string) error {
 	containerID := server.ContainerID
@@ -312,35 +322,106 @@ func (e *DockerEngine) SendConsoleCommand(ctx context.Context, server *models.Se
 		containerID = fmt.Sprintf("bsm-%s", server.ID)
 	}
 
-	escapedCmd := strings.ReplaceAll(cmd, "'", `'\''`)
+	// Immediately echo the command into the ring buffer and active subscribers
+	echoLine := fmt.Sprintf("> %s", cmd)
+	e.mu.Lock()
+	if rb, ok := e.ringBuffers[server.ID]; ok {
+		rb.Write(echoLine)
+	}
+	for _, ch := range e.logChans[server.ID] {
+		select {
+		case ch <- echoLine:
+		default:
+		}
+	}
+	if e.logListener != nil {
+		e.logListener(server.ID, echoLine)
+	}
+	e.mu.Unlock()
+
+	// Safe command delivery:
+	// 1. itzg/minecraft-bedrock-server ships with `send-command`
+	// 2. Fallback: find bedrock_server PID and write directly to /proc/$pid/fd/0
+	// 3. Fallback: write to /proc/1/fd/0
+	shScript := `if command -v send-command >/dev/null 2>&1; then
+  send-command "$@"
+else
+  pid=$(pidof bedrock_server 2>/dev/null || pgrep -f bedrock_server 2>/dev/null || echo 1)
+  printf '%s\n' "$*" > "/proc/$pid/fd/0"
+fi`
+
 	execConfig := types.ExecConfig{
-		AttachStdin:  true,
-		AttachStdout: false,
-		AttachStderr: false,
-		Tty:          true,
-		Cmd:          []string{"sh", "-c", fmt.Sprintf("echo '%s' > /proc/1/fd/0", escapedCmd)},
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          false,
+		Cmd:          []string{"sh", "-c", shScript, "--", cmd},
 	}
 
 	execID, err := e.cli.ContainerExecCreate(ctx, containerID, execConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create exec: %w", err)
 	}
 
-	return e.cli.ContainerExecStart(ctx, execID.ID, types.ExecStartCheck{
-		Tty: true,
-	})
+	if err := e.cli.ContainerExecStart(ctx, execID.ID, types.ExecStartCheck{Tty: false}); err != nil {
+		return fmt.Errorf("failed to start exec: %w", err)
+	}
+
+	return nil
 }
 
-// GetRecentLogs retrieves lines from the server ring buffer.
+// GetRecentLogs retrieves lines from the server ring buffer, or queries Docker if empty.
 func (e *DockerEngine) GetRecentLogs(serverID string) []string {
 	e.mu.RLock()
 	rb, exists := e.ringBuffers[serverID]
 	e.mu.RUnlock()
 
-	if !exists {
+	if exists && rb.Count() > 0 {
+		return rb.GetAll()
+	}
+
+	// Ring buffer is empty (e.g. BSM was just started). Attempt one-shot fetch from Docker.
+	containerID := fmt.Sprintf("bsm-%s", serverID)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	reader, err := e.cli.ContainerLogs(ctx, containerID, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       "200",
+	})
+	if err != nil {
+		if exists {
+			return rb.GetAll()
+		}
 		return []string{}
 	}
-	return rb.GetAll()
+	defer reader.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(reader)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
+		clean := cleanDockerLogLine(scanner.Bytes())
+		if clean != "" {
+			lines = append(lines, clean)
+		}
+	}
+
+	if len(lines) > 0 {
+		e.mu.Lock()
+		if !exists {
+			rb = NewRingBuffer(1000)
+			e.ringBuffers[serverID] = rb
+		}
+		for _, l := range lines {
+			rb.Write(l)
+		}
+		e.mu.Unlock()
+	}
+
+	return lines
 }
 
 // SubscribeLogs registers a subscriber channel for real-time log events.
@@ -367,10 +448,19 @@ func (e *DockerEngine) SubscribeLogs(serverID string) (<-chan string, func()) {
 	return ch, unsubscribe
 }
 
+// AttachLogCapture initiates log capture if not already running for this server.
 func (e *DockerEngine) AttachLogCapture(serverID, containerID string) {
 	if containerID == "" {
 		containerID = fmt.Sprintf("bsm-%s", serverID)
 	}
+
+	e.mu.Lock()
+	if _, running := e.logCancels[serverID]; running {
+		e.mu.Unlock()
+		return // Log capture already running
+	}
+	e.mu.Unlock()
+
 	go e.captureContainerLogs(serverID, containerID)
 }
 
@@ -415,8 +505,14 @@ func (e *DockerEngine) captureContainerLogs(serverID, containerID string) {
 	defer reader.Close()
 
 	scanner := bufio.NewScanner(reader)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
 	for scanner.Scan() {
-		line := scanner.Text()
+		line := cleanDockerLogLine(scanner.Bytes())
+		if line == "" {
+			continue
+		}
 		rb.Write(line)
 
 		// Broadcast to subscribers

@@ -19,6 +19,8 @@ export const KnockPortal: React.FC = () => {
     server_name: string;
     server_port: number;
     session_token?: string;
+    always_allowed?: boolean;
+    rule_comment?: string;
   } | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [heartbeatStatus, setHeartbeatStatus] = useState<string>('Active');
@@ -31,15 +33,17 @@ export const KnockPortal: React.FC = () => {
         const conf = await api.getKnockConfig(id);
         setConfig(conf);
 
-        // Check if caller already has an active lease
+        // Check if caller already has an active lease or is permanently allowed
         const status = await api.getKnockStatus(id);
-        if (status.active) {
+        if (status.active || conf.always_allowed) {
           setActiveLease({
-            ip_address: status.ip_address,
-            expires_in_seconds: status.expires_in_seconds || 3600,
-            direct_launch_url: status.direct_launch_url || `minecraft://?addExternalServer=${conf.server_name}|${window.location.host}:${conf.port}`,
+            ip_address: status.ip_address || conf.client_ip || '',
+            expires_in_seconds: status.expires_in_seconds || 0,
+            direct_launch_url: status.direct_launch_url || `minecraft://?addExternalServer=${encodeURIComponent(conf.server_name)}|${window.location.hostname}:${conf.port}`,
             server_name: conf.server_name,
             server_port: conf.port,
+            always_allowed: status.always_allowed || conf.always_allowed,
+            rule_comment: status.rule_comment || conf.rule_comment,
           });
         }
       } catch (err: any) {
@@ -52,9 +56,9 @@ export const KnockPortal: React.FC = () => {
     init();
   }, [id]);
 
-  // Background Heartbeat for Mobile 4G/5G Roaming (Configurable, default 10s)
+  // Background Heartbeat for Mobile 4G/5G Roaming (only for temporary leases)
   useEffect(() => {
-    if (!id || !activeLease) return;
+    if (!id || !activeLease || activeLease.always_allowed) return;
 
     const intervalSec = config?.heartbeat_interval_seconds || 10;
     const interval = setInterval(async () => {
@@ -94,6 +98,8 @@ export const KnockPortal: React.FC = () => {
         server_name: res.server_name,
         server_port: res.server_port,
         session_token: res.session_token,
+        always_allowed: res.always_allowed,
+        rule_comment: res.rule_comment,
       });
     } catch (err: any) {
       setError(err.message || 'Authorization failed');
@@ -152,55 +158,111 @@ export const KnockPortal: React.FC = () => {
         )}
 
         {activeLease ? (
-          /* UNLOCKED SCREEN */
-          <div className="space-y-6">
-            <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 text-center">
-              <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 mb-2">
-                <CheckCircle2 className="w-6 h-6" />
+          activeLease.always_allowed ? (
+            /* PERMANENT ACCESS UNLOCKED SCREEN */
+            <div className="space-y-6">
+              <div className="p-5 rounded-xl bg-emerald-950/40 border border-emerald-500/50 text-center shadow-[0_0_25px_rgba(16,185,129,0.15)]">
+                <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 mb-3 border border-emerald-500/30">
+                  <CheckCircle2 className="w-7 h-7" />
+                </div>
+                <div className="block mb-2">
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold font-mono uppercase tracking-widest border border-emerald-500/30">
+                    Always Allowed
+                  </span>
+                </div>
+                <h2 className="text-base font-bold font-mono text-emerald-300">ACCESS ALREADY AUTHORIZED</h2>
+                <p className="text-xs text-slate-300 mt-2 font-mono leading-relaxed">
+                  Your IP address <span className="text-emerald-400 font-bold bg-obsidian-950 px-2 py-0.5 rounded border border-emerald-500/30">{activeLease.ip_address}</span> is on the permanent allowlist.
+                </p>
+                {activeLease.rule_comment && (
+                  <p className="text-[11px] text-slate-400 mt-2 font-mono italic">
+                    "{activeLease.rule_comment}"
+                  </p>
+                )}
+                <div className="mt-3 text-[11px] text-emerald-400/80 font-mono">
+                  No login or knock passphrase required to connect.
+                </div>
               </div>
-              <h2 className="text-base font-bold font-mono text-emerald-400">ACCESS UNLOCKED</h2>
-              <p className="text-xs text-slate-300 mt-1 font-mono">
-                Your IP <span className="text-emerald-300 font-bold">{activeLease.ip_address}</span> is authorized on the firewall.
-              </p>
+
+              {/* Direct Launch Button */}
+              <a
+                href={activeLease.direct_launch_url}
+                className="w-full py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center justify-center space-x-2 transition-all shadow-[0_0_25px_rgba(16,185,129,0.4)] hover:shadow-[0_0_35px_rgba(16,185,129,0.6)]"
+              >
+                <Play className="w-5 h-5 fill-current" />
+                <span>Launch Minecraft Bedrock</span>
+              </a>
+
+              {/* Server Connection Info */}
+              <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-2.5 font-mono text-xs">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Server Address:</span>
+                  <span className="text-slate-200 font-semibold">{window.location.hostname}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>UDP Port:</span>
+                  <span className="text-emerald-400 font-semibold">{activeLease.server_port || config?.port || 19132}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Firewall Status:</span>
+                  <span className="text-emerald-400 font-semibold flex items-center space-x-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>Permanently Open</span>
+                  </span>
+                </div>
+              </div>
             </div>
-
-            {/* Direct Launch Button */}
-            <a
-              href={activeLease.direct_launch_url}
-              className="w-full py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center justify-center space-x-2 transition-all shadow-[0_0_25px_rgba(16,185,129,0.4)] hover:shadow-[0_0_35px_rgba(16,185,129,0.6)]"
-            >
-              <Play className="w-5 h-5 fill-current" />
-              <span>Launch Minecraft Bedrock</span>
-            </a>
-
-            {/* Mobile Roaming & Heartbeat indicator */}
-            <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-3 font-mono text-xs">
-              <div className="flex items-center justify-between text-slate-400">
-                <span className="flex items-center space-x-2">
-                  <Wifi className="w-4 h-4 text-emerald-400 animate-pulse" />
-                  <span>Mobile Roaming Guard</span>
-                </span>
-                <span className="text-emerald-400 text-[11px]">{heartbeatStatus}</span>
+          ) : (
+            /* TEMPORARY LEASE UNLOCKED SCREEN */
+            <div className="space-y-6">
+              <div className="p-4 rounded-xl bg-emerald-950/30 border border-emerald-500/40 text-center">
+                <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 mb-2">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <h2 className="text-base font-bold font-mono text-emerald-400">ACCESS UNLOCKED</h2>
+                <p className="text-xs text-slate-300 mt-1 font-mono">
+                  Your IP <span className="text-emerald-300 font-bold">{activeLease.ip_address}</span> is authorized on the firewall.
+                </p>
               </div>
-              <div className="flex items-center justify-between text-slate-400">
-                <span className="flex items-center space-x-2">
-                  <Clock className="w-4 h-4 text-cyber-cyan" />
-                  <span>Heartbeat Interval</span>
-                </span>
-                <span className="text-slate-200">{config?.heartbeat_interval_seconds || 10}s</span>
+
+              {/* Direct Launch Button */}
+              <a
+                href={activeLease.direct_launch_url}
+                className="w-full py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center justify-center space-x-2 transition-all shadow-[0_0_25px_rgba(16,185,129,0.4)] hover:shadow-[0_0_35px_rgba(16,185,129,0.6)]"
+              >
+                <Play className="w-5 h-5 fill-current" />
+                <span>Launch Minecraft Bedrock</span>
+              </a>
+
+              {/* Mobile Roaming & Heartbeat indicator */}
+              <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-3 font-mono text-xs">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="flex items-center space-x-2">
+                    <Wifi className="w-4 h-4 text-emerald-400 animate-pulse" />
+                    <span>Mobile Roaming Guard</span>
+                  </span>
+                  <span className="text-emerald-400 text-[11px]">{heartbeatStatus}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span className="flex items-center space-x-2">
+                    <Clock className="w-4 h-4 text-cyber-cyan" />
+                    <span>Heartbeat Interval</span>
+                  </span>
+                  <span className="text-slate-200">{config?.heartbeat_interval_seconds || 10}s</span>
+                </div>
               </div>
+
+              {/* 1-Tap Reconnect Button */}
+              <button
+                onClick={handle1TapReconnect}
+                disabled={reconnecting}
+                className="w-full py-2.5 px-3 rounded-lg bg-obsidian-800 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 hover:text-emerald-400 font-mono text-xs flex items-center justify-center space-x-2 transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${reconnecting ? 'animate-spin text-emerald-400' : ''}`} />
+                <span>🔄 1-Tap Update My IP (Network Roamed)</span>
+              </button>
             </div>
-
-            {/* 1-Tap Reconnect Button */}
-            <button
-              onClick={handle1TapReconnect}
-              disabled={reconnecting}
-              className="w-full py-2.5 px-3 rounded-lg bg-obsidian-800 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 hover:text-emerald-400 font-mono text-xs flex items-center justify-center space-x-2 transition-colors"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${reconnecting ? 'animate-spin text-emerald-400' : ''}`} />
-              <span>🔄 1-Tap Update My IP (Network Roamed)</span>
-            </button>
-          </div>
+          )
         ) : (
           /* UNLOCK FORM */
           <form onSubmit={handleKnock} className="space-y-4">

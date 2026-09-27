@@ -111,3 +111,31 @@ func (a *LeaseAuditor) AuditOnce(ctx context.Context) (int, error) {
 
 	return revokedCount, nil
 }
+
+// SyncPermanentAllowRules ensures all permanent allow rules from database are applied to the firewall.
+func SyncPermanentAllowRules(ctx context.Context, db *database.ManagerDB, driver FirewallDriver) error {
+	if driver == nil || db == nil {
+		return nil
+	}
+	rules, err := db.ListPortGateAllowRules(ctx, nil)
+	if err != nil {
+		return err
+	}
+	servers, err := db.ListServers(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, rule := range rules {
+		comment := fmt.Sprintf("bsm_perm_%d", rule.ID)
+		for _, s := range servers {
+			if rule.ServerID == nil || *rule.ServerID == "" || *rule.ServerID == s.ID {
+				_ = driver.AllowPort(ctx, rule.IPOrSubnet, s.Port, comment)
+				if s.PortV6 > 0 {
+					_ = driver.AllowPort(ctx, rule.IPOrSubnet, s.PortV6, comment)
+				}
+			}
+		}
+	}
+	return nil
+}

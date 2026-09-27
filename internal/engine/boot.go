@@ -39,14 +39,14 @@ func (bm *BootManager) AutostartServers(ctx context.Context) ([]string, error) {
 
 	var started []string
 	for _, s := range servers {
-		if !s.AutostartOnBoot {
+		status, err := bm.engine.GetServerStatus(ctx, &s)
+		if err == nil && status == models.ServerStatusRunning {
+			log.Printf("[BootManager] Server '%s' (%s) is already running; attaching log capture.", s.Name, s.ID)
+			bm.engine.AttachLogCapture(s.ID, s.ContainerID)
 			continue
 		}
 
-		status, err := bm.engine.GetServerStatus(ctx, &s)
-		if err == nil && status == models.ServerStatusRunning {
-			log.Printf("[BootManager] Server '%s' (%s) is already running.", s.Name, s.ID)
-			bm.engine.AttachLogCapture(s.ID, s.ContainerID)
+		if !s.AutostartOnBoot {
 			continue
 		}
 

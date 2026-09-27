@@ -254,6 +254,11 @@ func main() {
 		fwDriver = firewall.NewMockFirewallDriver()
 	}
 
+	// Sync permanent allow rules to firewall
+	if err := firewall.SyncPermanentAllowRules(ctx, mgrDB, fwDriver); err != nil {
+		log.Printf("[Firewall] Warning: failed to sync permanent allow rules: %v", err)
+	}
+
 	leaseAuditor := firewall.NewLeaseAuditor(mgrDB, fwDriver, 15*time.Second)
 	leaseAuditor.Start(ctx)
 	defer leaseAuditor.Stop()

@@ -31,8 +31,10 @@ var (
 	// In-game chat patterns:
 	// <Steve> Hello world!
 	// [CHAT] Steve: Hello world!
+	// [Server] Hello world!
 	chatRegex1 = regexp.MustCompile(`<([^>]+)>\s*(.*)`)
 	chatRegex2 = regexp.MustCompile(`\[CHAT\]\s*([^:]+):\s*(.*)`)
+	chatRegex3 = regexp.MustCompile(`\[Server\]\s*(.*)`)
 )
 
 // Manager tracks real-time player states and chat feeds across servers.
@@ -106,6 +108,9 @@ func (m *Manager) ProcessLine(serverID, line string) {
 	} else if matches := chatRegex2.FindStringSubmatch(line); len(matches) == 3 {
 		chatGT = strings.TrimSpace(matches[1])
 		chatMsg = strings.TrimSpace(matches[2])
+	} else if matches := chatRegex3.FindStringSubmatch(line); len(matches) == 2 {
+		chatGT = "Server"
+		chatMsg = strings.TrimSpace(matches[1])
 	}
 
 	if chatGT != "" && chatMsg != "" {
@@ -123,6 +128,24 @@ func (m *Manager) ProcessLine(serverID, line string) {
 		m.chatFeeds[serverID] = append(feed, msg)
 		m.mu.Unlock()
 	}
+}
+
+// AddChatMessage manually inserts a chat message (e.g. from admin broadcast).
+func (m *Manager) AddChatMessage(serverID, gamertag, message string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	feed := m.chatFeeds[serverID]
+	msg := ChatMessage{
+		ServerID:  serverID,
+		Gamertag:  gamertag,
+		Message:   message,
+		Timestamp: time.Now().UTC(),
+	}
+	if len(feed) >= 200 {
+		feed = feed[1:]
+	}
+	m.chatFeeds[serverID] = append(feed, msg)
 }
 
 // GetOnlinePlayers returns active players for a given server.

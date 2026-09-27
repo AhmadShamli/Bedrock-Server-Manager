@@ -53,6 +53,14 @@ export interface PortGateLease {
   status: 'active' | 'expired' | 'revoked';
 }
 
+export interface PortGateAllowRule {
+  id: number;
+  server_id?: string | null;
+  ip_or_subnet: string;
+  comment: string;
+  created_at: string;
+}
+
 export interface KnockConfig {
   server_id: string;
   server_name: string;
@@ -60,6 +68,9 @@ export interface KnockConfig {
   port_gate_enabled: boolean;
   port_gate_mode: 'gamertag' | 'passphrase' | 'combined';
   heartbeat_interval_seconds: number;
+  client_ip?: string;
+  always_allowed?: boolean;
+  rule_comment?: string;
 }
 
 export interface Backup {

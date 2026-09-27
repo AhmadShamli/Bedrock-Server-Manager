@@ -4,10 +4,11 @@ import {
   ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink,
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
-  Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass
+  Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
+  ChevronDown, ChevronRight, Plus
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData } from '../types';
+import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
@@ -42,6 +43,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [createdKeySecret, setCreatedKeySecret] = useState<string | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
   const [copiedSeed, setCopiedSeed] = useState(false);
+
+  // Port Gate Permanent Allowlist state
+  const [allowRules, setAllowRules] = useState<PortGateAllowRule[]>([]);
+  const [showAddAllowModal, setShowAddAllowModal] = useState(false);
+  const [newAllowIP, setNewAllowIP] = useState('');
+  const [newAllowScope, setNewAllowScope] = useState<'server' | 'global'>('server');
+  const [newAllowComment, setNewAllowComment] = useState('');
+  const [allowSubmitting, setAllowSubmitting] = useState(false);
+  const [detectedClientIP, setDetectedClientIP] = useState<string | null>(null);
 
   // Server Configuration Edit state
   const [editServerName, setEditServerName] = useState('');
@@ -78,6 +88,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [logs, setLogs] = useState<string[]>([]);
   const [command, setCommand] = useState('');
   const [wsConnected, setWsConnected] = useState(false);
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const consoleBottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -145,6 +156,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   } = usePagination(accessKeys, 10);
 
   const {
+    currentPage: allowRulesPage,
+    pageSize: allowRulesPageSize,
+    totalItems: totalAllowRules,
+    paginatedItems: paginatedAllowRules,
+    setCurrentPage: setAllowRulesPage,
+    setPageSize: setAllowRulesPageSize,
+  } = usePagination(allowRules, 10);
+
+  const {
     currentPage: backupsPage,
     pageSize: backupsPageSize,
     totalItems: totalBackups,
@@ -187,9 +207,20 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     fetchServer();
   }, [id]);
 
-  // Connect WebSocket for live logs
+  // Connect WebSocket for live logs (only when terminal panel is open)
   useEffect(() => {
-    if (!id || activeTab !== 'overview') return;
+    if (!id || activeTab !== 'overview' || !terminalOpen) {
+      // Close any existing connection when terminal is collapsed or tab changes
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+        setWsConnected(false);
+      }
+      return;
+    }
+
+    // Reset logs so new connection displays fresh history without duplication
+    setLogs([]);
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const token = localStorage.getItem('bsm_token') || '';
@@ -204,6 +235,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         const msg = JSON.parse(evt.data);
         if (msg.type === 'history' || msg.type === 'log') {
           setLogs((prev) => [...prev, msg.payload]);
+        } else if (msg.type === 'error') {
+          setLogs((prev) => [...prev, `[ERROR] ${msg.payload}`]);
         }
       } catch {
         setLogs((prev) => [...prev, evt.data]);
@@ -215,7 +248,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       ws.close();
       wsRef.current = null;
     };
-  }, [id, activeTab]);
+  }, [id, activeTab, terminalOpen]);
 
   // Auto-scroll console
   useEffect(() => {
@@ -260,6 +293,20 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     return () => clearInterval(interval);
   }, [id, activeTab, metricsRange, server?.status]);
 
+  // Periodic player list & chat feed poller while on Players tab
+  useEffect(() => {
+    if (!id || activeTab !== 'players' || server?.status !== 'running') return;
+    const interval = setInterval(async () => {
+      try {
+        const chat = await api.getChat(id);
+        setChatFeed(Array.isArray(chat) ? chat : []);
+        const pl = await api.getPlayers(id);
+        setOnlinePlayers(Array.isArray(pl?.online_players) ? pl.online_players : []);
+      } catch {}
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [id, activeTab, server?.status]);
+
   // Fetch tab data when active tab switches
   useEffect(() => {
     if (!id) return;
@@ -269,6 +316,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     } else if (activeTab === 'portgate') {
       api.listLeases(id).then((res) => setLeases(Array.isArray(res) ? res : [])).catch(() => {});
       api.listAccessKeys(id).then((res) => setAccessKeys(Array.isArray(res) ? res : [])).catch(() => {});
+      api.listPortGateAllowRules(id).then((res) => setAllowRules(Array.isArray(res) ? res : [])).catch(() => {});
+      api.getKnockConfig(id).then((cfg) => {
+        if (cfg.client_ip) setDetectedClientIP(cfg.client_ip);
+      }).catch(() => {});
     } else if (activeTab === 'backups') {
       api.listBackups(id).then((res) => setBackupsList(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'addons') {
@@ -334,6 +385,41 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setAccessKeys(Array.isArray(updatedKeys) ? updatedKeys : []);
     } catch (err: any) {
       alert(err.message || 'Failed to delete access key');
+    }
+  };
+
+  const handleCreateAllowRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !newAllowIP.trim()) return;
+    setAllowSubmitting(true);
+    try {
+      await api.createPortGateAllowRule({
+        ip_or_subnet: newAllowIP.trim(),
+        comment: newAllowComment.trim(),
+        is_global: newAllowScope === 'global',
+        server_id: newAllowScope === 'global' ? null : id,
+      }, id);
+      setShowAddAllowModal(false);
+      setNewAllowIP('');
+      setNewAllowComment('');
+      setNewAllowScope('server');
+      const updated = await api.listPortGateAllowRules(id);
+      setAllowRules(Array.isArray(updated) ? updated : []);
+    } catch (err: any) {
+      alert(err.message || 'Failed to add permanent allow rule');
+    } finally {
+      setAllowSubmitting(false);
+    }
+  };
+
+  const handleDeleteAllowRule = async (ruleId: number) => {
+    if (!id || !confirm('Are you sure you want to remove this permanent allow rule? The firewall rule will be deleted.')) return;
+    try {
+      await api.deletePortGateAllowRule(ruleId, id);
+      const updated = await api.listPortGateAllowRules(id);
+      setAllowRules(Array.isArray(updated) ? updated : []);
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete allow rule');
     }
   };
 
@@ -425,14 +511,26 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const handleSendCommand = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!command.trim()) return;
+    const cmd = command.trim();
+    if (!cmd) return;
+
+    if (server?.status !== 'running') {
+      setLogs((prev) => [...prev, `[SYSTEM] Server is currently offline. Start the server before sending commands.`]);
+      setCommand('');
+      return;
+    }
+
+    // Immediately echo the command into local terminal
+    setLogs((prev) => [...prev, `> ${cmd}`]);
+    setCommand('');
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'command', payload: command.trim() }));
+      wsRef.current.send(JSON.stringify({ type: 'command', payload: cmd }));
     } else if (id) {
-      api.sendCommand(id, command.trim()).catch(() => {});
+      api.sendCommand(id, cmd).catch((err: any) => {
+        setLogs((prev) => [...prev, `[ERROR] ${err.message || 'Failed to send command'}`]);
+      });
     }
-    setCommand('');
   };
 
   const handleBroadcast = async (e: React.FormEvent) => {
@@ -442,7 +540,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       await api.broadcast(id, broadcastMsg.trim(), broadcastTarget.trim() || undefined);
       setBroadcastMsg('');
       setBroadcastTarget('');
-      alert('Message broadcasted to server!');
+      // Refresh chat feed immediately
+      const chat = await api.getChat(id);
+      setChatFeed(Array.isArray(chat) ? chat : []);
     } catch (err: any) {
       alert(err.message || 'Failed to broadcast');
     }
@@ -977,47 +1077,70 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       {activeTab === 'overview' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 md:col-span-2 flex flex-col h-[520px]">
-            <div className="flex items-center justify-between mb-3">
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl md:col-span-2 flex flex-col overflow-hidden">
+            {/* Collapsible Terminal Header */}
+            <button
+              onClick={() => setTerminalOpen((prev) => !prev)}
+              className="w-full flex items-center justify-between p-5 hover:bg-obsidian-850/50 transition-colors cursor-pointer select-none"
+            >
               <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
+                {terminalOpen ? (
+                  <ChevronDown className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <ChevronRight className="w-4 h-4 text-slate-400" />
+                )}
                 <Terminal className="w-4 h-4 text-emerald-400" />
                 <span>Interactive BDS Terminal</span>
               </h3>
               <div className="flex items-center space-x-2 text-[11px] font-mono">
                 <span className={`w-2 h-2 rounded-full ${wsConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`}></span>
-                <span className="text-slate-400">{wsConnected ? 'Connected' : 'Offline'}</span>
+                <span className="text-slate-400">
+                  {terminalOpen
+                    ? wsConnected ? 'Connected' : 'Connecting...'
+                    : wsConnected ? 'Connected' : 'Offline'}
+                </span>
+                {!terminalOpen && logs.length > 0 && (
+                  <span className="ml-2 px-1.5 py-0.5 rounded bg-obsidian-800 border border-obsidian-700 text-slate-500 text-[10px]">
+                    {logs.length} lines
+                  </span>
+                )}
               </div>
-            </div>
+            </button>
 
-            <div className="flex-1 bg-obsidian-950 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto border border-obsidian-800 space-y-1">
-              {(logs || []).length === 0 ? (
-                <p className="text-slate-600 italic">No console logs received yet...</p>
-              ) : (
-                (logs || []).map((line, idx) => (
-                  <div key={idx} className="leading-relaxed hover:bg-obsidian-900/60 px-1 rounded">
-                    {line}
-                  </div>
-                ))
-              )}
-              <div ref={consoleBottomRef} />
-            </div>
+            {/* Expanded Terminal Content */}
+            {terminalOpen && (
+              <div className="flex flex-col px-5 pb-5 h-[470px]">
+                <div className="flex-1 bg-obsidian-950 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto border border-obsidian-800 space-y-1">
+                  {(logs || []).length === 0 ? (
+                    <p className="text-slate-600 italic">No console logs received yet...</p>
+                  ) : (
+                    (logs || []).map((line, idx) => (
+                      <div key={idx} className="leading-relaxed hover:bg-obsidian-900/60 px-1 rounded">
+                        {line}
+                      </div>
+                    ))
+                  )}
+                  <div ref={consoleBottomRef} />
+                </div>
 
-            <form onSubmit={handleSendCommand} className="mt-3 flex items-center gap-2">
-              <input
-                type="text"
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
-                placeholder="Enter BDS console command (e.g. say Hello, op Steve, time set day)..."
-                className="flex-1 px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-xs focus:border-emerald-500"
-              />
-              <button
-                type="submit"
-                className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>Send</span>
-              </button>
-            </form>
+                <form onSubmit={handleSendCommand} className="mt-3 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                    placeholder="Enter BDS console command (e.g. say Hello, op Steve, time set day)..."
+                    className="flex-1 px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-xs focus:border-emerald-500"
+                  />
+                  <button
+                    type="submit"
+                    className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Send</span>
+                  </button>
+                </form>
+              </div>
+            )}
           </div>
 
           <div className="space-y-6">
@@ -1568,6 +1691,205 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     </div>
                   </form>
                 )}
+              </div>
+            </div>
+          )}
+
+          {/* ALWAYS-ALLOWED IPS & SUBNETS (PERMANENT WHITELIST) CARD */}
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div>
+                <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-emerald-400" />
+                  <span>Always-Allowed IPs & Subnets (Permanent Whitelist)</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1 font-mono">
+                  IP addresses and CIDR subnets that are permanently authorized on the firewall. Players from these networks can connect directly without logging in or using a knock passphrase.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setNewAllowIP(detectedClientIP || '');
+                  setNewAllowComment('');
+                  setNewAllowScope('server');
+                  setShowAddAllowModal(true);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 shrink-0 shadow-[0_0_10px_rgba(16,185,129,0.2)]"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Add Allowed IP / Range</span>
+              </button>
+            </div>
+
+            {allowRules.length === 0 ? (
+              <div className="text-center py-8 bg-obsidian-950/60 border border-obsidian-800 rounded-lg text-slate-500 font-mono text-xs">
+                No permanent IP allowlist rules configured. Add trusted client IPs or LAN/VPN subnets (e.g. 192.168.1.0/24) for zero-friction access.
+              </div>
+            ) : (
+              <div className="border border-obsidian-800 rounded-lg overflow-hidden">
+                <table className="w-full text-left font-mono text-xs">
+                  <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
+                    <tr>
+                      <th className="px-4 py-2.5">IP / CIDR Range</th>
+                      <th className="px-4 py-2.5">Scope</th>
+                      <th className="px-4 py-2.5">Description / Note</th>
+                      <th className="px-4 py-2.5">Added Date</th>
+                      <th className="px-4 py-2.5 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
+                    {paginatedAllowRules.map((rule) => {
+                      const isGlobal = !rule.server_id;
+                      return (
+                        <tr key={rule.id} className="hover:bg-obsidian-800/40">
+                          <td className="px-4 py-2.5 text-emerald-400 font-bold font-mono">
+                            {rule.ip_or_subnet}
+                          </td>
+                          <td className="px-4 py-2.5">
+                            {isGlobal ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-400 border border-sky-500/30">
+                                <Globe className="w-3 h-3" />
+                                <span>All Instances (Global)</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                <Shield className="w-3 h-3" />
+                                <span>This Instance Only</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-300">
+                            {rule.comment || '—'}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-400">
+                            {new Date(rule.created_at).toLocaleString()}
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <button
+                              onClick={() => handleDeleteAllowRule(rule.id)}
+                              className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <Pagination
+                  currentPage={allowRulesPage}
+                  totalItems={totalAllowRules}
+                  pageSize={allowRulesPageSize}
+                  onPageChange={setAllowRulesPage}
+                  onPageSizeChange={setAllowRulesPageSize}
+                  pageSizeOptions={[5, 10, 25, 50]}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* ADD ALLOW RULE MODAL */}
+          {showAddAllowModal && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-md w-full p-6 shadow-2xl">
+                <h3 className="text-base font-mono font-bold text-slate-100 mb-4 flex items-center gap-2">
+                  <Globe className="w-4 h-4 text-emerald-400" />
+                  <span>Add Permanent Allowed IP / Range</span>
+                </h3>
+                <form onSubmit={handleCreateAllowRule} className="space-y-4 font-mono text-xs">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-slate-300 font-bold">IP Address or CIDR Range</label>
+                      {detectedClientIP && (
+                        <button
+                          type="button"
+                          onClick={() => setNewAllowIP(detectedClientIP)}
+                          className="text-[11px] text-emerald-400 hover:text-emerald-300 underline"
+                        >
+                          Use My IP ({detectedClientIP})
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. 192.168.1.100 or 10.0.0.0/24"
+                      value={newAllowIP}
+                      onChange={(e) => setNewAllowIP(e.target.value)}
+                      className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Supports single IPv4/IPv6 or CIDR subnets (e.g. <code>192.168.1.0/24</code>).
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-bold">Scope</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setNewAllowScope('server')}
+                        className={`p-2.5 rounded-lg border text-left transition-colors ${
+                          newAllowScope === 'server'
+                            ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300'
+                            : 'bg-obsidian-950 border-obsidian-800 text-slate-400 hover:border-obsidian-700'
+                        }`}
+                      >
+                        <div className="font-bold flex items-center gap-1">
+                          <Shield className="w-3.5 h-3.5" />
+                          <span>This Instance</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">UDP {server.port} only</div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setNewAllowScope('global')}
+                        className={`p-2.5 rounded-lg border text-left transition-colors ${
+                          newAllowScope === 'global'
+                            ? 'bg-sky-950/60 border-sky-500 text-sky-300'
+                            : 'bg-obsidian-950 border-obsidian-800 text-slate-400 hover:border-obsidian-700'
+                        }`}
+                      >
+                        <div className="font-bold flex items-center gap-1">
+                          <Globe className="w-3.5 h-3.5" />
+                          <span>All Instances</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">Global across all servers</div>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 mb-1 font-bold">Comment / Note (optional)</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Home Office, LAN Subnet, Admin Mobile"
+                      value={newAllowComment}
+                      onChange={(e) => setNewAllowComment(e.target.value)}
+                      className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddAllowModal(false)}
+                      className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={allowSubmitting}
+                      className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center gap-1.5"
+                    >
+                      {allowSubmitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                      <span>Save Rule</span>
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           )}

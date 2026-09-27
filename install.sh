@@ -5,7 +5,7 @@ set -euo pipefail
 # Supported: Debian/Ubuntu, RHEL/Rocky/Fedora, Arch Linux, Alpine
 
 REPO="AhmadShamli/Bedrock-Server-Manager"
-DEFAULT_FALLBACK_TAG="v1.3.0"
+DEFAULT_FALLBACK_TAG="v1.4.0"
 
 # Ensure standard binary directories are in PATH (important under sudo/secure_path)
 for extra_path in /usr/local/go/bin /usr/local/bin /usr/bin; do
@@ -793,39 +793,81 @@ if [ "${BINARY_STAGED}" = false ] && [ "${INSTALL_METHOD}" = "download" ]; then
         fi
     fi
 
-    # 2. Try GitHub CLI (gh) if installed and authenticated
-    if [ "${BINARY_STAGED}" = false ] && [ -n "${ARCH}" ] && command -v gh >/dev/null 2>&1; then
-        log_info "Attempting download via GitHub CLI (gh) for tag ${RELEASE_TAG}..."
-        if gh release download "${RELEASE_TAG}" --repo "${REPO}" --pattern "*linux-${ARCH}.tar.gz" --dir "${STAGING_DIR}" 2>/dev/null; then
-            ARCHIVE_FILE="$(find "${STAGING_DIR}" -maxdepth 1 -type f -name "*linux-${ARCH}.tar.gz" | head -n1)"
-            if [ -n "${ARCHIVE_FILE}" ] && tar -xzf "${ARCHIVE_FILE}" -C "${STAGING_DIR}" 2>/dev/null; then
-                FOUND_BIN="$(find "${STAGING_DIR}" -type f -name bedrock-server-manager | head -n 1)"
-                if [ -n "${FOUND_BIN}" ] && [ -f "${FOUND_BIN}" ]; then
-                    if [ "${FOUND_BIN}" != "${STAGING_DIR}/bedrock-server-manager" ]; then
-                        mv "${FOUND_BIN}" "${STAGING_DIR}/bedrock-server-manager"
+    # 2. Try GitHub CLI (gh) if installed and authenticated (checks both root and SUDO_USER)
+    if [ "${BINARY_STAGED}" = false ] && [ -n "${ARCH}" ]; then
+        GH_CMD=""
+        if [ -n "${SUDO_USER:-}" ] && sudo -u "${SUDO_USER}" command -v gh >/dev/null 2>&1 && sudo -u "${SUDO_USER}" gh auth status >/dev/null 2>&1; then
+            GH_CMD="sudo -u ${SUDO_USER} gh"
+        elif command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+            GH_CMD="gh"
+        fi
+
+        if [ -n "${GH_CMD}" ]; then
+            log_info "Attempting download via GitHub CLI (${GH_CMD}) for tag ${RELEASE_TAG}..."
+            if ${GH_CMD} release download "${RELEASE_TAG}" --repo "${REPO}" --pattern "*linux-${ARCH}.tar.gz" --dir "${STAGING_DIR}" 2>/dev/null; then
+                ARCHIVE_FILE="$(find "${STAGING_DIR}" -maxdepth 1 -type f -name "*linux-${ARCH}.tar.gz" | head -n1)"
+                if [ -n "${ARCHIVE_FILE}" ] && tar -xzf "${ARCHIVE_FILE}" -C "${STAGING_DIR}" 2>/dev/null; then
+                    FOUND_BIN="$(find "${STAGING_DIR}" -type f -name bedrock-server-manager | head -n 1)"
+                    if [ -n "${FOUND_BIN}" ] && [ -f "${FOUND_BIN}" ]; then
+                        if [ "${FOUND_BIN}" != "${STAGING_DIR}/bedrock-server-manager" ]; then
+                            mv "${FOUND_BIN}" "${STAGING_DIR}/bedrock-server-manager"
+                        fi
+                        FOUND_ENV="$(find "${STAGING_DIR}" -type f -name .env.example | head -n 1)"
+                        if [ -n "${FOUND_ENV}" ]; then
+                            cp "${FOUND_ENV}" "${STAGING_DIR}/bsm.env.example"
+                        fi
+                        BINARY_STAGED=true
+                        log_success "Downloaded and extracted Bedrock Server Manager ${RELEASE_TAG} via GitHub CLI."
                     fi
-                    FOUND_ENV="$(find "${STAGING_DIR}" -type f -name .env.example | head -n 1)"
-                    if [ -n "${FOUND_ENV}" ]; then
-                        cp "${FOUND_ENV}" "${STAGING_DIR}/bsm.env.example"
-                    fi
-                    BINARY_STAGED=true
-                    log_success "Downloaded and extracted Bedrock Server Manager ${RELEASE_TAG} via GitHub CLI."
                 fi
             fi
         fi
     fi
 
-    # 3. Download from GitHub Releases via curl
+    # 3. Resolve GitHub auth token (checks GITHUB_TOKEN, GH_TOKEN, SUDO_USER gh, or root gh)
+    GH_AUTH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    if [ -z "${GH_AUTH_TOKEN}" ] && [ -n "${SUDO_USER:-}" ]; then
+        GH_AUTH_TOKEN="$(sudo -u "${SUDO_USER}" gh auth token 2>/dev/null || true)"
+    fi
+    if [ -z "${GH_AUTH_TOKEN}" ] && command -v gh >/dev/null 2>&1; then
+        GH_AUTH_TOKEN="$(gh auth token 2>/dev/null || true)"
+    fi
+
+    # 4. Download from GitHub Releases via API (for private or token-authenticated repos)
+    if [ "${BINARY_STAGED}" = false ] && [ -n "${ARCH}" ] && [ -n "${GH_AUTH_TOKEN}" ] && command -v curl >/dev/null 2>&1; then
+        log_info "Attempting authenticated download via GitHub Releases API for tag ${RELEASE_TAG}..."
+        ASSET_API_URL="$(curl -fsSL -H "Authorization: Bearer ${GH_AUTH_TOKEN}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${REPO}/releases/tags/${RELEASE_TAG}" 2>/dev/null \
+            | grep -B 2 -E "\"name\":\s*\"bedrock-server-manager-${RELEASE_TAG}-linux-${ARCH}\.tar\.gz\"" \
+            | grep '"url":' | head -n1 | sed -E 's/.*"url":\s*"([^"]+)".*/\1/' || true)"
+
+        if [ -n "${ASSET_API_URL}" ]; then
+            if curl -fsSL -H "Authorization: Bearer ${GH_AUTH_TOKEN}" -H "Accept: application/octet-stream" \
+                "${ASSET_API_URL}" -o "${STAGING_DIR}/bsm.tar.gz" 2>/dev/null; then
+                if tar -xzf "${STAGING_DIR}/bsm.tar.gz" -C "${STAGING_DIR}" 2>/dev/null; then
+                    FOUND_BIN="$(find "${STAGING_DIR}" -type f -name bedrock-server-manager | head -n 1)"
+                    if [ -n "${FOUND_BIN}" ] && [ -f "${FOUND_BIN}" ]; then
+                        if [ "${FOUND_BIN}" != "${STAGING_DIR}/bedrock-server-manager" ]; then
+                            mv "${FOUND_BIN}" "${STAGING_DIR}/bedrock-server-manager"
+                        fi
+                        FOUND_ENV="$(find "${STAGING_DIR}" -type f -name .env.example | head -n 1)"
+                        if [ -n "${FOUND_ENV}" ]; then
+                            cp "${FOUND_ENV}" "${STAGING_DIR}/bsm.env.example"
+                        fi
+                        BINARY_STAGED=true
+                        log_success "Downloaded and extracted Bedrock Server Manager ${RELEASE_TAG} via GitHub API."
+                    fi
+                fi
+            fi
+        fi
+    fi
+
+    # 5. Direct download from GitHub Releases via public curl
     if [ "${BINARY_STAGED}" = false ] && [ -n "${ARCH}" ] && command -v curl >/dev/null 2>&1; then
         DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${RELEASE_TAG}/bedrock-server-manager-${RELEASE_TAG}-linux-${ARCH}.tar.gz"
         log_info "Downloading Bedrock Server Manager ${RELEASE_TAG} from GitHub (${DOWNLOAD_URL})..."
 
-        CURL_ARGS=(-fsSL)
-        if [ -n "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]; then
-            CURL_ARGS+=(-H "Authorization: Bearer ${GITHUB_TOKEN:-${GH_TOKEN}}")
-        fi
-
-        if curl "${CURL_ARGS[@]}" "${DOWNLOAD_URL}" -o "${STAGING_DIR}/bsm.tar.gz" 2>/dev/null; then
+        if curl -fsSL "${DOWNLOAD_URL}" -o "${STAGING_DIR}/bsm.tar.gz" 2>/dev/null; then
             if tar -xzf "${STAGING_DIR}/bsm.tar.gz" -C "${STAGING_DIR}" 2>/dev/null; then
                 FOUND_BIN="$(find "${STAGING_DIR}" -type f -name bedrock-server-manager | head -n 1)"
                 if [ -n "${FOUND_BIN}" ] && [ -f "${FOUND_BIN}" ]; then
@@ -842,6 +884,10 @@ if [ "${BINARY_STAGED}" = false ] && [ "${INSTALL_METHOD}" = "download" ]; then
             fi
         else
             log_warn "Could not download release archive from GitHub for tag '${RELEASE_TAG}'."
+            if [ -z "${GH_AUTH_TOKEN}" ]; then
+                log_warn "Note: If '${REPO}' is a private repository, GitHub returns 404 for unauthenticated downloads."
+                log_warn "To download public releases without authentication, make the repo public (gh repo edit --visibility public)."
+            fi
         fi
     fi
 

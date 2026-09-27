@@ -50,3 +50,10 @@ func (rb *RingBuffer) GetAll() []string {
 	}
 	return result
 }
+
+// Count returns the number of lines currently stored.
+func (rb *RingBuffer) Count() int {
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+	return rb.count
+}

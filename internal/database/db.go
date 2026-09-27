@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
@@ -724,6 +726,156 @@ func (db *ManagerDB) ExpireOldLeases(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// MatchIPOrCIDR returns true if clientIPStr matches the rule (either exact IP match or CIDR contains).
+func MatchIPOrCIDR(ruleStr, clientIPStr string) bool {
+	ruleStr = strings.TrimSpace(ruleStr)
+	clientIPStr = strings.TrimSpace(clientIPStr)
+
+	if ruleStr == "" || clientIPStr == "" {
+		return false
+	}
+	if ruleStr == clientIPStr {
+		return true
+	}
+
+	clientIP := net.ParseIP(clientIPStr)
+	if clientIP == nil {
+		return false
+	}
+
+	if strings.Contains(ruleStr, "/") {
+		_, ipNet, err := net.ParseCIDR(ruleStr)
+		if err == nil && ipNet.Contains(clientIP) {
+			return true
+		}
+	} else {
+		ruleIP := net.ParseIP(ruleStr)
+		if ruleIP != nil && ruleIP.Equal(clientIP) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// CreatePortGateAllowRule inserts a new permanent allowed IP or subnet rule.
+func (db *ManagerDB) CreatePortGateAllowRule(ctx context.Context, rule *models.PortGateAllowRule) error {
+	now := FormatTime(time.Now().UTC())
+	rule.CreatedAt = time.Now().UTC()
+
+	var serverIDVal sql.NullString
+	if rule.ServerID != nil && *rule.ServerID != "" {
+		serverIDVal = sql.NullString{String: *rule.ServerID, Valid: true}
+	}
+
+	res, err := db.ExecContext(ctx, `
+		INSERT INTO port_gate_allowlist (server_id, ip_or_subnet, comment, created_at)
+		VALUES (?, ?, ?, ?)`,
+		serverIDVal, strings.TrimSpace(rule.IPOrSubnet), strings.TrimSpace(rule.Comment), now,
+	)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err == nil {
+		rule.ID = id
+	}
+	return nil
+}
+
+// ListPortGateAllowRules queries allowed rules. If serverID is provided, returns rules for this server plus global rules.
+func (db *ManagerDB) ListPortGateAllowRules(ctx context.Context, serverID *string) ([]models.PortGateAllowRule, error) {
+	var query string
+	var args []interface{}
+
+	if serverID != nil && *serverID != "" {
+		query = `
+			SELECT id, server_id, ip_or_subnet, comment, created_at
+			FROM port_gate_allowlist
+			WHERE server_id IS NULL OR server_id = '' OR server_id = ?
+			ORDER BY id DESC`
+		args = append(args, *serverID)
+	} else {
+		query = `
+			SELECT id, server_id, ip_or_subnet, comment, created_at
+			FROM port_gate_allowlist
+			ORDER BY id DESC`
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	rules := make([]models.PortGateAllowRule, 0)
+	for rows.Next() {
+		var r models.PortGateAllowRule
+		var sID sql.NullString
+		var createdAtStr string
+
+		if err := rows.Scan(&r.ID, &sID, &r.IPOrSubnet, &r.Comment, &createdAtStr); err != nil {
+			return nil, err
+		}
+		if sID.Valid && sID.String != "" {
+			val := sID.String
+			r.ServerID = &val
+		}
+		if t, err := ParseTime(createdAtStr); err == nil {
+			r.CreatedAt = t
+		}
+		rules = append(rules, r)
+	}
+	return rules, rows.Err()
+}
+
+// GetPortGateAllowRule retrieves a single rule by ID.
+func (db *ManagerDB) GetPortGateAllowRule(ctx context.Context, id int64) (*models.PortGateAllowRule, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT id, server_id, ip_or_subnet, comment, created_at
+		FROM port_gate_allowlist
+		WHERE id = ?`, id,
+	)
+
+	var r models.PortGateAllowRule
+	var sID sql.NullString
+	var createdAtStr string
+
+	if err := row.Scan(&r.ID, &sID, &r.IPOrSubnet, &r.Comment, &createdAtStr); err != nil {
+		return nil, err
+	}
+	if sID.Valid && sID.String != "" {
+		val := sID.String
+		r.ServerID = &val
+	}
+	if t, err := ParseTime(createdAtStr); err == nil {
+		r.CreatedAt = t
+	}
+	return &r, nil
+}
+
+// DeletePortGateAllowRule deletes an allowed rule by ID.
+func (db *ManagerDB) DeletePortGateAllowRule(ctx context.Context, id int64) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM port_gate_allowlist WHERE id = ?", id)
+	return err
+}
+
+// IsIPAllowed checks if clientIP matches any active allow rule for the specified server (or global).
+func (db *ManagerDB) IsIPAllowed(ctx context.Context, serverID, clientIP string) (*models.PortGateAllowRule, bool, error) {
+	rules, err := db.ListPortGateAllowRules(ctx, &serverID)
+	if err != nil {
+		return nil, false, err
+	}
+
+	for _, rule := range rules {
+		if MatchIPOrCIDR(rule.IPOrSubnet, clientIP) {
+			r := rule
+			return &r, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // --- Audit Logs ---

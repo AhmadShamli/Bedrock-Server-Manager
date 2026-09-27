@@ -87,6 +87,14 @@ func (h *PlayerHubHandler) Broadcast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.playerManager != nil {
+		sender := "Server"
+		if payload.Target != "" {
+			sender = fmt.Sprintf("Server -> %s", payload.Target)
+		}
+		h.playerManager.AddChatMessage(serverID, sender, payload.Message)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "sent"})
 }

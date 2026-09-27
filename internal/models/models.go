@@ -93,6 +93,15 @@ type PortGateLease struct {
 	Status           string    `json:"status"` // active, expired, revoked
 }
 
+// PortGateAllowRule represents a permanent allowed IP or subnet for all instances or a single instance.
+type PortGateAllowRule struct {
+	ID         int64     `json:"id"`
+	ServerID   *string   `json:"server_id,omitempty"` // nil or empty means global (all instances)
+	IPOrSubnet string    `json:"ip_or_subnet"`
+	Comment    string    `json:"comment"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // Backup represents a hot or cold server archive.
 type Backup struct {
 	ID        int64     `json:"id"`

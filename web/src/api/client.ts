@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, GlobalPlayer, MetricsData } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, GlobalPlayer, MetricsData } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -292,6 +292,8 @@ class APIClient {
     direct_launch_url: string;
     server_name: string;
     server_port: number;
+    always_allowed?: boolean;
+    rule_comment?: string;
   }> {
     return this.request(`/api/knock/${serverId}`, {
       method: 'POST',
@@ -321,6 +323,8 @@ class APIClient {
     gamertag?: string;
     expires_in_seconds?: number;
     direct_launch_url?: string;
+    always_allowed?: boolean;
+    rule_comment?: string;
   }> {
     return this.request(`/api/knock/${serverId}/status`);
   }
@@ -370,6 +374,33 @@ class APIClient {
 
   async deleteAccessKey(serverId: string, keyId: number): Promise<{ success: boolean }> {
     return this.request(`/api/servers/${serverId}/access-keys/${keyId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --- Port Gate Permanent Allowlist ---
+  async listPortGateAllowRules(serverId?: string): Promise<PortGateAllowRule[]> {
+    const url = serverId ? `/api/servers/${serverId}/portgate/allowlist` : '/api/portgate/allowlist';
+    const res = await this.request(url);
+    return Array.isArray(res) ? res : [];
+  }
+
+  async createPortGateAllowRule(payload: {
+    server_id?: string | null;
+    is_global?: boolean;
+    ip_or_subnet: string;
+    comment?: string;
+  }, serverId?: string): Promise<PortGateAllowRule> {
+    const url = serverId ? `/api/servers/${serverId}/portgate/allowlist` : '/api/portgate/allowlist';
+    return this.request(url, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePortGateAllowRule(ruleId: number, serverId?: string): Promise<{ success: boolean }> {
+    const url = serverId ? `/api/servers/${serverId}/portgate/allowlist/${ruleId}` : `/api/portgate/allowlist/${ruleId}`;
+    return this.request(url, {
       method: 'DELETE',
     });
   }

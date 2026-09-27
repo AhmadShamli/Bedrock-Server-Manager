@@ -75,6 +75,16 @@ CREATE INDEX IF NOT EXISTS idx_port_gate_leases_active ON port_gate_leases(serve
 CREATE INDEX IF NOT EXISTS idx_port_gate_leases_ip ON port_gate_leases(ip_address, status);
 CREATE INDEX IF NOT EXISTS idx_port_gate_leases_token ON port_gate_leases(session_token_hash);
 
+CREATE TABLE IF NOT EXISTS port_gate_allowlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id TEXT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    ip_or_subnet TEXT NOT NULL,
+    comment TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_port_gate_allowlist_server ON port_gate_allowlist(server_id);
+CREATE INDEX IF NOT EXISTS idx_port_gate_allowlist_ip ON port_gate_allowlist(ip_or_subnet);
+
 CREATE TABLE IF NOT EXISTS backups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
