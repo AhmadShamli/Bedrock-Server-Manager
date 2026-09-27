@@ -1,8 +1,30 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ExternalLink, Terminal } from 'lucide-react';
+import { api } from '../api/client';
 
 export const Footer: React.FC = () => {
   const currentYear = new Date().getFullYear();
+  const [version, setVersion] = useState<string>(
+    typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.5.3'
+  );
+
+  useEffect(() => {
+    let isMounted = true;
+    api.getVersion()
+      .then((data) => {
+        if (isMounted && data && data.version) {
+          setVersion(data.version);
+        }
+      })
+      .catch(() => {
+        // Fall back gracefully to build-time version
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const cleanVersion = version.startsWith('v') ? version.slice(1) : version;
 
   return (
     <footer className="mt-auto border-t border-obsidian-800/80 bg-obsidian-950/80 backdrop-blur-sm py-4 text-xs font-mono text-slate-500">
@@ -51,12 +73,13 @@ export const Footer: React.FC = () => {
           </a>
 
           <a
-            href="https://github.com/AhmadShamli/Bedrock-Server-Manager/releases"
+            href={`https://github.com/AhmadShamli/Bedrock-Server-Manager/releases/tag/v${cleanVersion}`}
             target="_blank"
             rel="noopener noreferrer"
+            title={`View release v${cleanVersion} on GitHub`}
             className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold hover:bg-emerald-500/20 transition-colors"
           >
-            v1.4.0
+            v{cleanVersion}
           </a>
         </div>
       </div>

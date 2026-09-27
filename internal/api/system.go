@@ -9,6 +9,7 @@ import (
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
 )
 
 type SystemHandler struct {
@@ -27,8 +28,20 @@ func NewSystemHandler(db *database.ManagerDB) *SystemHandler {
 func (h *SystemHandler) Health(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"status": "healthy",
-		"uptime": time.Since(h.startTime).String(),
+		"status":  "healthy",
+		"version": version.Version,
+		"uptime":  time.Since(h.startTime).String(),
+	})
+}
+
+// Version returns application version and repository metadata.
+func (h *SystemHandler) Version(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"version":        version.Version,
+		"app_name":       version.AppName,
+		"author":         version.Author,
+		"repository_url": version.RepositoryURL,
 	})
 }
 
@@ -39,6 +52,8 @@ func (h *SystemHandler) SystemInfo(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"version":    version.Version,
+		"app_name":   version.AppName,
 		"go_version": runtime.Version(),
 		"goroutines": runtime.NumGoroutine(),
 		"os":         runtime.GOOS,

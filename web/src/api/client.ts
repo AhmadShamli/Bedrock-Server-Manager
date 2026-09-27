@@ -592,6 +592,10 @@ class APIClient {
     return Array.isArray(res) ? res : [];
   }
 
+  async getVersion(): Promise<{ version: string; app_name: string; author: string; repository_url: string }> {
+    return this.request('/api/version');
+  }
+
   async getSettings(): Promise<Record<string, string>> {
     const res = await this.request('/api/system/settings');
     return res && typeof res === 'object' ? res : {};

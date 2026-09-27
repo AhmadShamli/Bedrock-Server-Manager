@@ -7,7 +7,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-VERSION="${1:-${VERSION:-1.5.0}}"
+DEFAULT_VER=$(grep -E 'var Version = "[^"]+"' "${ROOT_DIR}/internal/version/version.go" | sed -E 's/.*"([^"]+)".*/\1/')
+VERSION="${1:-${VERSION:-${DEFAULT_VER:-1.5.3}}}"
 DIST_DIR="${ROOT_DIR}/dist"
 LDFLAGS="-s -w -X github.com/AhmadShamli/Bedrock-Server-Manager/internal/version.Version=${VERSION#v}"
 
@@ -22,6 +23,7 @@ echo "==> Building embedded React web assets..."
     if [ ! -d "node_modules" ]; then
         npm ci || npm install
     fi
+    export VITE_APP_VERSION="${VERSION#v}"
     npm run build
 )
 

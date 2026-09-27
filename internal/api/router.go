@@ -65,6 +65,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	r.Route("/api", func(api chi.Router) {
 		// Health & Status
 		api.Get("/health", systemHandler.Health)
+		api.Get("/version", systemHandler.Version)
 		api.Get("/setup/status", authHandler.SetupStatus)
 		api.Post("/setup", authHandler.Setup)
 

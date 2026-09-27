@@ -1375,4 +1375,44 @@ func TestBroadcastAndTellrawFormatting(t *testing.T) {
 	}
 }
 
+func TestVersionAndHealthEndpoints(t *testing.T) {
+	router, _, _, _, _, _ := setupTestRouter(t)
+
+	// Test /api/health
+	req := httptest.NewRequest("GET", "/api/health", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /api/health, got %d", w.Code)
+	}
+	var healthRes map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &healthRes); err != nil {
+		t.Fatalf("failed to decode health response: %v", err)
+	}
+	if healthRes["status"] != "healthy" {
+		t.Errorf("expected status healthy, got %v", healthRes["status"])
+	}
+	if healthRes["version"] != "1.5.3" {
+		t.Errorf("expected version 1.5.3 in /api/health, got %v", healthRes["version"])
+	}
+
+	// Test /api/version
+	req = httptest.NewRequest("GET", "/api/version", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /api/version, got %d", w.Code)
+	}
+	var verRes map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
+		t.Fatalf("failed to decode version response: %v", err)
+	}
+	if verRes["version"] != "1.5.3" {
+		t.Errorf("expected version 1.5.3 in /api/version, got %v", verRes["version"])
+	}
+	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
+		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
+	}
+}
+
 
