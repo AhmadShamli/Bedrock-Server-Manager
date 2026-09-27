@@ -290,6 +290,7 @@ class APIClient {
     expires_in_seconds: number;
     session_token: string;
     direct_launch_url: string;
+    add_server_url?: string;
     server_name: string;
     server_port: number;
     game_server_address?: string;
@@ -324,6 +325,7 @@ class APIClient {
     gamertag?: string;
     expires_in_seconds?: number;
     direct_launch_url?: string;
+    add_server_url?: string;
     game_server_address?: string;
     always_allowed?: boolean;
     rule_comment?: string;

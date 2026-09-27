@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2, Copy, Check, Timer } from 'lucide-react';
+import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2, Copy, Check, Timer, Plus } from 'lucide-react';
 import { api } from '../api/client';
 import { KnockConfig } from '../types';
 
@@ -16,6 +16,7 @@ export const KnockPortal: React.FC = () => {
     ip_address: string;
     expires_in_seconds: number;
     direct_launch_url: string;
+    add_server_url?: string;
     server_name: string;
     server_port: number;
     game_server_address?: string;
@@ -91,7 +92,8 @@ export const KnockPortal: React.FC = () => {
             setActiveLease({
               ip_address: status.ip_address || conf.client_ip || '',
               expires_in_seconds: status.expires_in_seconds || 0,
-              direct_launch_url: status.direct_launch_url || `minecraft://?addExternalServer=${encodeURIComponent(conf.server_name)}|${effectiveHost}:${conf.port}`,
+              direct_launch_url: status.direct_launch_url || `minecraft://connect?serverUrl=${encodeURIComponent(effectiveHost)}&serverPort=${conf.port}`,
+              add_server_url: status.add_server_url || `minecraft://?addExternalServer=${encodeURIComponent(conf.server_name)}|${effectiveHost}:${conf.port}`,
               server_name: conf.server_name,
               server_port: conf.port,
               game_server_address: effectiveHost,
@@ -184,6 +186,7 @@ export const KnockPortal: React.FC = () => {
         ip_address: res.ip_address,
         expires_in_seconds: res.expires_in_seconds,
         direct_launch_url: res.direct_launch_url,
+        add_server_url: res.add_server_url,
         server_name: res.server_name,
         server_port: res.server_port,
         game_server_address: effectiveHost,
@@ -219,6 +222,9 @@ export const KnockPortal: React.FC = () => {
 
   const gameServerHost = activeLease?.game_server_address || config?.game_server_address || window.location.hostname;
   const gameServerPort = activeLease?.server_port || config?.port || 19132;
+  const serverDisplayName = activeLease?.server_name || config?.server_name || 'Minecraft Server';
+  const directConnectUrl = activeLease?.direct_launch_url || `minecraft://connect?serverUrl=${encodeURIComponent(gameServerHost)}&serverPort=${gameServerPort}`;
+  const addServerUrl = activeLease?.add_server_url || `minecraft://?addExternalServer=${encodeURIComponent(serverDisplayName)}|${gameServerHost}:${gameServerPort}`;
 
   if (loading) {
     return (
@@ -305,14 +311,25 @@ export const KnockPortal: React.FC = () => {
                 </div>
               </div>
 
-              {/* Direct Launch Button */}
-              <a
-                href={activeLease.direct_launch_url}
-                className="w-full py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center justify-center space-x-2 transition-all shadow-[0_0_25px_rgba(16,185,129,0.4)] hover:shadow-[0_0_35px_rgba(16,185,129,0.6)]"
-              >
-                <Play className="w-5 h-5 fill-current" />
-                <span>Launch Minecraft Bedrock</span>
-              </a>
+              {/* Launch & Add Server Actions */}
+              <div className="space-y-2.5">
+                <a
+                  href={directConnectUrl}
+                  title="Directly launch Minecraft Bedrock and connect to server"
+                  className="w-full py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center justify-center space-x-2 transition-all shadow-[0_0_25px_rgba(16,185,129,0.4)] hover:shadow-[0_0_35px_rgba(16,185,129,0.6)] group"
+                >
+                  <Play className="w-5 h-5 fill-current transition-transform group-hover:scale-110" />
+                  <span>Launch Minecraft Bedrock</span>
+                </a>
+                <a
+                  href={addServerUrl}
+                  title="Save server address to your Minecraft server list"
+                  className="w-full py-2 px-3 rounded-lg bg-obsidian-950 hover:bg-obsidian-900 text-slate-300 hover:text-emerald-400 border border-obsidian-700/80 hover:border-emerald-500/40 font-mono text-xs flex items-center justify-center space-x-1.5 transition-all shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Game Server to Minecraft List</span>
+                </a>
+              </div>
 
               {/* Server Connection Info */}
               <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-2.5 font-mono text-xs">
@@ -444,14 +461,25 @@ export const KnockPortal: React.FC = () => {
                 )}
               </div>
 
-              {/* Direct Launch Button */}
-              <a
-                href={activeLease.direct_launch_url}
-                className="w-full py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center justify-center space-x-2 transition-all shadow-[0_0_25px_rgba(16,185,129,0.4)] hover:shadow-[0_0_35px_rgba(16,185,129,0.6)]"
-              >
-                <Play className="w-5 h-5 fill-current" />
-                <span>Launch Minecraft Bedrock</span>
-              </a>
+              {/* Launch & Add Server Actions */}
+              <div className="space-y-2.5">
+                <a
+                  href={directConnectUrl}
+                  title="Directly launch Minecraft Bedrock and connect to server"
+                  className="w-full py-3.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center justify-center space-x-2 transition-all shadow-[0_0_25px_rgba(16,185,129,0.4)] hover:shadow-[0_0_35px_rgba(16,185,129,0.6)] group"
+                >
+                  <Play className="w-5 h-5 fill-current transition-transform group-hover:scale-110" />
+                  <span>Launch Minecraft Bedrock</span>
+                </a>
+                <a
+                  href={addServerUrl}
+                  title="Save server address to your Minecraft server list"
+                  className="w-full py-2 px-3 rounded-lg bg-obsidian-950 hover:bg-obsidian-900 text-slate-300 hover:text-emerald-400 border border-obsidian-700/80 hover:border-emerald-500/40 font-mono text-xs flex items-center justify-center space-x-1.5 transition-all shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Game Server to Minecraft List</span>
+                </a>
+              </div>
 
               {/* Server Connection Info */}
               <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-2.5 font-mono text-xs">

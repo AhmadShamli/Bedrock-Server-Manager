@@ -5,7 +5,7 @@ set -euo pipefail
 # Supported: Debian/Ubuntu, RHEL/Rocky/Fedora, Arch Linux, Alpine
 
 REPO="AhmadShamli/Bedrock-Server-Manager"
-DEFAULT_FALLBACK_TAG="v1.5.5"
+DEFAULT_FALLBACK_TAG="v1.5.6"
 
 # Ensure standard binary directories are in PATH (important under sudo/secure_path)
 for extra_path in /usr/local/go/bin /usr/local/bin /usr/bin; do

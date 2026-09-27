@@ -1222,8 +1222,12 @@ func TestCustomGameServerAddress(t *testing.T) {
 		t.Fatalf("expected knock game_server_address 'play.customrealm.net', got '%v'", knockRes["game_server_address"])
 	}
 	directURL, _ := knockRes["direct_launch_url"].(string)
-	if !strings.Contains(directURL, "play.customrealm.net:19132") {
-		t.Fatalf("expected direct launch url to contain 'play.customrealm.net:19132', got '%s'", directURL)
+	if !strings.Contains(directURL, "minecraft://connect?serverUrl=play.customrealm.net&serverPort=19132") {
+		t.Fatalf("expected direct connect url to contain 'minecraft://connect?serverUrl=play.customrealm.net&serverPort=19132', got '%s'", directURL)
+	}
+	addServerURL, _ := knockRes["add_server_url"].(string)
+	if !strings.Contains(addServerURL, "minecraft://?addExternalServer=") || !strings.Contains(addServerURL, "play.customrealm.net:19132") {
+		t.Fatalf("expected add_server_url with addExternalServer, got '%s'", addServerURL)
 	}
 
 	// 5. Check Status endpoint returns custom address
@@ -1393,8 +1397,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.5.5" {
-		t.Errorf("expected version 1.5.5 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.5.6" {
+		t.Errorf("expected version 1.5.6 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1408,8 +1412,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.5.5" {
-		t.Errorf("expected version 1.5.5 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.5.6" {
+		t.Errorf("expected version 1.5.6 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])

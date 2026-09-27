@@ -172,7 +172,8 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 				_ = h.firewall.AllowPort(r.Context(), matchRule.IPOrSubnet, server.PortV6, comment)
 			}
 		}
-		directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
+		directURL := fmt.Sprintf("minecraft://connect?serverUrl=%s&serverPort=%d", gameHost, server.Port)
+		addServerURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"success":             true,
@@ -180,6 +181,7 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 			"message":             "Your IP address is permanently authorized. Port is open without knocking.",
 			"ip_address":          clientIP,
 			"direct_launch_url":   directURL,
+			"add_server_url":      addServerURL,
 			"server_name":         server.Name,
 			"server_port":         server.Port,
 			"game_server_address": gameHost,
@@ -315,8 +317,9 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 		MaxAge:   int(leaseDuration.Seconds()),
 	})
 
-	// Generate direct Minecraft launcher URI: minecraft://?addExternalServer=<Name>|<Host>:<Port>
-	directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
+	// Generate direct Minecraft launcher URI & add external server URI
+	directURL := fmt.Sprintf("minecraft://connect?serverUrl=%s&serverPort=%d", gameHost, server.Port)
+	addServerURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -326,6 +329,7 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 		"expires_in_seconds":  int(leaseDuration.Seconds()),
 		"session_token":       sessionToken,
 		"direct_launch_url":   directURL,
+		"add_server_url":      addServerURL,
 		"server_name":         server.Name,
 		"server_port":         server.Port,
 		"game_server_address": gameHost,
@@ -449,7 +453,8 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Check if caller IP is in permanent allowlist
 	if matchRule, allowed, err := h.db.IsIPAllowed(r.Context(), serverID, currentIP); err == nil && allowed && matchRule != nil {
-		directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
+		directURL := fmt.Sprintf("minecraft://connect?serverUrl=%s&serverPort=%d", gameHost, server.Port)
+		addServerURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"active":              true,
@@ -458,6 +463,7 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 			"rule_comment":        matchRule.Comment,
 			"is_global":           matchRule.ServerID == nil || *matchRule.ServerID == "",
 			"direct_launch_url":   directURL,
+			"add_server_url":      addServerURL,
 			"server_name":         server.Name,
 			"server_port":         server.Port,
 			"game_server_address": gameHost,
@@ -482,7 +488,8 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 		remaining = 0
 	}
 
-	directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
+	directURL := fmt.Sprintf("minecraft://connect?serverUrl=%s&serverPort=%d", gameHost, server.Port)
+	addServerURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -491,6 +498,7 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 		"gamertag":            lease.Gamertag,
 		"expires_in_seconds":  remaining,
 		"direct_launch_url":   directURL,
+		"add_server_url":      addServerURL,
 		"server_name":         server.Name,
 		"server_port":         server.Port,
 		"game_server_address": gameHost,
