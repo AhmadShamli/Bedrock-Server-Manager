@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
@@ -68,19 +70,44 @@ func (h *PlayerHubHandler) Broadcast(w http.ResponseWriter, r *http.Request) {
 
 	var payload struct {
 		Message string `json:"message"`
-		Target  string `json:"target"` // "" for global say, or gamertag for direct tell
+		Target  string `json:"target"` // "" for global broadcast, or gamertag for direct tell
 	}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.Message == "" {
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || strings.TrimSpace(payload.Message) == "" {
 		http.Error(w, `{"error": "Message is required"}`, http.StatusBadRequest)
 		return
 	}
 
-	var cmd string
-	if payload.Target != "" {
-		cmd = fmt.Sprintf("tell %s [BSM Admin]: %s", payload.Target, payload.Message)
+	cleanMsg := strings.TrimSpace(payload.Message)
+	target := strings.TrimSpace(payload.Target)
+
+	var targetSelector string
+	var formattedText string
+
+	if target != "" {
+		if strings.Contains(target, " ") && !strings.HasPrefix(target, "\"") {
+			targetSelector = fmt.Sprintf("%q", target)
+		} else {
+			targetSelector = target
+		}
+		formattedText = fmt.Sprintf("§d[BSM Admin -> You] §f%s", cleanMsg)
 	} else {
-		cmd = fmt.Sprintf("say [BSM Broadcast]: %s", payload.Message)
+		targetSelector = "@a"
+		formattedText = fmt.Sprintf("§6[BSM Broadcast] §f%s", cleanMsg)
 	}
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(map[string]interface{}{
+		"rawtext": []map[string]string{
+			{"text": formattedText},
+		},
+	}); err != nil {
+		http.Error(w, `{"error": "Failed to encode message"}`, http.StatusInternalServerError)
+		return
+	}
+
+	cmd := fmt.Sprintf("tellraw %s %s", targetSelector, strings.TrimSpace(buf.String()))
 
 	if err := h.serverHandler.engine.SendConsoleCommand(r.Context(), server, cmd); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to send message: %s"}`, err.Error()), http.StatusInternalServerError)
@@ -89,10 +116,10 @@ func (h *PlayerHubHandler) Broadcast(w http.ResponseWriter, r *http.Request) {
 
 	if h.playerManager != nil {
 		sender := "Server"
-		if payload.Target != "" {
-			sender = fmt.Sprintf("Server -> %s", payload.Target)
+		if target != "" {
+			sender = fmt.Sprintf("Server -> %s", target)
 		}
-		h.playerManager.AddChatMessage(serverID, sender, payload.Message)
+		h.playerManager.AddChatMessage(serverID, sender, cleanMsg)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

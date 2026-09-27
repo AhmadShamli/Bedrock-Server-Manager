@@ -1267,4 +1267,112 @@ func TestCustomGameServerAddress(t *testing.T) {
 	_ = mockFw
 }
 
+func TestBroadcastAndTellrawFormatting(t *testing.T) {
+	router, db, mockEng, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	u, _ := db.CreateUser(ctx, "admin", "hash", models.RoleAdmin)
+	token, _ := auth.GenerateJWT(jwtSecret, u.ID, u.Username, u.Role, 1*time.Hour)
+
+	// Create and start server
+	srv := &models.Server{
+		ID:         "srv-broadcast-test",
+		Name:       "Broadcast Realm",
+		Port:       19132,
+		PortV6:     19133,
+		Mode:       "survival",
+		Difficulty: "normal",
+		Status:     "stopped",
+	}
+	body, _ := json.Marshal(srv)
+	req := httptest.NewRequest("POST", "/api/servers", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create server failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// 1. Global Broadcast: must use tellraw without "[" say syntax error
+	bPayload := map[string]string{
+		"message": "Welcome all players!",
+	}
+	bBody, _ := json.Marshal(bPayload)
+	req = httptest.NewRequest("POST", "/api/servers/srv-broadcast-test/broadcast", bytes.NewReader(bBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("broadcast failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	logs := mockEng.GetRecentLogs("srv-broadcast-test")
+	foundTellrawGlobal := false
+	for _, l := range logs {
+		if strings.Contains(l, `tellraw @a {"rawtext":[{"text":"§6[BSM Broadcast] §fWelcome all players!"}]}`) {
+			foundTellrawGlobal = true
+			break
+		}
+	}
+	if !foundTellrawGlobal {
+		t.Fatalf("expected tellraw @a command in mock engine logs, got: %v", logs)
+	}
+
+	// 2. Targeted Broadcast: must use tellraw with quoted player name
+	targetPayload := map[string]string{
+		"message": "Private admin notification",
+		"target":  "Diamond Miner",
+	}
+	tBody, _ := json.Marshal(targetPayload)
+	req = httptest.NewRequest("POST", "/api/servers/srv-broadcast-test/broadcast", bytes.NewReader(tBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("targeted broadcast failed: %d", w.Code)
+	}
+
+	logs = mockEng.GetRecentLogs("srv-broadcast-test")
+	foundTellrawTarget := false
+	for _, l := range logs {
+		if strings.Contains(l, `tellraw "Diamond Miner" {"rawtext":[{"text":"§d[BSM Admin -> You] §fPrivate admin notification"}]}`) {
+			foundTellrawTarget = true
+			break
+		}
+	}
+	if !foundTellrawTarget {
+		t.Fatalf("expected targeted tellraw command in logs, got: %v", logs)
+	}
+
+	// 3. Raw console command starting with `say [` should be normalized to tellraw
+	cmdPayload := map[string]string{
+		"command": "say [BSM Broadcast]: hellp",
+	}
+	cBody, _ := json.Marshal(cmdPayload)
+	req = httptest.NewRequest("POST", "/api/servers/srv-broadcast-test/command", bytes.NewReader(cBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("command failed: %d", w.Code)
+	}
+
+	logs = mockEng.GetRecentLogs("srv-broadcast-test")
+	foundNormalizedCmd := false
+	for _, l := range logs {
+		if strings.Contains(l, `tellraw @a {"rawtext":[{"text":"[BSM Broadcast]: hellp"}]}`) {
+			foundNormalizedCmd = true
+			break
+		}
+	}
+	if !foundNormalizedCmd {
+		t.Fatalf("expected normalized say [ command in logs, got: %v", logs)
+	}
+}
+
 

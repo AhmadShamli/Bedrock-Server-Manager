@@ -233,15 +233,15 @@ func (s *TaskScheduler) runRestartTask(ctx context.Context, t *models.Task) erro
 	if len(running) > 0 && len(delays) == 3 {
 		// Broadcast countdown warnings to in-game players across all target running servers
 		for _, srv := range running {
-			_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 30 seconds!")
+			_ = s.eng.SendConsoleCommand(ctx, srv, `tellraw @a {"rawtext":[{"text":"§c[ALERT] Server scheduled restart in 30 seconds!"}]}`)
 		}
 		if sleepWithContext(ctx, delays[0]) {
 			for _, srv := range running {
-				_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 15 seconds!")
+				_ = s.eng.SendConsoleCommand(ctx, srv, `tellraw @a {"rawtext":[{"text":"§c[ALERT] Server scheduled restart in 15 seconds!"}]}`)
 			}
 			if sleepWithContext(ctx, delays[1]) {
 				for _, srv := range running {
-					_ = s.eng.SendConsoleCommand(ctx, srv, "say [ALERT] Server scheduled restart in 5 seconds!")
+					_ = s.eng.SendConsoleCommand(ctx, srv, `tellraw @a {"rawtext":[{"text":"§c[ALERT] Server scheduled restart in 5 seconds!"}]}`)
 				}
 				_ = sleepWithContext(ctx, delays[2])
 			}

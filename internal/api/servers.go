@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -351,7 +352,24 @@ func (h *ServerHandler) SendCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.engine.SendConsoleCommand(r.Context(), server, payload.Command); err != nil {
+	cleanCmd := strings.TrimSpace(payload.Command)
+	// Bedrock syntax quirk: BDS parser fails with `Syntax error: Unexpected "["` if `say` starts with `[`
+	cmdWithoutSlash := strings.TrimPrefix(cleanCmd, "/")
+	if strings.HasPrefix(cmdWithoutSlash, "say [") {
+		msg := strings.TrimSpace(strings.TrimPrefix(cmdWithoutSlash, "say"))
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(map[string]interface{}{
+			"rawtext": []map[string]string{
+				{"text": msg},
+			},
+		}); err == nil {
+			cleanCmd = fmt.Sprintf("tellraw @a %s", strings.TrimSpace(buf.String()))
+		}
+	}
+
+	if err := h.engine.SendConsoleCommand(r.Context(), server, cleanCmd); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Command execution failed: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
