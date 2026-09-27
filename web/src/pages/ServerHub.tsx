@@ -5,7 +5,7 @@ import {
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
-  ChevronDown, ChevronRight, Plus
+  ChevronDown, ChevronRight, Plus, Activity
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule } from '../types';
@@ -996,8 +996,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               : 'border-transparent text-slate-400 hover:text-slate-200'
           }`}
         >
-          <Terminal className="w-3.5 h-3.5" />
-          <span>Console & Overview</span>
+          <Activity className="w-3.5 h-3.5" />
+          <span>Instance Overview</span>
         </button>
 
         <button
@@ -1076,12 +1076,142 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       {/* OVERVIEW TAB */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
+          {/* Top: 3-column Instance Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl md:col-span-2 flex flex-col overflow-hidden">
-            {/* Collapsible Terminal Header */}
+            {/* World Information & Seed */}
+            <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
+                    <Compass className="w-4 h-4 text-emerald-400" />
+                    <span>World & Environment</span>
+                  </h3>
+                  {server.seed && (
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(server.seed || '');
+                        setCopiedSeed(true);
+                        setTimeout(() => setCopiedSeed(false), 2000);
+                      }}
+                      title="Copy world seed"
+                      className="px-2 py-0.5 rounded bg-obsidian-950 border border-obsidian-800 hover:border-emerald-500/40 text-slate-400 hover:text-emerald-400 text-[10px] font-mono flex items-center gap-1 transition-colors"
+                    >
+                      {copiedSeed ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                      <span>{copiedSeed ? 'Copied' : 'Copy'}</span>
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-3 font-mono text-xs">
+                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                    <span className="text-slate-400">World Seed</span>
+                    {server.seed ? (
+                      <span className="text-emerald-400 font-bold font-mono tracking-wide select-all">
+                        {server.seed}
+                      </span>
+                    ) : (
+                      <span className="text-slate-500 italic">Random / Default</span>
+                    )}
+                  </div>
+                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                    <span className="text-slate-400">Game Mode</span>
+                    <span className="text-slate-200 capitalize">{server.mode}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">Difficulty</span>
+                    <span className="text-slate-200 capitalize">{server.difficulty}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Hardware Limits */}
+            <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 flex flex-col justify-between">
+              <div>
+                <h3 className="font-mono text-sm font-bold text-slate-200 mb-3 flex items-center gap-2">
+                  <HardDrive className="w-4 h-4 text-emerald-400" />
+                  <span>Hardware Caps</span>
+                </h3>
+                <div className="space-y-3 font-mono text-xs">
+                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                    <span className="text-slate-400">Memory Cap</span>
+                    <span className="text-slate-200 font-semibold">{server.memory_limit}</span>
+                  </div>
+                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                    <span className="text-slate-400">CPU Allocation</span>
+                    <span className="text-slate-200 font-semibold">{server.cpu_limit} Cores</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">Autostart on Boot</span>
+                    <span className={server.autostart_on_boot ? "text-emerald-400 font-semibold" : "text-slate-500"}>
+                      {server.autostart_on_boot ? "Enabled" : "Disabled"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Live Telemetry & Status */}
+            <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
+                    <Cpu className="w-4 h-4 text-cyber-cyan" />
+                    <span>Live Telemetry</span>
+                  </h3>
+                  <span
+                    className={`text-[10px] font-mono px-2 py-0.5 rounded-full border uppercase ${
+                      server.status === 'running'
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : server.status === 'crashed'
+                        ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
+                        : 'bg-slate-800 text-slate-400 border-slate-700'
+                    }`}
+                  >
+                    {server.status}
+                  </span>
+                </div>
+                <div className="space-y-3 font-mono text-xs">
+                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                    <span className="text-slate-400">Current CPU</span>
+                    <span className={stats ? "text-emerald-400 font-bold" : "text-slate-500"}>
+                      {stats ? `${stats.cpu_percent.toFixed(1)}%` : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
+                    <span className="text-slate-400">Current RAM</span>
+                    <span className={stats ? "text-slate-200 font-semibold" : "text-slate-500"}>
+                      {stats ? `${(stats.ram_bytes / (1024 * 1024)).toFixed(0)} MB` : '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-400">Online Players</span>
+                    <span className={stats ? "text-cyber-cyan font-bold" : "text-slate-500"}>
+                      {stats ? stats.player_count : '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Middle: Telemetry Resource & Player Charts */}
+          <TelemetryCharts
+            metrics={metrics}
+            loading={metricsLoading}
+            timeRange={metricsRange}
+            onTimeRangeChange={(r) => {
+              setMetricsRange(r);
+              fetchMetrics(r);
+            }}
+            serverStatus={server.status}
+          />
+
+          {/* Bottom: Collapsible Interactive BDS Terminal */}
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl flex flex-col overflow-hidden transition-all duration-200">
+            {/* Collapsible Terminal Header Bar */}
             <button
               onClick={() => setTerminalOpen((prev) => !prev)}
-              className="w-full flex items-center justify-between p-5 hover:bg-obsidian-850/50 transition-colors cursor-pointer select-none"
+              className="w-full flex items-center justify-between p-4 sm:p-5 hover:bg-obsidian-850/50 transition-colors cursor-pointer select-none text-left"
             >
               <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
                 {terminalOpen ? (
@@ -1100,16 +1230,19 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     : wsConnected ? 'Connected' : 'Offline'}
                 </span>
                 {!terminalOpen && logs.length > 0 && (
-                  <span className="ml-2 px-1.5 py-0.5 rounded bg-obsidian-800 border border-obsidian-700 text-slate-500 text-[10px]">
+                  <span className="ml-2 px-1.5 py-0.5 rounded bg-obsidian-800 border border-obsidian-700 text-slate-400 text-[10px]">
                     {logs.length} lines
                   </span>
                 )}
+                <span className="hidden sm:inline text-slate-500 text-[10px] ml-2">
+                  {terminalOpen ? '(Click to collapse)' : '(Click to expand)'}
+                </span>
               </div>
             </button>
 
             {/* Expanded Terminal Content */}
             {terminalOpen && (
-              <div className="flex flex-col px-5 pb-5 h-[470px]">
+              <div className="flex flex-col px-5 pb-5 h-[480px]">
                 <div className="flex-1 bg-obsidian-950 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto border border-obsidian-800 space-y-1">
                   {(logs || []).length === 0 ? (
                     <p className="text-slate-600 italic">No console logs received yet...</p>
@@ -1142,107 +1275,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               </div>
             )}
           </div>
-
-          <div className="space-y-6">
-            {/* World Information & Seed */}
-            <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
-                  <Compass className="w-4 h-4 text-emerald-400" />
-                  <span>World & Environment</span>
-                </h3>
-                {server.seed && (
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(server.seed || '');
-                      setCopiedSeed(true);
-                      setTimeout(() => setCopiedSeed(false), 2000);
-                    }}
-                    title="Copy world seed"
-                    className="px-2 py-0.5 rounded bg-obsidian-950 border border-obsidian-800 hover:border-emerald-500/40 text-slate-400 hover:text-emerald-400 text-[10px] font-mono flex items-center gap-1 transition-colors"
-                  >
-                    {copiedSeed ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedSeed ? 'Copied' : 'Copy'}</span>
-                  </button>
-                )}
-              </div>
-              <div className="space-y-3 font-mono text-xs">
-                <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
-                  <span className="text-slate-400">World Seed</span>
-                  {server.seed ? (
-                    <span className="text-emerald-400 font-bold font-mono tracking-wide select-all">
-                      {server.seed}
-                    </span>
-                  ) : (
-                    <span className="text-slate-500 italic">Random / Default</span>
-                  )}
-                </div>
-                <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
-                  <span className="text-slate-400">Game Mode</span>
-                  <span className="text-slate-200 capitalize">{server.mode}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400">Difficulty</span>
-                  <span className="text-slate-200 capitalize">{server.difficulty}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
-              <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Hardware Limits</h3>
-              <div className="space-y-3 font-mono text-xs">
-                <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Memory Cap</span>
-                  </span>
-                  <span className="text-slate-200">{server.memory_limit}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 flex items-center gap-1.5">
-                    <Cpu className="w-3.5 h-3.5 text-cyber-cyan" />
-                    <span>CPU Limit</span>
-                  </span>
-                  <span className="text-slate-200">{server.cpu_limit} Cores</span>
-                </div>
-              </div>
-            </div>
-
-            {stats && (
-              <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
-                <h3 className="font-mono text-sm font-bold text-slate-200 mb-3">Live Telemetry</h3>
-                <div className="space-y-3 font-mono text-xs">
-                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
-                    <span className="text-slate-400">Current CPU</span>
-                    <span className="text-emerald-400 font-bold">{stats.cpu_percent.toFixed(1)}%</span>
-                  </div>
-                  <div className="flex justify-between items-center pb-2 border-b border-obsidian-800">
-                    <span className="text-slate-400">Current RAM</span>
-                    <span className="text-slate-200">{(stats.ram_bytes / (1024 * 1024)).toFixed(0)} MB</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-slate-400">Online Players</span>
-                    <span className="text-cyber-cyan font-bold">{stats.player_count}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
         </div>
-
-        {/* Telemetry Resource & Player Charts */}
-        <TelemetryCharts
-          metrics={metrics}
-          loading={metricsLoading}
-          timeRange={metricsRange}
-          onTimeRangeChange={(r) => {
-            setMetricsRange(r);
-            fetchMetrics(r);
-          }}
-          serverStatus={server.status}
-        />
-      </div>
-    )}
+      )}
 
       {/* PLAYERS & CHAT TAB */}
       {activeTab === 'players' && (
