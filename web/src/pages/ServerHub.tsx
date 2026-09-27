@@ -5,7 +5,7 @@ import {
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
-  ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X
+  ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer } from '../types';
@@ -112,6 +112,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   // Configuration state
   const [properties, setProperties] = useState<Record<string, string>>({});
   const [propKeys, setPropKeys] = useState<string[]>([]);
+  const [propUninitialized, setPropUninitialized] = useState(false);
+  const [propPending, setPropPending] = useState(false);
   const [allowlist, setAllowlist] = useState<Array<{ name: string; xuid?: string; ignoresPlayerLimit: boolean }>>([]);
   const [newAllowlistPlayer, setNewAllowlistPlayer] = useState('');
   const [permissions, setPermissions] = useState<Array<{ permission: string; xuid: string }>>([]);
@@ -356,6 +358,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       api.getProperties(id).then((res) => {
         setProperties(res?.properties || {});
         setPropKeys(Array.isArray(res?.keys) ? res.keys : Object.keys(res?.properties || {}));
+        setPropUninitialized(!!res?.uninitialized);
+        setPropPending(!!res?.pending);
       }).catch(() => {});
       api.getAllowlist(id).then((res) => setAllowlist(Array.isArray(res) ? res : [])).catch(() => {});
       api.getPermissions(id).then((res) => setPermissions(Array.isArray(res) ? res : [])).catch(() => {});
@@ -740,7 +744,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     if (!id) return;
     setConfigSaving(true);
     try {
-      await api.updateProperties(id, properties, propKeys);
+      const res: any = await api.updateProperties(id, properties, propKeys);
+      if (res?.pending) {
+        setPropPending(true);
+      }
       if (properties && properties['level-seed'] !== undefined) {
         setServer((prev) => (prev ? { ...prev, seed: properties['level-seed'] } : null));
         setEditServerSeed(properties['level-seed']);
@@ -2724,6 +2731,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-normal">
                     {propKeys.length} properties
                   </span>
+                  {propUninitialized && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-bold">
+                      {propPending ? 'Pending Pre-Boot Changes' : 'Pre-Boot Mode'}
+                    </span>
+                  )}
                 </h3>
                 <p className="text-xs text-slate-400 font-mono mt-0.5">
                   Configure world seeds, view distance, tick distance, and dedicated server flags.
@@ -2732,39 +2744,67 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
               <button
                 onClick={handleSaveProperties}
-                disabled={configSaving}
-                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5 shrink-0"
+                disabled={configSaving || propKeys.length === 0}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:hover:bg-emerald-600 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5 shrink-0"
               >
                 {configSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : configSaved ? <Check className="w-3.5 h-3.5" /> : null}
-                <span>{configSaved ? 'Saved!' : 'Save Properties'}</span>
+                <span>{configSaved ? (propPending ? 'Saved (Pending Boot)!' : 'Saved!') : propUninitialized ? 'Save Pre-Boot Config' : 'Save Properties'}</span>
               </button>
             </div>
 
-            <div className="mb-3">
-              <input
-                type="text"
-                value={propertyFilter}
-                onChange={(e) => setPropertyFilter(e.target.value)}
-                placeholder="Filter properties (e.g. seed, cheats, view-distance, max-players)..."
-                className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-800 text-slate-200 text-xs font-mono placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none"
-              />
-            </div>
+            {propUninitialized && (
+              <div className="mb-4 p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-300 font-mono text-xs flex items-start space-x-2.5">
+                <Sparkles className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                <div className="space-y-1">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <span>{propPending ? 'Pre-Boot Configuration Saved' : 'Pre-Boot Configuration Mode'}</span>
+                  </span>
+                  <p className="text-[11px] text-amber-400/90 leading-relaxed">
+                    {propPending
+                      ? 'Your custom properties are queued. When you launch this instance, the official Minecraft BDS template will unpack, your customized properties will be merged, and the container will restart automatically if changes were made.'
+                      : 'You can configure any property before launching. On first start, the server engine will unpack the official template and automatically merge your settings.'}
+                  </p>
+                </div>
+              </div>
+            )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 max-h-[520px] overflow-y-auto">
-              {(propKeys || [])
-                .filter((key) => key && key.toLowerCase().includes(propertyFilter.toLowerCase()))
-                .map((key) => (
-                  <div key={key}>
-                    <label className="block text-slate-400 mb-1 text-[11px] font-bold">{key}</label>
-                    <input
-                      type="text"
-                      value={(properties && properties[key]) || ''}
-                      onChange={(e) => setProperties({ ...(properties || {}), [key]: e.target.value })}
-                      className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
-                    />
-                  </div>
-                ))}
-            </div>
+            {propKeys.length === 0 ? (
+              <div className="p-8 text-center bg-obsidian-950 rounded-xl border border-obsidian-800 font-mono space-y-2">
+                <Settings className="w-8 h-8 text-slate-600 mx-auto" />
+                <h4 className="text-sm font-bold text-slate-300">Properties Not Available</h4>
+                <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                  Start this server instance once to allow the Minecraft Bedrock engine to automatically download and unpack the official version-specific <code className="text-emerald-400 font-bold">server.properties</code> template.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="mb-3">
+                  <input
+                    type="text"
+                    value={propertyFilter}
+                    onChange={(e) => setPropertyFilter(e.target.value)}
+                    placeholder="Filter properties (e.g. seed, cheats, view-distance, max-players)..."
+                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-800 text-slate-200 text-xs font-mono placeholder:text-slate-500 focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 max-h-[520px] overflow-y-auto">
+                  {(propKeys || [])
+                    .filter((key) => key && key.toLowerCase().includes(propertyFilter.toLowerCase()))
+                    .map((key) => (
+                      <div key={key}>
+                        <label className="block text-slate-400 mb-1 text-[11px] font-bold">{key}</label>
+                        <input
+                          type="text"
+                          value={(properties && properties[key]) || ''}
+                          onChange={(e) => setProperties({ ...(properties || {}), [key]: e.target.value })}
+                          className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                        />
+                      </div>
+                    ))}
+                </div>
+              </>
+            )}
           </div>
 
           {/* Multi-level Global Sync Notification */}

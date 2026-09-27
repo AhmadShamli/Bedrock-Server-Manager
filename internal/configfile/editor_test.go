@@ -110,3 +110,79 @@ func TestPermissionsReaderWriter(t *testing.T) {
 		t.Errorf("unexpected loaded permissions: %+v", loaded)
 	}
 }
+
+func TestMergeProperties(t *testing.T) {
+	initialProps := map[string]string{
+		"server-name": "Mojang Server",
+		"gamemode":    "survival",
+		"difficulty":  "easy",
+	}
+	initialKeys := []string{"server-name", "gamemode", "difficulty"}
+
+	updates := map[string]string{
+		"gamemode":   "creative",
+		"level-seed": "12345",
+	}
+
+	mergedProps, mergedKeys := MergeProperties(initialProps, initialKeys, updates)
+
+	if mergedProps["server-name"] != "Mojang Server" {
+		t.Errorf("expected server-name preserved, got %s", mergedProps["server-name"])
+	}
+	if mergedProps["gamemode"] != "creative" {
+		t.Errorf("expected gamemode updated to creative, got %s", mergedProps["gamemode"])
+	}
+	if mergedProps["level-seed"] != "12345" {
+		t.Errorf("expected level-seed added, got %s", mergedProps["level-seed"])
+	}
+	if len(mergedKeys) != 4 {
+		t.Errorf("expected 4 keys, got %d", len(mergedKeys))
+	}
+}
+
+func TestUpdateExistingPropertyFile(t *testing.T) {
+	tempDir := t.TempDir()
+	nonExistent := filepath.Join(tempDir, "server.properties")
+
+	// 1. Should not create file if it does not exist
+	updated, err := UpdateExistingPropertyFile(nonExistent, map[string]string{"level-seed": "999"})
+	if err != nil {
+		t.Fatalf("unexpected error on non-existent file: %v", err)
+	}
+	if updated {
+		t.Errorf("expected updated=false for non-existent file")
+	}
+
+	// 2. Should update file if it exists
+	initialProps := map[string]string{
+		"server-name": "Existing Server",
+		"difficulty":  "normal",
+	}
+	_ = WriteProperties(nonExistent, initialProps, []string{"server-name", "difficulty"})
+
+	updated, err = UpdateExistingPropertyFile(nonExistent, map[string]string{
+		"difficulty": "hard",
+		"level-seed": "888",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error on existing file: %v", err)
+	}
+	if !updated {
+		t.Errorf("expected updated=true for existing file")
+	}
+
+	readProps, readKeys, _ := ReadProperties(nonExistent)
+	if readProps["difficulty"] != "hard" {
+		t.Errorf("expected difficulty 'hard', got %s", readProps["difficulty"])
+	}
+	if readProps["level-seed"] != "888" {
+		t.Errorf("expected level-seed '888', got %s", readProps["level-seed"])
+	}
+	if readProps["server-name"] != "Existing Server" {
+		t.Errorf("expected server-name 'Existing Server', got %s", readProps["server-name"])
+	}
+	if len(readKeys) != 3 {
+		t.Errorf("expected 3 keys, got %d", len(readKeys))
+	}
+}
+

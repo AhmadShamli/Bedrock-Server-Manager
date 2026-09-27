@@ -1,582 +1,682 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Plus,
   Server as ServerIcon,
+  Users,
   Shield,
-  ExternalLink,
   HardDrive,
-  AlertTriangle,
-  Loader2,
-  Play,
-  Square,
-  LayoutGrid,
-  List,
-  Search,
   Cpu,
+  Activity,
   RefreshCw,
+  Clock,
+  Layers,
+  ArrowRight,
+  ExternalLink,
+  AlertCircle,
+  Lock,
+  Terminal,
+  ChevronRight,
+  UserCheck,
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User } from '../types';
-import { usePagination } from '../hooks/usePagination';
-import { Pagination } from '../components/Pagination';
-import { DeployModal } from '../components/DeployModal';
+import { DashboardSummary, User } from '../types';
 
 interface DashboardProps {
   user: User;
 }
 
+function formatBytes(bytes: number, decimals = 1): string {
+  if (!bytes || bytes <= 0) return '0 B';
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const index = Math.min(i, sizes.length - 1);
+  return `${parseFloat((bytes / Math.pow(k, index)).toFixed(dm))} ${sizes[index]}`;
+}
+
+function formatUptime(seconds: number): string {
+  if (!seconds || seconds <= 0) return '0s';
+  const d = Math.floor(seconds / (3600 * 24));
+  const h = Math.floor((seconds % (3600 * 24)) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
-  const [servers, setServers] = useState<Server[]>([]);
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [showModal, setShowModal] = useState(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
 
-  // Search, filter, and view mode state
-  const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'stopped'>('all');
-  const [viewMode, setViewMode] = useState<'grid' | 'table'>(() => {
-    return (localStorage.getItem('bsm_server_view_mode') as 'grid' | 'table') || 'grid';
-  });
-
-  const handleViewModeChange = (mode: 'grid' | 'table') => {
-    setViewMode(mode);
-    localStorage.setItem('bsm_server_view_mode', mode);
-  };
-
-  const fetchServers = async (isManualRefresh = false) => {
-    if (isManualRefresh) setRefreshing(true);
+  const fetchSummary = useCallback(async (isManual = false) => {
+    if (isManual) setRefreshing(true);
     try {
-      const data = await api.listServers();
-      setServers(data);
+      const data = await api.getDashboardSummary();
+      setSummary(data);
+      setLastUpdated(new Date());
       setError(null);
     } catch (err: any) {
-      setError(err.message || 'Failed to load servers');
+      setError(err.message || 'Failed to fetch dashboard summary');
     } finally {
       setLoading(false);
-      if (isManualRefresh) setRefreshing(false);
+      if (isManual) setRefreshing(false);
     }
-  };
-
-  useEffect(() => {
-    fetchServers();
   }, []);
 
-  // Filtered servers based on search and status
-  const filteredServers = useMemo(() => {
-    return (servers || []).filter((s) => {
-      if (!s) return false;
-      const q = searchQuery.toLowerCase().trim();
-      const matchesSearch =
-        !q ||
-        s.name.toLowerCase().includes(q) ||
-        s.id.toLowerCase().includes(q) ||
-        String(s.port).includes(q) ||
-        (s.version && s.version.toLowerCase().includes(q));
+  useEffect(() => {
+    fetchSummary();
+  }, [fetchSummary]);
 
-      const matchesStatus =
-        statusFilter === 'all' ||
-        (statusFilter === 'running' && s.status === 'running') ||
-        (statusFilter === 'stopped' && s.status !== 'running');
+  // Polling interval for live metrics
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const interval = setInterval(() => {
+      fetchSummary(false);
+    }, 6000);
+    return () => clearInterval(interval);
+  }, [autoRefresh, fetchSummary]);
 
-      return matchesSearch && matchesStatus;
-    });
-  }, [servers, searchQuery, statusFilter]);
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 flex flex-col items-center justify-center min-h-[60vh]">
+        <div className="w-12 h-12 rounded-xl bg-obsidian-850 border border-obsidian-700 flex items-center justify-center text-emerald-400 mb-4 animate-pulse">
+          <Activity className="w-6 h-6 animate-spin" />
+        </div>
+        <div className="text-slate-300 font-mono font-medium text-base">Loading telemetry and system metrics...</div>
+        <div className="text-slate-500 text-xs mt-1">Aggregating live instance statuses, host resources, and player records</div>
+      </div>
+    );
+  }
 
-  // Pagination hook
-  const {
-    currentPage,
-    pageSize,
-    totalItems,
-    paginatedItems: paginatedServers,
-    setCurrentPage,
-    setPageSize,
-  } = usePagination(filteredServers, viewMode === 'grid' ? 12 : 10);
-
-  const openDeployModal = () => {
-    setShowModal(true);
-  };
-
-  const handleStart = async (id: string) => {
-    setActionLoading(id);
-    try {
-      await api.startServer(id);
-      await fetchServers();
-    } catch (err: any) {
-      alert(err.message || 'Failed to start server');
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleStop = async (id: string) => {
-    setActionLoading(id);
-    try {
-      await api.stopServer(id);
-      await fetchServers();
-    } catch (err: any) {
-      alert(err.message || 'Failed to stop server');
-    } finally {
-      setActionLoading(null);
-    }
-  };
+  const runningPercent = summary && summary.total_servers > 0 
+    ? Math.round((summary.running_servers / summary.total_servers) * 100) 
+    : 0;
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Top Banner */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-obsidian-800 pb-6">
         <div>
-          <h1 className="text-2xl font-bold font-mono text-slate-100 tracking-wide flex items-center gap-2.5">
-            <ServerIcon className="w-6 h-6 text-emerald-400" />
-            <span>SERVER INSTANCES</span>
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Manage your containerized Bedrock Dedicated Server instances with isolated resources.
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-100 flex items-center gap-2">
+              <span>Overview Dashboard</span>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-normal">
+                v{summary?.host_system?.version || '1.5.8'}
+              </span>
+            </h1>
+          </div>
+          <p className="text-slate-400 text-sm mt-1">
+            Aggregate fleet metrics, real-time resource allocations, and online player monitoring.
           </p>
         </div>
 
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 bg-obsidian-900 border border-obsidian-750 px-3 py-1.5 rounded-lg text-xs text-slate-400">
+            <span className="relative flex h-2 w-2">
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${autoRefresh ? 'bg-emerald-400 opacity-75' : 'bg-slate-600 opacity-20'}`}></span>
+              <span className={`relative inline-flex rounded-full h-2 w-2 ${autoRefresh ? 'bg-emerald-500' : 'bg-slate-500'}`}></span>
+            </span>
+            <button
+              onClick={() => setAutoRefresh(!autoRefresh)}
+              className="hover:text-slate-200 transition-colors cursor-pointer"
+              title={autoRefresh ? 'Click to pause auto-refresh' : 'Click to enable auto-refresh (6s)'}
+            >
+              {autoRefresh ? 'Live Sync' : 'Sync Paused'}
+            </button>
+            <span className="text-slate-600">|</span>
+            <span className="font-mono text-[11px] text-slate-400">
+              {lastUpdated.toLocaleTimeString()}
+            </span>
+          </div>
+
           <button
-            onClick={() => fetchServers(true)}
-            disabled={refreshing || loading}
-            title="Refresh instances"
-            className="p-2.5 rounded-lg bg-obsidian-900 border border-obsidian-700/80 hover:border-emerald-500/50 text-slate-300 hover:text-emerald-400 transition-all shadow-sm disabled:opacity-50"
+            onClick={() => fetchSummary(true)}
+            disabled={refreshing}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-obsidian-850 hover:bg-obsidian-800 border border-obsidian-700/80 rounded-lg text-slate-200 text-xs font-medium transition-all shadow-sm disabled:opacity-50"
+            title="Refresh statistics now"
           >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
+            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-emerald-400' : 'text-slate-400'}`} />
+            <span className="hidden sm:inline">Refresh</span>
           </button>
 
-          {user.role === 'admin' && (
-            <button
-              onClick={openDeployModal}
-              className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center space-x-2 transition-all shadow-[0_0_15px_rgba(16,185,129,0.25)] hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Deploy Instance</span>
-            </button>
-          )}
+          <Link
+            to="/servers"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition-all shadow-[0_0_12px_rgba(16,185,129,0.25)]"
+          >
+            <ServerIcon className="w-3.5 h-3.5" />
+            <span>Manage Instances</span>
+          </Link>
         </div>
       </div>
 
-      {loading ? (
-        <div className="flex flex-col items-center justify-center py-24 text-slate-400">
-          <Loader2 className="w-8 h-8 animate-spin text-emerald-400 mb-3" />
-          <span className="font-mono text-sm">Querying active instances...</span>
-        </div>
-      ) : error ? (
-        <div className="p-4 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 flex items-center space-x-3">
-          <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
+      {error && (
+        <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-4 flex items-center gap-3 text-rose-300 text-sm">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 text-rose-400" />
           <span>{error}</span>
         </div>
-      ) : (servers || []).length === 0 ? (
-        <div className="text-center py-20 bg-obsidian-900/50 border border-obsidian-800 rounded-2xl p-8">
-          <ServerIcon className="w-12 h-12 text-slate-600 mx-auto mb-3" />
-          <h3 className="text-lg font-mono font-medium text-slate-200">No Bedrock instances running</h3>
-          <p className="text-sm text-slate-400 max-w-sm mx-auto mt-1 mb-6">
-            Create your first Minecraft Bedrock server instance with custom port and resource limits.
-          </p>
-          {user.role === 'admin' && (
-            <button
-              onClick={openDeployModal}
-              className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono font-bold text-sm"
-            >
-              + Create Server
-            </button>
+      )}
+
+      {/* Primary KPI Metrics Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Card 1: Server Fleet */}
+        <div className="bg-obsidian-900 border border-obsidian-750/80 hover:border-obsidian-600/80 rounded-xl p-5 shadow-sm transition-all relative overflow-hidden group">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Fleet Status</span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <ServerIcon className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3 flex items-baseline gap-2">
+            <span className="text-3xl font-mono font-bold text-slate-100">
+              {summary?.running_servers ?? 0}
+            </span>
+            <span className="text-sm font-mono text-slate-400">
+              / {summary?.total_servers ?? 0} Running
+            </span>
+          </div>
+          {/* Progress bar */}
+          <div className="mt-3 w-full bg-obsidian-800 rounded-full h-1.5 overflow-hidden">
+            <div
+              className="bg-emerald-500 h-1.5 rounded-full transition-all duration-500"
+              style={{ width: `${runningPercent}%` }}
+            ></div>
+          </div>
+          <div className="mt-2.5 flex items-center justify-between text-xs text-slate-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+              {summary?.running_servers ?? 0} active
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-slate-500"></span>
+              {summary?.stopped_servers ?? 0} stopped
+            </span>
+          </div>
+        </div>
+
+        {/* Card 2: Live Players */}
+        <div className="bg-obsidian-900 border border-obsidian-750/80 hover:border-obsidian-600/80 rounded-xl p-5 shadow-sm transition-all relative overflow-hidden group">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Online Players</span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <Users className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3 flex items-baseline gap-2">
+            <span className="text-3xl font-mono font-bold text-slate-100">
+              {summary?.total_online_players ?? 0}
+            </span>
+            <span className="text-xs text-emerald-400 font-medium flex items-center gap-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              Live Now
+            </span>
+          </div>
+          <div className="mt-4 flex items-center justify-between text-xs text-slate-400 border-t border-obsidian-800/80 pt-2.5">
+            <span>Global Registry:</span>
+            <span className="font-mono text-slate-300 font-medium">
+              {summary?.total_global_players ?? 0} registered
+            </span>
+          </div>
+        </div>
+
+        {/* Card 3: Memory Allocation & Usage */}
+        <div className="bg-obsidian-900 border border-obsidian-750/80 hover:border-obsidian-600/80 rounded-xl p-5 shadow-sm transition-all relative overflow-hidden group">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">RAM Allocation</span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <Cpu className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3 flex items-baseline gap-2">
+            <span className="text-2xl font-mono font-bold text-slate-100">
+              {formatBytes(summary?.total_used_ram ?? 0)}
+            </span>
+            <span className="text-xs font-mono text-slate-400">
+              / {formatBytes(summary?.total_allocated_ram ?? 0)} cap
+            </span>
+          </div>
+          <div className="mt-4 flex items-center justify-between text-xs text-slate-400 border-t border-obsidian-800/80 pt-2.5">
+            <span>Allocated Cores:</span>
+            <span className="font-mono text-slate-300 font-medium">
+              {(summary?.total_allocated_cores ?? 0).toFixed(1)} vCPU
+            </span>
+          </div>
+        </div>
+
+        {/* Card 4: Backups & Storage */}
+        <div className="bg-obsidian-900 border border-obsidian-750/80 hover:border-obsidian-600/80 rounded-xl p-5 shadow-sm transition-all relative overflow-hidden group">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">Backups Archive</span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <HardDrive className="w-4 h-4" />
+            </div>
+          </div>
+          <div className="mt-3 flex items-baseline gap-2">
+            <span className="text-3xl font-mono font-bold text-slate-100">
+              {summary?.total_backups_count ?? 0}
+            </span>
+            <span className="text-xs text-slate-400 font-mono">
+              snapshots
+            </span>
+          </div>
+          <div className="mt-4 flex items-center justify-between text-xs text-slate-400 border-t border-obsidian-800/80 pt-2.5">
+            <span>Total Storage:</span>
+            <span className="font-mono text-slate-300 font-medium">
+              {formatBytes(summary?.total_backups_bytes ?? 0)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Middle Row: Live Active Players & Security / Port Gate Stats */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Live Players Table (2 cols wide) */}
+        <div className="lg:col-span-2 bg-obsidian-900 border border-obsidian-750/80 rounded-xl p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></div>
+              <h2 className="text-base font-semibold text-slate-100">Live Active Players</h2>
+              <span className="text-xs font-mono px-2 py-0.5 rounded-full bg-obsidian-800 border border-obsidian-700 text-slate-300">
+                {summary?.active_players.length ?? 0}
+              </span>
+            </div>
+            {user.role === 'admin' && (
+              <Link
+                to="/global-players"
+                className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-medium transition-colors"
+              >
+                <span>Global Registry</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </Link>
+            )}
+          </div>
+
+          {summary && summary.active_players.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-obsidian-800 text-slate-400 font-mono uppercase tracking-wider">
+                    <th className="pb-2.5 font-medium">Gamertag</th>
+                    <th className="pb-2.5 font-medium">Server Instance</th>
+                    <th className="pb-2.5 font-medium">Role / Status</th>
+                    <th className="pb-2.5 font-medium">Connected Since</th>
+                    <th className="pb-2.5 text-right font-medium">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-obsidian-800/60">
+                  {summary.active_players.map((p) => (
+                    <tr key={`${p.server_id}-${p.gamertag}`} className="hover:bg-obsidian-850/50 transition-colors">
+                      <td className="py-3 font-mono font-medium text-slate-100 flex items-center gap-2">
+                        <div className="w-7 h-7 rounded bg-obsidian-800 border border-obsidian-700 flex items-center justify-center text-slate-300 font-bold">
+                          {p.gamertag.charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <div>{p.gamertag}</div>
+                          {p.xuid && <div className="text-[10px] text-slate-500 font-mono">XUID: {p.xuid}</div>}
+                        </div>
+                      </td>
+                      <td className="py-3 text-slate-300 font-medium">
+                        <Link
+                          to={`/servers/${p.server_id}`}
+                          className="hover:text-emerald-400 transition-colors inline-flex items-center gap-1"
+                        >
+                          <span>{p.server_name}</span>
+                          <ExternalLink className="w-3 h-3 text-slate-500" />
+                        </Link>
+                      </td>
+                      <td className="py-3">
+                        {p.is_op ? (
+                          <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-mono font-semibold uppercase">
+                            Operator
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded bg-obsidian-800 text-slate-400 border border-obsidian-700 text-[10px] font-mono">
+                            {p.permission || 'Member'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 text-slate-400 font-mono text-[11px]">
+                        {p.joined_at ? new Date(p.joined_at).toLocaleTimeString() : 'Active'}
+                      </td>
+                      <td className="py-3 text-right">
+                        <Link
+                          to={`/servers/${p.server_id}`}
+                          className="px-2 py-1 bg-obsidian-800 hover:bg-obsidian-750 text-slate-200 rounded border border-obsidian-700 text-[11px] transition-colors inline-block"
+                        >
+                          View Instance
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="py-8 text-center border border-dashed border-obsidian-800 rounded-xl bg-obsidian-950/40">
+              <Users className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+              <div className="text-slate-300 text-sm font-medium">No players currently connected</div>
+              <p className="text-slate-500 text-xs mt-1">
+                When players join any running Bedrock server instance, they will appear here in real time.
+              </p>
+            </div>
           )}
         </div>
-      ) : (
-        <div>
-          {/* Controls Bar: Search, Status Filter, View Toggle */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-6 bg-obsidian-900/70 border border-obsidian-800/80 p-3 rounded-xl">
-            {/* Search Input */}
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-              <input
-                type="text"
-                placeholder="Search instances by name, ID, port..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="w-full pl-9 pr-3 py-1.5 bg-obsidian-950 border border-obsidian-800 rounded-lg text-xs font-mono text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/60"
-              />
+
+        {/* Security & Host Environment Specs (1 col) */}
+        <div className="space-y-6">
+          {/* Host Telemetry Box */}
+          <div className="bg-obsidian-900 border border-obsidian-750/80 rounded-xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold text-slate-100 flex items-center gap-2">
+                <Terminal className="w-4 h-4 text-emerald-400" />
+                <span>Host Environment</span>
+              </h2>
+              <span className="text-[10px] font-mono uppercase bg-obsidian-800 px-2 py-0.5 rounded border border-obsidian-700 text-slate-400">
+                {summary?.host_system.os} / {summary?.host_system.arch}
+              </span>
             </div>
 
-            {/* Filter & View Mode */}
-            <div className="flex items-center gap-3">
-              <div className="flex items-center space-x-1.5 text-xs font-mono">
-                <span className="text-slate-500">Status:</span>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setStatusFilter(e.target.value as any);
-                    setCurrentPage(1);
-                  }}
-                  className="bg-obsidian-950 border border-obsidian-800 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-500/60"
-                >
-                  <option value="all">All ({(servers || []).length})</option>
-                  <option value="running">Running ({(servers || []).filter((s) => s.status === 'running').length})</option>
-                  <option value="stopped">Stopped ({(servers || []).filter((s) => s.status !== 'running').length})</option>
-                </select>
+            <div className="space-y-3 text-xs">
+              <div className="flex items-center justify-between py-1.5 border-b border-obsidian-800/80">
+                <span className="text-slate-400">Uptime</span>
+                <span className="font-mono text-slate-200 font-medium">
+                  {formatUptime(summary?.host_system.uptime_sec ?? 0)}
+                </span>
               </div>
-
-              {/* View Mode Toggle: Grid vs Table */}
-              <div className="flex items-center bg-obsidian-950 border border-obsidian-800 rounded-lg p-0.5">
-                <button
-                  onClick={() => handleViewModeChange('grid')}
-                  title="Card Grid View"
-                  className={`px-2.5 py-1.5 rounded flex items-center gap-1.5 text-xs font-mono transition-colors ${
-                    viewMode === 'grid'
-                      ? 'bg-obsidian-800 text-emerald-400 font-bold shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Grid</span>
-                </button>
-                <button
-                  onClick={() => handleViewModeChange('table')}
-                  title="Table / List View"
-                  className={`px-2.5 py-1.5 rounded flex items-center gap-1.5 text-xs font-mono transition-colors ${
-                    viewMode === 'table'
-                      ? 'bg-obsidian-800 text-emerald-400 font-bold shadow-sm'
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  <List className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Table</span>
-                </button>
+              <div className="flex items-center justify-between py-1.5 border-b border-obsidian-800/80">
+                <span className="text-slate-400">Go Runtime</span>
+                <span className="font-mono text-slate-200">
+                  {summary?.host_system.go_version}
+                </span>
+              </div>
+              <div className="flex items-center justify-between py-1.5 border-b border-obsidian-800/80">
+                <span className="text-slate-400">Active Goroutines</span>
+                <span className="font-mono text-slate-200">
+                  {summary?.host_system.goroutines ?? 0}
+                </span>
+              </div>
+              <div className="flex items-center justify-between py-1.5 border-b border-obsidian-800/80">
+                <span className="text-slate-400">Go Heap Alloc / Sys</span>
+                <span className="font-mono text-slate-200">
+                  {(summary?.host_system.alloc_mb ?? 0).toFixed(1)} MB / {(summary?.host_system.sys_mb ?? 0).toFixed(1)} MB
+                </span>
+              </div>
+              <div className="flex items-center justify-between py-1.5">
+                <span className="text-slate-400">Manager Core</span>
+                <span className="font-mono text-emerald-400 font-medium">
+                  {summary?.host_system.app_name}
+                </span>
               </div>
             </div>
           </div>
 
-          {/* Filter Empty State */}
-          {filteredServers.length === 0 ? (
-            <div className="text-center py-16 bg-obsidian-900/50 border border-obsidian-800 rounded-xl p-8">
-              <ServerIcon className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-              <h3 className="text-base font-mono font-medium text-slate-200">No instances match your filter</h3>
-              <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1 mb-4 font-mono">
-                Try adjusting your search query or status filter.
-              </p>
-              <button
-                onClick={() => {
-                  setSearchQuery('');
-                  setStatusFilter('all');
-                }}
-                className="px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 font-mono text-xs transition-colors"
-              >
-                Reset Filters
-              </button>
+          {/* Port Gate & Access Control Box */}
+          <div className="bg-obsidian-900 border border-obsidian-750/80 rounded-xl p-5 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-base font-semibold text-slate-100 flex items-center gap-2">
+                <Shield className="w-4 h-4 text-emerald-400" />
+                <span>Port Gate & Security</span>
+              </h2>
+              {user.role === 'admin' && (
+                <Link
+                  to="/portgate"
+                  className="text-xs text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1 transition-colors"
+                >
+                  <span>Rules</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </Link>
+              )}
             </div>
-          ) : viewMode === 'table' ? (
-            /* Table / List View */
-            <div className="bg-obsidian-900 border border-obsidian-800 rounded-xl overflow-hidden shadow-xl">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-obsidian-800 bg-obsidian-950/70 text-[11px] font-mono text-slate-400 uppercase tracking-wider">
-                      <th className="py-3 px-4">Status</th>
-                      <th className="py-3 px-4">Server</th>
-                      <th className="py-3 px-4">Port (UDP)</th>
-                      <th className="py-3 px-4">Version</th>
-                      <th className="py-3 px-4">Resources</th>
-                      <th className="py-3 px-4">Port Gate</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-obsidian-800/60 font-mono text-xs text-slate-300">
-                    {paginatedServers.map((s) => (
-                      <tr key={s.id} className="hover:bg-obsidian-850/50 transition-colors group">
-                        {/* Status */}
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center gap-1.5 text-[11px] font-mono px-2 py-0.5 rounded-full border uppercase tracking-wider ${
-                              s.status === 'running'
-                                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                                : s.status === 'crashed'
-                                ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                                : 'bg-slate-800 text-slate-400 border-slate-700'
-                            }`}
-                          >
-                            <span
-                              className={`w-1.5 h-1.5 rounded-full ${
-                                s.status === 'running'
-                                  ? 'bg-emerald-400 animate-pulse'
-                                  : s.status === 'crashed'
-                                  ? 'bg-rose-400'
-                                  : 'bg-slate-500'
-                              }`}
-                            />
-                            {s.status}
-                          </span>
-                        </td>
 
-                        {/* Server Name & ID */}
-                        <td className="py-3.5 px-4">
-                          <div className="flex flex-col">
-                            <Link
-                              to={`/servers/${s.id}`}
-                              className="font-bold text-slate-100 group-hover:text-emerald-400 transition-colors text-sm"
-                            >
-                              {s.name}
-                            </Link>
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-[11px] text-slate-400">ID: {s.id}</span>
-                              {s.seed && (
-                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-obsidian-950 border border-obsidian-800 text-slate-300 font-mono">
-                                  Seed: {s.seed}
-                                </span>
-                              )}
-                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-obsidian-950 border border-obsidian-800 text-slate-400 uppercase">
-                                {s.mode}
-                              </span>
-                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-obsidian-950 border border-obsidian-800 text-slate-400 uppercase">
-                                {s.difficulty}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* Port (UDP) */}
-                        <td className="py-3.5 px-4 whitespace-nowrap text-slate-200">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-bold text-emerald-400/90">{s.port}</span>
-                            <span className="text-[10px] text-slate-500">/ v6: {s.portv6 || s.port + 1}</span>
-                          </div>
-                        </td>
-
-                        {/* Version */}
-                        <td className="py-3.5 px-4 whitespace-nowrap text-slate-400">
-                          <span className="px-2 py-0.5 rounded bg-obsidian-950 border border-obsidian-800 text-[11px] text-slate-300">
-                            v{s.version || 'latest'}
-                          </span>
-                        </td>
-
-                        {/* Resources */}
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          <div className="flex items-center gap-2 text-[11px] text-slate-300">
-                            <span className="flex items-center gap-1 bg-obsidian-950 px-2 py-0.5 rounded border border-obsidian-800">
-                              <HardDrive className="w-3 h-3 text-emerald-400/70" />
-                              {s.memory_limit}
-                            </span>
-                            <span className="flex items-center gap-1 bg-obsidian-950 px-2 py-0.5 rounded border border-obsidian-800">
-                              <Cpu className="w-3 h-3 text-cyan-400/70" />
-                              {s.cpu_limit} Cores
-                            </span>
-                          </div>
-                        </td>
-
-                        {/* Port Gate */}
-                        <td className="py-3.5 px-4 whitespace-nowrap">
-                          {s.port_gate_enabled ? (
-                            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-emerald-950/40 border border-emerald-500/20 text-[11px] text-emerald-400">
-                              <Shield className="w-3 h-3" />
-                              <span className="capitalize">{s.port_gate_mode}</span>
-                              <Link
-                                to={`/knock/${s.id}`}
-                                target="_blank"
-                                title="Open Knock Portal"
-                                className="text-emerald-300 hover:text-emerald-100 ml-1"
-                              >
-                                <ExternalLink className="w-2.5 h-2.5" />
-                              </Link>
-                            </div>
-                          ) : (
-                            <span className="text-slate-500 text-[11px]">Disabled</span>
-                          )}
-                        </td>
-
-                        {/* Actions */}
-                        <td className="py-3.5 px-4 whitespace-nowrap text-right">
-                          <div className="flex items-center justify-end space-x-2">
-                            {s.status === 'running' ? (
-                              <button
-                                onClick={() => handleStop(s.id)}
-                                disabled={actionLoading === s.id}
-                                title="Stop Server"
-                                className="p-1.5 rounded-lg bg-obsidian-950 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-obsidian-700 transition-colors"
-                              >
-                                {actionLoading === s.id ? (
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                ) : (
-                                  <Square className="w-3.5 h-3.5 fill-current" />
-                                )}
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handleStart(s.id)}
-                                disabled={actionLoading === s.id}
-                                title="Start Server"
-                                className="p-1.5 rounded-lg bg-obsidian-950 hover:bg-emerald-950/60 text-slate-400 hover:text-emerald-400 border border-obsidian-700 transition-colors"
-                              >
-                                {actionLoading === s.id ? (
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                ) : (
-                                  <Play className="w-3.5 h-3.5 fill-current" />
-                                )}
-                              </button>
-                            )}
-
-                            <Link
-                              to={`/servers/${s.id}`}
-                              className="px-2.5 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-200 hover:text-emerald-400 text-xs font-mono font-medium transition-colors"
-                            >
-                              Manage Hub →
-                            </Link>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="bg-obsidian-850 border border-obsidian-700/80 rounded-lg p-2.5">
+                <div className="text-lg font-mono font-bold text-slate-100">
+                  {summary?.active_leases_count ?? 0}
+                </div>
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">Active Leases</div>
               </div>
 
-              {/* Table Pagination */}
-              <Pagination
-                currentPage={currentPage}
-                totalItems={totalItems}
-                pageSize={pageSize}
-                onPageChange={setCurrentPage}
-                onPageSizeChange={setPageSize}
-                pageSizeOptions={[10, 25, 50, 100]}
-              />
+              <div className="bg-obsidian-850 border border-obsidian-700/80 rounded-lg p-2.5">
+                <div className="text-lg font-mono font-bold text-slate-100">
+                  {summary?.allow_rules_count ?? 0}
+                </div>
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">Allow Rules</div>
+              </div>
+
+              <div className="bg-obsidian-850 border border-obsidian-700/80 rounded-lg p-2.5">
+                <div className="text-lg font-mono font-bold text-slate-100">
+                  {summary?.portgate_bans_count ?? 0}
+                </div>
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider mt-0.5">Banned IPs</div>
+              </div>
             </div>
-          ) : (
-            /* Card Grid View */
-            <div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {paginatedServers.map((s) => (
-                  <div
-                    key={s.id}
-                    className="bg-obsidian-900 border border-obsidian-700/80 hover:border-emerald-500/50 rounded-xl p-5 shadow-lg transition-all flex flex-col justify-between group"
-                  >
-                    <div>
-                      <div className="flex items-start justify-between mb-3">
-                        <div>
-                          <h3 className="font-bold text-base text-slate-100 font-mono group-hover:text-emerald-400 transition-colors">
-                            {s.name}
-                          </h3>
-                          <span className="text-xs text-slate-400 font-mono">ID: {s.id}</span>
-                        </div>
+
+            <div className="mt-4 pt-3 border-t border-obsidian-800 text-xs text-slate-400 flex items-center justify-between">
+              <span>Banned Player Profiles:</span>
+              <span className="font-mono text-slate-200 font-medium">
+                {summary?.total_banned_players ?? 0}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Fleet Quick Table */}
+      <div className="bg-obsidian-900 border border-obsidian-750/80 rounded-xl p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-100 flex items-center gap-2">
+              <Layers className="w-4 h-4 text-emerald-400" />
+              <span>Server Instances Fleet</span>
+            </h2>
+            <p className="text-slate-400 text-xs mt-0.5">
+              Live status, port mappings, and performance metrics across all configured game containers.
+            </p>
+          </div>
+          <Link
+            to="/servers"
+            className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-medium transition-colors"
+          >
+            <span>Open Instance Manager</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </Link>
+        </div>
+
+        {summary && summary.servers.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-obsidian-800 text-slate-400 font-mono uppercase tracking-wider">
+                  <th className="pb-2.5 font-medium">Status</th>
+                  <th className="pb-2.5 font-medium">Instance Name</th>
+                  <th className="pb-2.5 font-medium">Port (UDP)</th>
+                  <th className="pb-2.5 font-medium">Mode / Diff</th>
+                  <th className="pb-2.5 font-medium">Online</th>
+                  <th className="pb-2.5 font-medium">CPU & Memory</th>
+                  <th className="pb-2.5 font-medium">Port Gate</th>
+                  <th className="pb-2.5 text-right font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-obsidian-800/60">
+                {summary.servers.map((s) => {
+                  const isRunning = s.status === 'running';
+                  return (
+                    <tr key={s.id} className="hover:bg-obsidian-850/50 transition-colors">
+                      <td className="py-3">
                         <span
-                          className={`text-[11px] font-mono px-2 py-0.5 rounded-full border uppercase tracking-wider ${
-                            s.status === 'running'
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono uppercase font-semibold border ${
+                            isRunning
                               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                               : s.status === 'crashed'
                               ? 'bg-rose-500/10 text-rose-400 border-rose-500/30'
-                              : 'bg-slate-800 text-slate-400 border-slate-700'
+                              : 'bg-slate-500/10 text-slate-400 border-slate-500/30'
                           }`}
                         >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              isRunning ? 'bg-emerald-400 animate-pulse' : s.status === 'crashed' ? 'bg-rose-400' : 'bg-slate-500'
+                            }`}
+                          ></span>
                           {s.status}
                         </span>
-                      </div>
+                      </td>
 
-                      <div className="grid grid-cols-2 gap-2 my-4 text-xs font-mono text-slate-300">
-                        <div className="bg-obsidian-950 p-2 rounded-lg border border-obsidian-800 flex items-center space-x-2">
-                          <span className="text-slate-500">UDP:</span>
-                          <span className="text-slate-200">{s.port}</span>
-                        </div>
-                        <div className="bg-obsidian-950 p-2 rounded-lg border border-obsidian-800 flex items-center space-x-2">
-                          <HardDrive className="w-3.5 h-3.5 text-emerald-500/70" />
-                          <span>{s.memory_limit}</span>
-                        </div>
-                      </div>
-
-                      {s.seed && (
-                        <div className="mb-3 px-2.5 py-1 rounded bg-obsidian-950 border border-obsidian-800 text-[11px] font-mono text-slate-400 flex items-center justify-between">
-                          <span className="text-slate-500">Seed:</span>
-                          <span className="text-slate-200 font-semibold truncate max-w-[160px]">{s.seed}</span>
-                        </div>
-                      )}
-
-                      {s.port_gate_enabled && (
-                        <div className="mb-4 flex items-center justify-between px-2.5 py-1 rounded bg-emerald-950/40 border border-emerald-500/20 text-[11px] font-mono text-emerald-400">
-                          <span className="flex items-center space-x-1.5">
-                            <Shield className="w-3.5 h-3.5" />
-                            <span>Port Gate ({s.port_gate_mode})</span>
-                          </span>
-                          <Link
-                            to={`/knock/${s.id}`}
-                            target="_blank"
-                            className="hover:underline flex items-center space-x-1 text-emerald-300"
-                          >
-                            <span>Knock Portal</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </Link>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="pt-3 border-t border-obsidian-800 flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
+                      <td className="py-3 font-medium text-slate-100">
                         <Link
                           to={`/servers/${s.id}`}
-                          className="px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-200 hover:text-emerald-400 text-xs font-mono font-medium transition-colors"
+                          className="hover:text-emerald-400 transition-colors font-mono"
                         >
-                          Manage Hub →
+                          {s.name}
                         </Link>
+                      </td>
 
-                        {s.status === 'running' ? (
-                          <button
-                            onClick={() => handleStop(s.id)}
-                            disabled={actionLoading === s.id}
-                            title="Stop Server"
-                            className="p-1.5 rounded-lg bg-obsidian-950 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border border-obsidian-700 transition-colors"
-                          >
-                            {actionLoading === s.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Square className="w-3.5 h-3.5 fill-current" />
-                            )}
-                          </button>
+                      <td className="py-3 font-mono text-slate-300">
+                        {s.port}
+                      </td>
+
+                      <td className="py-3 text-slate-300 capitalize">
+                        {s.mode} <span className="text-slate-500 text-[11px]">({s.difficulty})</span>
+                      </td>
+
+                      <td className="py-3">
+                        <span className="font-mono text-slate-200 font-medium">
+                          {s.online_players}
+                        </span>
+                      </td>
+
+                      <td className="py-3 text-slate-400 font-mono text-[11px]">
+                        {isRunning && (s.cpu_percent !== undefined || s.ram_bytes !== undefined) ? (
+                          <span className="text-slate-200">
+                            {(s.cpu_percent ?? 0).toFixed(1)}% CPU / {formatBytes(s.ram_bytes ?? 0)}
+                          </span>
                         ) : (
-                          <button
-                            onClick={() => handleStart(s.id)}
-                            disabled={actionLoading === s.id}
-                            title="Start Server"
-                            className="p-1.5 rounded-lg bg-obsidian-950 hover:bg-emerald-950/60 text-slate-400 hover:text-emerald-400 border border-obsidian-700 transition-colors"
-                          >
-                            {actionLoading === s.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Play className="w-3.5 h-3.5 fill-current" />
-                            )}
-                          </button>
+                          <span className="text-slate-500">
+                            {s.cpu_limit} cores / {s.memory_limit}
+                          </span>
                         )}
-                      </div>
+                      </td>
 
-                      <div className="text-[11px] text-slate-500 font-mono">
-                        v{s.version}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                      <td className="py-3">
+                        {s.port_gate_enabled ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-mono text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                            <Lock className="w-2.5 h-2.5" />
+                            Active
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono text-slate-500">
+                            Disabled
+                          </span>
+                        )}
+                      </td>
 
-              {/* Grid Pagination */}
-              <div className="mt-6 bg-obsidian-900 border border-obsidian-800 rounded-xl overflow-hidden shadow-xl">
-                <Pagination
-                  currentPage={currentPage}
-                  totalItems={totalItems}
-                  pageSize={pageSize}
-                  onPageChange={setCurrentPage}
-                  onPageSizeChange={setPageSize}
-                  pageSizeOptions={[6, 12, 24, 48]}
-                />
-              </div>
+                      <td className="py-3 text-right">
+                        <Link
+                          to={`/servers/${s.id}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 bg-obsidian-800 hover:bg-obsidian-750 text-slate-200 rounded border border-obsidian-700 text-xs font-medium transition-colors"
+                        >
+                          <span>Manage</span>
+                          <ArrowRight className="w-3 h-3 text-slate-400" />
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="py-8 text-center border border-dashed border-obsidian-800 rounded-xl bg-obsidian-950/40">
+            <ServerIcon className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+            <div className="text-slate-300 text-sm font-medium">No server instances configured yet</div>
+            <p className="text-slate-500 text-xs mt-1">
+              Deploy your first Bedrock dedicated server to begin monitoring.
+            </p>
+            <Link
+              to="/servers"
+              className="mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-medium transition-colors"
+            >
+              <span>Deploy First Instance</span>
+            </Link>
+          </div>
+        )}
+      </div>
+
+      {/* Quick Navigation Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <Link
+          to="/servers"
+          className="bg-obsidian-900 border border-obsidian-750/80 hover:border-emerald-500/50 p-4 rounded-xl flex items-center justify-between group transition-all"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+              <ServerIcon className="w-4 h-4" />
             </div>
-          )}
-        </div>
-      )}
+            <div>
+              <div className="text-xs font-semibold text-slate-200">Server Fleet</div>
+              <div className="text-[10px] text-slate-400">Deploy & control</div>
+            </div>
+          </div>
+          <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-colors" />
+        </Link>
 
-      {/* Deploy Instance Modal (Quick Deploy or Guided Wizard with Popular Seeds) */}
-      <DeployModal
-        isOpen={showModal}
-        onClose={() => setShowModal(false)}
-        onSuccess={() => fetchServers(true)}
-      />
+        {user.role === 'admin' && (
+          <>
+            <Link
+              to="/portgate"
+              className="bg-obsidian-900 border border-obsidian-750/80 hover:border-emerald-500/50 p-4 rounded-xl flex items-center justify-between group transition-all"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+                  <Shield className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-200">Port Gate</div>
+                  <div className="text-[10px] text-slate-400">Firewall & passes</div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-colors" />
+            </Link>
+
+            <Link
+              to="/global-players"
+              className="bg-obsidian-900 border border-obsidian-750/80 hover:border-emerald-500/50 p-4 rounded-xl flex items-center justify-between group transition-all"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+                  <UserCheck className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-200">Global Players</div>
+                  <div className="text-[10px] text-slate-400">Roles & syncing</div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-colors" />
+            </Link>
+
+            <Link
+              to="/tasks"
+              className="bg-obsidian-900 border border-obsidian-750/80 hover:border-emerald-500/50 p-4 rounded-xl flex items-center justify-between group transition-all"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+                  <Clock className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-slate-200">Automations</div>
+                  <div className="text-[10px] text-slate-400">Schedules & tasks</div>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-emerald-400 transition-colors" />
+            </Link>
+          </>
+        )}
+      </div>
     </div>
   );
 };

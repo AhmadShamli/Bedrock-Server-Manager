@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/configfile"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
@@ -1444,8 +1446,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.5.7" {
-		t.Errorf("expected version 1.5.7 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.5.8" {
+		t.Errorf("expected version 1.5.8 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1459,8 +1461,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.5.7" {
-		t.Errorf("expected version 1.5.7 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.5.8" {
+		t.Errorf("expected version 1.5.8 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
@@ -1742,5 +1744,278 @@ func TestPlayerBanWorkflow(t *testing.T) {
 		t.Fatalf("expected Alex to not be banned after unban")
 	}
 }
+
+func TestServerPropertiesUnzipAndMergeFlow(t *testing.T) {
+	router, db, mockEngine, _, jwtSecret, _ := setupTestRouter(t)
+	token, _ := auth.GenerateJWT(jwtSecret, 1, "admin", "admin", time.Hour)
+	dataDir := "data_test"
+	defer os.RemoveAll(dataDir)
+
+	// 1. Create server instance with a seed (simulating wizard deploy)
+	createPayload := `{
+		"id": "wizard-srv",
+		"name": "Wizard Deployed Realm",
+		"port": 19180,
+		"portv6": 19181,
+		"mode": "survival",
+		"difficulty": "normal",
+		"seed": "777888999"
+	}`
+	req := httptest.NewRequest("POST", "/api/servers", strings.NewReader(createPayload))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created from POST /api/servers, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify server.properties was NOT created prematurely on disk, leaving directory clean for itzg
+	propPath := filepath.Join(dataDir, "servers", "wizard-srv", "server.properties")
+	if _, err := os.Stat(propPath); !os.IsNotExist(err) {
+		t.Fatalf("expected server.properties to NOT exist prior to itzg boot, but it was found")
+	}
+
+	// 2. GET /properties before first boot returns uninitialized=true and default properties for pre-boot configuration
+	req = httptest.NewRequest("GET", "/api/servers/wizard-srv/properties", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from GET /properties, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var res struct {
+		Properties    map[string]string `json:"properties"`
+		Keys          []string          `json:"keys"`
+		Uninitialized bool              `json:"uninitialized"`
+		Pending       bool              `json:"pending"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to unmarshal properties response: %v", err)
+	}
+	if !res.Uninitialized {
+		t.Errorf("expected uninitialized=true before first boot")
+	}
+	if len(res.Keys) != len(configfile.DefaultServerPropertyKeys) {
+		t.Errorf("expected %d default keys before first boot, got %d", len(configfile.DefaultServerPropertyKeys), len(res.Keys))
+	}
+	if res.Properties["server-name"] != "Wizard Deployed Realm" {
+		t.Errorf("expected server-name 'Wizard Deployed Realm', got '%s'", res.Properties["server-name"])
+	}
+
+	// 3. User customizes properties before first boot (e.g. view-distance=48, max-players=25)
+	res.Properties["view-distance"] = "48"
+	res.Properties["max-players"] = "25"
+	updateBody, _ := json.Marshal(map[string]interface{}{
+		"properties": res.Properties,
+		"keys":       res.Keys,
+	})
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("PUT", "/api/servers/wizard-srv/properties", bytes.NewReader(updateBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from PUT /properties, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// server.properties must STILL NOT exist on disk, avoiding blocking itzg
+	if _, err := os.Stat(propPath); !os.IsNotExist(err) {
+		t.Fatalf("expected server.properties to not exist yet after pending save")
+	}
+
+	// .pending_properties.json must exist on disk
+	serverDir := filepath.Join(dataDir, "servers", "wizard-srv")
+	pendingProps, _, hasPending, err := configfile.ReadPendingProperties(serverDir)
+	if err != nil || !hasPending {
+		t.Fatalf("expected pending properties file to exist, err: %v", err)
+	}
+	if pendingProps["view-distance"] != "48" {
+		t.Errorf("expected pending view-distance '48', got '%s'", pendingProps["view-distance"])
+	}
+
+	// 4. Simulate itzg booting and unzipping official Mojang BDS properties on disk (with default view-distance=32)
+	bdsTemplate := "server-name=Dedicated Server\ngamemode=survival\ndifficulty=easy\nview-distance=32\nmax-players=10\nallow-cheats=false\nlevel-seed=777888999\n"
+	if err := os.WriteFile(propPath, []byte(bdsTemplate), 0644); err != nil {
+		t.Fatalf("failed to simulate itzg unzipping server.properties: %v", err)
+	}
+
+	// 5. Trigger applyPendingPropertiesOnStart (which unblocks on server.properties existing)
+	serverHandler := &ServerHandler{
+		db:      db,
+		engine:  mockEngine,
+		dataDir: dataDir,
+	}
+	serverHandler.applyPendingPropertiesOnStart("wizard-srv")
+
+	// Verify server.properties on disk has now merged the pre-boot customized properties!
+	diskProps, _, err := configfile.ReadProperties(propPath)
+	if err != nil {
+		t.Fatalf("failed to read updated server.properties: %v", err)
+	}
+	if diskProps["view-distance"] != "48" {
+		t.Errorf("expected view-distance updated to '48', got '%s'", diskProps["view-distance"])
+	}
+	if diskProps["max-players"] != "25" {
+		t.Errorf("expected max-players updated to '25', got '%s'", diskProps["max-players"])
+	}
+	if diskProps["gamemode"] != "survival" {
+		t.Errorf("expected gamemode 'survival' preserved, got '%s'", diskProps["gamemode"])
+	}
+
+	// Verify pending file was removed
+	if _, _, stillPending, _ := configfile.ReadPendingProperties(serverDir); stillPending {
+		t.Errorf("expected pending properties file to be deleted after apply")
+	}
+
+	// 6. Next GET /properties returns uninitialized=false, pending=false
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/servers/wizard-srv/properties", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from GET /properties after boot, got %d", w.Code)
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &res)
+	if res.Uninitialized {
+		t.Errorf("expected uninitialized=false after first boot")
+	}
+	if res.Pending {
+		t.Errorf("expected pending=false after first boot")
+	}
+	if res.Properties["view-distance"] != "48" {
+		t.Errorf("expected view-distance '48', got '%s'", res.Properties["view-distance"])
+	}
+}
+
+func TestDashboardSummary(t *testing.T) {
+	db, err := database.OpenManagerDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenManagerDB failed: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate failed: %v", err)
+	}
+
+	dataDir := t.TempDir()
+	eng := engine.NewMockEngine()
+	pa := allocator.NewPortAllocator()
+	pm := player.NewManager(nil, nil)
+	resolver := ipresolver.NewResolver("direct", nil)
+	jwtSecret := []byte("test-dashboard-secret-32bytes-long!")
+
+	router := NewRouter(RouterOptions{
+		DB:            db,
+		IPResolver:    resolver,
+		Engine:        eng,
+		PortAllocator: pa,
+		PlayerManager: pm,
+		DataDir:       dataDir,
+		JWTSecret:     jwtSecret,
+		Pepper:        "test-pepper",
+	})
+
+	// Create admin user & login
+	_, _ = db.CreateUser(context.Background(), "dashadmin", "$2a$10$abcdefghijklmnopqrstuuNOPQRSTUVWXYZ1234567890abcdefghij", "admin")
+	token, _ := auth.GenerateJWT(jwtSecret, 1, "dashadmin", "admin", time.Hour)
+
+	// Create running server
+	s1 := &models.Server{
+		ID:          "srv-dash-1",
+		Name:        "Dash Running Server",
+		Version:     "1.20.0",
+		Port:        19132,
+		PortV6:      19133,
+		Status:      models.ServerStatusRunning,
+		MemoryLimit: "2G",
+		CPULimit:    2.0,
+	}
+	_ = db.CreateServer(context.Background(), s1)
+	_ = eng.StartServer(context.Background(), s1)
+
+	// Create stopped server
+	s2 := &models.Server{
+		ID:          "srv-dash-2",
+		Name:        "Dash Stopped Server",
+		Version:     "1.20.0",
+		Port:        19134,
+		PortV6:      19135,
+		Status:      models.ServerStatusStopped,
+		MemoryLimit: "4G",
+		CPULimit:    4.0,
+	}
+	_ = db.CreateServer(context.Background(), s2)
+
+	// Online player on s1
+	pm.ProcessLine("srv-dash-1", "Player connected: DashPlayer, xuid: 123456789")
+
+	// Create a backup
+	_ = db.CreateBackup(context.Background(), &models.Backup{
+		ServerID:  "srv-dash-1",
+		Filename:  "backup-dash-1.tar.gz",
+		SizeBytes: 1048576,
+		Type:      "manual",
+		Status:    "completed",
+		CreatedAt: time.Now().UTC(),
+	})
+
+	// Create an active port gate lease
+	_ = db.CreatePortGateLease(context.Background(), &models.PortGateLease{
+		ServerID:    "srv-dash-1",
+		IPAddress:   "192.168.1.100",
+		Gamertag:    "DashPlayer",
+		GrantedAt:   time.Now().UTC(),
+		ExpiresAt:   time.Now().UTC().Add(2 * time.Hour),
+		KnockMethod: "passphrase",
+		Status:      "active",
+	})
+
+	// Fetch GET /api/dashboard/summary
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/dashboard/summary", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from /api/dashboard/summary, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var summary DashboardSummaryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("failed to unmarshal dashboard summary: %v", err)
+	}
+
+	if summary.TotalServers != 2 {
+		t.Errorf("expected 2 total servers, got %d", summary.TotalServers)
+	}
+	if summary.RunningServers != 1 {
+		t.Errorf("expected 1 running server, got %d", summary.RunningServers)
+	}
+	if summary.StoppedServers != 1 {
+		t.Errorf("expected 1 stopped server, got %d", summary.StoppedServers)
+	}
+	if summary.TotalOnlinePlayers != 1 {
+		t.Errorf("expected 1 online player, got %d", summary.TotalOnlinePlayers)
+	}
+	if len(summary.ActivePlayers) != 1 || summary.ActivePlayers[0].Gamertag != "DashPlayer" {
+		t.Errorf("expected DashPlayer in active players, got %+v", summary.ActivePlayers)
+	}
+	if summary.TotalBackupsCount != 1 {
+		t.Errorf("expected 1 backup, got %d", summary.TotalBackupsCount)
+	}
+	if summary.ActiveLeasesCount != 1 {
+		t.Errorf("expected 1 active lease, got %d", summary.ActiveLeasesCount)
+	}
+	if summary.TotalAllocatedCores != 6.0 {
+		t.Errorf("expected 6.0 allocated cores, got %f", summary.TotalAllocatedCores)
+	}
+	if summary.HostSystem.Version == "" || summary.HostSystem.OS == "" {
+		t.Errorf("expected valid host system telemetry, got %+v", summary.HostSystem)
+	}
+}
+
 
 

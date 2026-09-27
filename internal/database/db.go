@@ -1716,6 +1716,31 @@ func (db *ManagerDB) IsPlayerBanned(ctx context.Context, serverID, gamertag, xui
 	return false, "", nil
 }
 
+// DashboardDBStats aggregates high-level database metrics.
+type DashboardDBStats struct {
+	TotalBackupsCount  int64 `json:"total_backups_count"`
+	TotalBackupsBytes  int64 `json:"total_backups_bytes"`
+	ActiveLeasesCount  int   `json:"active_leases_count"`
+	AllowRulesCount    int   `json:"allow_rules_count"`
+	PortGateBansCount  int   `json:"portgate_bans_count"`
+	BannedPlayersCount int   `json:"banned_players_count"`
+	GlobalPlayersCount int   `json:"global_players_count"`
+}
+
+// GetDashboardDBStats queries table counts and aggregate metrics for the dashboard.
+func (db *ManagerDB) GetDashboardDBStats(ctx context.Context) (*DashboardDBStats, error) {
+	stats := &DashboardDBStats{}
+
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM backups`).Scan(&stats.TotalBackupsCount, &stats.TotalBackupsBytes)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM port_gate_leases WHERE status = 'active' AND expires_at > ?`, FormatTime(time.Now().UTC())).Scan(&stats.ActiveLeasesCount)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM port_gate_allowlist`).Scan(&stats.AllowRulesCount)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM port_gate_bans`).Scan(&stats.PortGateBansCount)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM banned_players`).Scan(&stats.BannedPlayersCount)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM global_players`).Scan(&stats.GlobalPlayersCount)
+
+	return stats, nil
+}
+
 // --- MetricsDB Operations ---
 
 func (db *MetricsDB) InsertRawBatch(ctx context.Context, samples []models.MetricRaw) error {

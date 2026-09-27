@@ -1,6 +1,6 @@
 import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Shield, Server as ServerIcon, LogOut, Terminal, Clock, History, Users, UserCog } from 'lucide-react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { LayoutDashboard, Shield, Server as ServerIcon, LogOut, Terminal, Clock, History, Users, UserCog } from 'lucide-react';
 import { api } from '../api/client';
 import { User } from '../types';
 
@@ -11,6 +11,7 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const handleLogout = async () => {
     await api.logout();
@@ -35,10 +36,26 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
         </Link>
 
         {user && (
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-2 sm:space-x-3">
             <Link
               to="/"
-              className="px-3 py-1.5 text-sm font-medium text-slate-300 hover:text-emerald-400 flex items-center space-x-1.5 transition-colors"
+              className={`px-3 py-1.5 text-sm font-medium flex items-center space-x-1.5 transition-colors ${
+                location.pathname === '/'
+                  ? 'text-emerald-400 bg-obsidian-850 rounded-lg border border-obsidian-750'
+                  : 'text-slate-300 hover:text-emerald-400'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              <span className="hidden sm:inline">Dashboard</span>
+            </Link>
+
+            <Link
+              to="/servers"
+              className={`px-3 py-1.5 text-sm font-medium flex items-center space-x-1.5 transition-colors ${
+                location.pathname.startsWith('/servers')
+                  ? 'text-emerald-400 bg-obsidian-850 rounded-lg border border-obsidian-750'
+                  : 'text-slate-300 hover:text-emerald-400'
+              }`}
             >
               <ServerIcon className="w-4 h-4" />
               <span className="hidden sm:inline">Instances</span>

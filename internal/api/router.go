@@ -54,6 +54,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	taskHandler := NewTaskHandler(opts.DB, opts.Scheduler)
 	globalPlayerHandler := NewGlobalPlayerHandler(opts.DB, opts.Engine, opts.DataDir)
 	userHandler := NewUserHandler(opts.DB)
+	dashboardHandler := NewDashboardHandler(opts.DB, opts.Engine, opts.PlayerManager, opts.TelemetryCollector)
 
 	// Global Middlewares
 	r.Use(chimiddleware.RequestID)
@@ -89,6 +90,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 			authGroup.Get("/auth/me", authHandler.Me)
 			authGroup.Post("/auth/refresh", authHandler.Refresh)
 			authGroup.Get("/system/info", systemHandler.SystemInfo)
+			authGroup.Get("/dashboard/summary", dashboardHandler.Summary)
 
 			// Presets and Version checking
 			authGroup.Get("/presets", ListPresets)

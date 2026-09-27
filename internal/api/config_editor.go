@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/clone"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/configfile"
@@ -22,40 +24,66 @@ func (h *ServerHandler) GetProperties(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	props, keys, err := configfile.ReadProperties(propPath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to read properties: %s"}`, err.Error()), http.StatusInternalServerError)
-		return
+	serverDir := filepath.Dir(propPath)
+	exists := true
+	if _, statErr := os.Stat(propPath); os.IsNotExist(statErr) {
+		exists = false
 	}
 
-	if props == nil {
-		props = make(map[string]string)
-	}
-	if keys == nil {
-		keys = []string{}
+	var srv *models.Server
+	if s, err := h.db.GetServer(r.Context(), serverID); err == nil && s != nil {
+		srv = s
 	}
 
-	// Ensure level-seed is present in keys and properties
-	if _, exists := props["level-seed"]; !exists {
-		seedVal := ""
-		if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv != nil {
-			seedVal = srv.Seed
+	var props map[string]string
+	var keys []string
+	isPending := false
+
+	if exists {
+		var readErr error
+		props, keys, readErr = configfile.ReadProperties(propPath)
+		if readErr != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Failed to read properties: %s"}`, readErr.Error()), http.StatusInternalServerError)
+			return
 		}
-		if seedVal == "" {
-			seedVal = configfile.DetectServerSeed(h.dataDir, serverID)
+
+		// Merge missing default keys if existing server has reduced properties
+		props, keys = configfile.MergeDefaultProperties(props, keys, srv)
+
+		if val, hasSeed := props["level-seed"]; hasSeed && val == "" {
+			seedVal := ""
+			if srv != nil && srv.Seed != "" {
+				seedVal = srv.Seed
+			} else {
+				seedVal = configfile.DetectServerSeed(h.dataDir, serverID)
+			}
+			if seedVal != "" {
+				props["level-seed"] = seedVal
+			}
 		}
-		props["level-seed"] = seedVal
-		keys = append(keys, "level-seed")
+	} else {
+		// Uninitialized instance: check if pending configuration overrides already exist
+		pendingProps, pendingKeys, hasPending, _ := configfile.ReadPendingProperties(serverDir)
+		if hasPending && len(pendingProps) > 0 {
+			props = pendingProps
+			keys = pendingKeys
+			isPending = true
+		} else {
+			// Generate standard default properties tailored to this instance
+			props, keys = configfile.GenerateDefaultProperties(srv)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"properties": props,
-		"keys":       keys,
+		"properties":    props,
+		"keys":          keys,
+		"uninitialized": !exists,
+		"pending":       isPending,
 	})
 }
 
-// UpdateProperties saves changes to server.properties.
+// UpdateProperties saves changes to server.properties (or queues them as pending for uninitialized instances).
 func (h *ServerHandler) UpdateProperties(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	propPath, err := configfile.SafePath(h.dataDir, serverID, "server.properties")
@@ -73,9 +101,24 @@ func (h *ServerHandler) UpdateProperties(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := configfile.WriteProperties(propPath, payload.Properties, payload.Keys); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to write properties: %s"}`, err.Error()), http.StatusInternalServerError)
-		return
+	serverDir := filepath.Dir(propPath)
+	exists := true
+	if _, statErr := os.Stat(propPath); os.IsNotExist(statErr) {
+		exists = false
+	}
+
+	if !exists {
+		// Uninitialized instance: write to .pending_properties.json so itzg is NOT blocked from unzipping
+		if err := configfile.WritePendingProperties(serverDir, payload.Properties, payload.Keys); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Failed to write pending properties: %s"}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// Running or initialized instance: write directly to server.properties
+		if err := configfile.WriteProperties(propPath, payload.Properties, payload.Keys); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Failed to write properties: %s"}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Synchronize level-seed back to server metadata record in database
@@ -93,11 +136,15 @@ func (h *ServerHandler) UpdateProperties(w http.ResponseWriter, r *http.Request)
 		ActorName: GetUserClaims(r).Username,
 		Action:    "update_properties",
 		Target:    serverID,
+		Details:   fmt.Sprintf(`{"pending": %t}`, !exists),
 		ClientIP:  GetClientIP(r).String(),
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "saved",
+		"pending": !exists,
+	})
 }
 
 // GetAllowlist loads allowlist.json.

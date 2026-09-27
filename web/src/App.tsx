@@ -4,6 +4,7 @@ import { api } from './api/client';
 import { User } from './types';
 import { Navbar } from './components/Navbar';
 import { Dashboard } from './pages/Dashboard';
+import { Servers } from './pages/Servers';
 import { ServerHub } from './pages/ServerHub';
 import { Login } from './pages/Login';
 import { Setup } from './pages/Setup';
@@ -102,7 +103,7 @@ export const App: React.FC = () => {
           />
           <Route
             path="/servers"
-            element={user ? <Dashboard user={user} /> : <Navigate to="/login" replace />}
+            element={user ? <Servers user={user} /> : <Navigate to="/login" replace />}
           />
           <Route
             path="/servers/:id"

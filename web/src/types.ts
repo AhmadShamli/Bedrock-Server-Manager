@@ -205,3 +205,51 @@ export interface ActivePlayerInfo {
   is_op?: boolean;
 }
 
+export interface ServerSummary {
+  id: string;
+  name: string;
+  status: 'stopped' | 'starting' | 'running' | 'stopping' | 'crashed';
+  port: number;
+  mode: string;
+  difficulty: string;
+  cpu_limit: number;
+  memory_limit: string;
+  port_gate_enabled: boolean;
+  online_players: number;
+  cpu_percent?: number;
+  ram_bytes?: number;
+}
+
+export interface HostSystemSummary {
+  version: string;
+  app_name: string;
+  go_version: string;
+  goroutines: number;
+  os: string;
+  arch: string;
+  uptime_sec: number;
+  alloc_mb: number;
+  sys_mb: number;
+}
+
+export interface DashboardSummary {
+  total_servers: number;
+  running_servers: number;
+  stopped_servers: number;
+  total_online_players: number;
+  total_global_players: number;
+  total_banned_players: number;
+  active_players: ActivePlayerInfo[];
+  total_allocated_cores: number;
+  total_allocated_ram: number;
+  total_used_ram: number;
+  average_cpu_percent: number;
+  host_system: HostSystemSummary;
+  total_backups_count: number;
+  total_backups_bytes: number;
+  active_leases_count: number;
+  allow_rules_count: number;
+  portgate_bans_count: number;
+  servers: ServerSummary[];
+}
+

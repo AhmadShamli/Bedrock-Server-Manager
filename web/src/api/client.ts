@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, DashboardSummary } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -145,12 +145,13 @@ class APIClient {
     });
   }
 
-  // Properties, Allowlist & Permissions
-  async getProperties(id: string): Promise<{ properties: Record<string, string>; keys: string[] }> {
+  async getProperties(id: string): Promise<{ properties: Record<string, string>; keys: string[]; uninitialized?: boolean; pending?: boolean }> {
     const res = await this.request(`/api/servers/${id}/properties`);
     return {
       properties: res?.properties || {},
       keys: Array.isArray(res?.keys) ? res.keys : Object.keys(res?.properties || {}),
+      uninitialized: !!res?.uninitialized,
+      pending: !!res?.pending,
     };
   }
 
@@ -774,6 +775,10 @@ class APIClient {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+  }
+
+  async getDashboardSummary(): Promise<DashboardSummary> {
+    return this.request('/api/dashboard/summary');
   }
 }
 

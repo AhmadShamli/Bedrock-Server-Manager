@@ -2,9 +2,12 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -210,25 +213,13 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Automatically merge global allowlist and permissions on deploy/create
 	_, _ = player.SyncServerWithGlobal(r.Context(), h.dataDir, s.ID, h.db, nil)
 
+	// Update level-seed only if server.properties already exists on disk (e.g. from existing template or clone).
+	// If the file does not exist, do NOT create it so itzg/BDS can unzip the authentic Mojang template on first boot.
 	if s.Seed != "" {
-		propPath, err := configfile.SafePath(h.dataDir, s.ID, "server.properties")
-		if err == nil {
-			props, keys, _ := configfile.ReadProperties(propPath)
-			if props == nil {
-				props = make(map[string]string)
-			}
-			props["level-seed"] = s.Seed
-			hasKey := false
-			for _, k := range keys {
-				if k == "level-seed" {
-					hasKey = true
-					break
-				}
-			}
-			if !hasKey {
-				keys = append(keys, "level-seed")
-			}
-			_ = configfile.WriteProperties(propPath, props, keys)
+		if propPath, err := configfile.SafePath(h.dataDir, s.ID, "server.properties"); err == nil {
+			_, _ = configfile.UpdateExistingPropertyFile(propPath, map[string]string{
+				"level-seed": s.Seed,
+			})
 		}
 	}
 
@@ -281,8 +272,87 @@ func (h *ServerHandler) Start(w http.ResponseWriter, r *http.Request) {
 		ClientIP:  GetClientIP(r).String(),
 	})
 
+	// If there are pending pre-boot property updates, wait for itzg to unpack server.properties, merge changes, and restart
+	go h.applyPendingPropertiesOnStart(server.ID)
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "running"})
+}
+
+// applyPendingPropertiesOnStart checks for pre-boot pending properties, waits for itzg to unpack server.properties, merges pending properties, and restarts the container if any values changed.
+func (h *ServerHandler) applyPendingPropertiesOnStart(serverID string) {
+	serverDir := filepath.Join(h.dataDir, "servers", serverID)
+	pendingProps, _, hasPending, err := configfile.ReadPendingProperties(serverDir)
+	if err != nil || !hasPending || len(pendingProps) == 0 {
+		return
+	}
+
+	propPath := filepath.Join(serverDir, "server.properties")
+
+	// Poll until itzg unzips server.properties on disk (timeout after 45 seconds)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(45 * time.Second)
+
+	var unzipped bool
+	for !unzipped {
+		select {
+		case <-timeout:
+			return // Timed out waiting for itzg to initialize
+		case <-ticker.C:
+			if fi, err := os.Stat(propPath); err == nil && fi.Size() > 0 {
+				unzipped = true
+			}
+		}
+	}
+
+	// Short grace period to ensure itzg set-property finished writing
+	time.Sleep(1 * time.Second)
+
+	currentProps, currentKeys, err := configfile.ReadProperties(propPath)
+	if err != nil {
+		return
+	}
+
+	// Determine if any pending property differs from current unzipped properties
+	hasChanges := false
+	for k, v := range pendingProps {
+		if curVal, exists := currentProps[k]; !exists || curVal != v {
+			hasChanges = true
+			break
+		}
+	}
+
+	if hasChanges {
+		mergedProps, mergedKeys := configfile.MergeProperties(currentProps, currentKeys, pendingProps)
+		_ = configfile.WriteProperties(propPath, mergedProps, mergedKeys)
+
+		// Synchronize seed if updated
+		if sVal, exists := pendingProps["level-seed"]; exists {
+			if srv, err := h.db.GetServer(context.Background(), serverID); err == nil && srv != nil {
+				if srv.Seed != sVal {
+					srv.Seed = sVal
+					_ = h.db.UpdateServer(context.Background(), srv)
+				}
+			}
+		}
+
+		// Restart container so BDS reads updated properties
+		if srv, err := h.db.GetServer(context.Background(), serverID); err == nil && srv != nil {
+			_ = h.engine.RestartServer(context.Background(), srv)
+		}
+
+		_ = h.db.CreateAuditLog(context.Background(), &models.AuditLog{
+			ActorType: "system",
+			ActorName: "manager",
+			Action:    "apply_pending_properties",
+			Target:    serverID,
+			Details:   `{"restarted": true, "reason": "applied_preboot_properties"}`,
+		})
+	}
+
+	// Clean up pending file
+	_ = configfile.RemovePendingProperties(serverDir)
 }
 
 // Stop gracefully halts the server container.

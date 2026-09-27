@@ -100,6 +100,118 @@ func WriteProperties(filePath string, props map[string]string, keys []string) er
 	return os.WriteFile(filePath, []byte(sb.String()), 0644)
 }
 
+// MergeProperties merges updates into existing properties, preserving the original keys, comments, and order, while appending any new keys.
+func MergeProperties(existingProps map[string]string, existingKeys []string, updates map[string]string) (map[string]string, []string) {
+	props := make(map[string]string)
+	for k, v := range existingProps {
+		props[k] = v
+	}
+
+	keys := make([]string, 0, len(existingKeys)+len(updates))
+	keySet := make(map[string]bool)
+	for _, k := range existingKeys {
+		if !keySet[k] {
+			keys = append(keys, k)
+			keySet[k] = true
+		}
+	}
+
+	for k, v := range updates {
+		props[k] = v
+		if !keySet[k] {
+			keys = append(keys, k)
+			keySet[k] = true
+		}
+	}
+
+	return props, keys
+}
+
+// UpdateExistingPropertyFile updates specific key-value pairs in an existing server.properties file on disk.
+// If the file does not exist, it does NOT create it, allowing itzg/BDS to unzip/generate the authentic file first.
+func UpdateExistingPropertyFile(filePath string, updates map[string]string) (bool, error) {
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return false, nil // File does not exist, leave it for itzg/BDS to unzip
+	}
+
+	props, keys, err := ReadProperties(filePath)
+	if err != nil {
+		return false, err
+	}
+
+	mergedProps, mergedKeys := MergeProperties(props, keys, updates)
+	if err := WriteProperties(filePath, mergedProps, mergedKeys); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+// PendingPropertiesFilename is the filename used to store pre-boot configuration overrides for an uninitialized instance.
+const PendingPropertiesFilename = ".pending_properties.json"
+
+// PendingPropertiesPayload defines the format of pending pre-boot properties.
+type PendingPropertiesPayload struct {
+	Properties map[string]string `json:"properties"`
+	Keys       []string          `json:"keys"`
+}
+
+// ReadPendingProperties reads pre-boot property overrides if present in the server directory.
+func ReadPendingProperties(serverDir string) (map[string]string, []string, bool, error) {
+	path := filepath.Join(serverDir, PendingPropertiesFilename)
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil, false, nil
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	var payload PendingPropertiesPayload
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, nil, false, err
+	}
+
+	if payload.Properties == nil {
+		payload.Properties = make(map[string]string)
+	}
+	if payload.Keys == nil {
+		payload.Keys = []string{}
+	}
+
+	return payload.Properties, payload.Keys, true, nil
+}
+
+// WritePendingProperties writes pre-boot property overrides for an uninitialized instance.
+func WritePendingProperties(serverDir string, props map[string]string, keys []string) error {
+	if err := os.MkdirAll(serverDir, 0755); err != nil {
+		return err
+	}
+
+	payload := PendingPropertiesPayload{
+		Properties: props,
+		Keys:       keys,
+	}
+
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(serverDir, PendingPropertiesFilename)
+	return os.WriteFile(path, data, 0644)
+}
+
+// RemovePendingProperties deletes the pre-boot pending property overrides file once applied.
+func RemovePendingProperties(serverDir string) error {
+	path := filepath.Join(serverDir, PendingPropertiesFilename)
+	err := os.Remove(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 // AllowlistEntry represents a player allowlist entry.
 type AllowlistEntry struct {
 	Name               string `json:"name"`
