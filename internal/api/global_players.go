@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -323,3 +324,85 @@ func (h *GlobalPlayerHandler) PromotePlayer(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(saved)
 }
+
+// SetRole changes a global player's permission role (operator, member, visitor) and propagates to servers.
+func (h *GlobalPlayerHandler) SetRole(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid player ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	var payload struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || strings.TrimSpace(payload.Role) == "" {
+		http.Error(w, `{"error": "Role is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	existing, err := h.db.GetGlobalPlayer(r.Context(), id)
+	if err != nil {
+		http.Error(w, `{"error": "Global player not found"}`, http.StatusNotFound)
+		return
+	}
+
+	existing.Permission = strings.ToLower(strings.TrimSpace(payload.Role))
+	saved, err := h.db.UpdateGlobalPlayer(r.Context(), existing)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to update global player: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	// Propagate to all servers
+	allServers, err := h.db.ListServers(r.Context())
+	if err == nil {
+		for _, s := range allServers {
+			if s.Status == models.ServerStatusRunning && h.engine != nil {
+				if existing.Permission == "operator" {
+					_ = h.engine.SendConsoleCommand(r.Context(), &s, "op "+existing.Name)
+				} else {
+					_ = h.engine.SendConsoleCommand(r.Context(), &s, "deop "+existing.Name)
+				}
+			}
+			// Update permissions.json
+			if h.dataDir != "" && existing.XUID != "" {
+				permPath := filepath.Join(h.dataDir, "servers", s.ID, "permissions.json")
+				if perms, err := configfile.ReadPermissions(permPath); err == nil {
+					found := false
+					for i := range perms {
+						if perms[i].XUID == existing.XUID {
+							perms[i].Permission = existing.Permission
+							found = true
+							break
+						}
+					}
+					if !found {
+						perms = append(perms, configfile.PermissionEntry{
+							Permission: existing.Permission,
+							XUID:       existing.XUID,
+						})
+					}
+					_ = configfile.WritePermissions(permPath, perms)
+					if s.Status == models.ServerStatusRunning && h.engine != nil {
+						_ = h.engine.SendConsoleCommand(r.Context(), &s, "permission reload")
+					}
+				}
+			}
+		}
+	}
+
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: GetUserClaims(r).Username,
+		Action:    "set_global_player_role",
+		Target:    saved.Name,
+		Details:   fmt.Sprintf(`{"role": "%s"}`, saved.Permission),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(saved)
+}
+

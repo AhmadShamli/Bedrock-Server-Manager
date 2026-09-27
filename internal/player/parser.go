@@ -9,10 +9,12 @@ import (
 
 // OnlinePlayer represents an active player on a Bedrock server.
 type OnlinePlayer struct {
-	ServerID string    `json:"server_id"`
-	Gamertag string    `json:"gamertag"`
-	XUID     string    `json:"xuid"`
-	JoinedAt time.Time `json:"joined_at"`
+	ServerID   string    `json:"server_id"`
+	Gamertag   string    `json:"gamertag"`
+	XUID       string    `json:"xuid"`
+	JoinedAt   time.Time `json:"joined_at"`
+	Permission string    `json:"permission,omitempty"`
+	IsOp       bool      `json:"is_op"`
 }
 
 // ChatMessage represents a captured in-game chat message.
@@ -28,6 +30,9 @@ var (
 	connectRegex = regexp.MustCompile(`Player connected:\s*([^,]+),\s*xuid:\s*(\w+)`)
 	// Player disconnected: Steve, xuid: 2535412345678901
 	disconnectRegex = regexp.MustCompile(`Player disconnected:\s*([^,]+),\s*xuid:\s*(\w+)`)
+	// Operator changed patterns:
+	opRegex   = regexp.MustCompile(`(?i)(?:Player made operator|Opped):\s*([^,]+)`)
+	deopRegex = regexp.MustCompile(`(?i)(?:Player removed from operators|De-opped|Deopped):\s*([^,]+)`)
 	// In-game chat patterns:
 	// <Steve> Hello world!
 	// [CHAT] Steve: Hello world!
@@ -100,7 +105,19 @@ func (m *Manager) ProcessLine(serverID, line string) {
 		return
 	}
 
-	// 3. Chat Detection
+	// 3. Operator Status Changed
+	if matches := opRegex.FindStringSubmatch(line); len(matches) == 2 {
+		gt := strings.TrimSpace(matches[1])
+		m.SetPlayerOp(serverID, gt, true)
+		return
+	}
+	if matches := deopRegex.FindStringSubmatch(line); len(matches) == 2 {
+		gt := strings.TrimSpace(matches[1])
+		m.SetPlayerOp(serverID, gt, false)
+		return
+	}
+
+	// 4. Chat Detection
 	var chatGT, chatMsg string
 	if matches := chatRegex1.FindStringSubmatch(line); len(matches) == 3 {
 		chatGT = strings.TrimSpace(matches[1])
@@ -127,6 +144,26 @@ func (m *Manager) ProcessLine(serverID, line string) {
 		}
 		m.chatFeeds[serverID] = append(feed, msg)
 		m.mu.Unlock()
+	}
+}
+
+// SetPlayerOp updates operator status for an active player in-memory.
+func (m *Manager) SetPlayerOp(serverID, gamertag string, isOp bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if players, exists := m.onlinePlayers[serverID]; exists {
+		for gt, p := range players {
+			if strings.EqualFold(gt, gamertag) {
+				p.IsOp = isOp
+				if isOp {
+					p.Permission = "operator"
+				} else {
+					p.Permission = "member"
+				}
+				break
+			}
+		}
 	}
 }
 
@@ -161,6 +198,20 @@ func (m *Manager) GetOnlinePlayers(serverID string) []OnlinePlayer {
 	list := make([]OnlinePlayer, 0)
 	for _, p := range playersMap {
 		list = append(list, *p)
+	}
+	return list
+}
+
+// GetAllOnlinePlayers returns active players across all servers.
+func (m *Manager) GetAllOnlinePlayers() []OnlinePlayer {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	list := make([]OnlinePlayer, 0)
+	for _, playersMap := range m.onlinePlayers {
+		for _, p := range playersMap {
+			list = append(list, *p)
+		}
 	}
 	return list
 }

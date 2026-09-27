@@ -1571,6 +1571,151 @@ func (db *ManagerDB) DeleteGlobalPlayerByName(ctx context.Context, nameOrXuid st
 	return err
 }
 
+// --- Banned Players Operations ---
+
+// CreatePlayerBan records a new player ban (instance or global).
+func (db *ManagerDB) CreatePlayerBan(ctx context.Context, ban *models.BannedPlayer) error {
+	now := FormatTime(time.Now().UTC())
+	ban.CreatedAt = time.Now().UTC()
+
+	var serverIDVal sql.NullString
+	if ban.ServerID != nil && *ban.ServerID != "" {
+		serverIDVal = sql.NullString{String: *ban.ServerID, Valid: true}
+	}
+
+	res, err := db.ExecContext(ctx, `
+		INSERT INTO banned_players (server_id, gamertag, xuid, reason, banned_by, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		serverIDVal, strings.TrimSpace(ban.Gamertag), strings.TrimSpace(ban.XUID),
+		strings.TrimSpace(ban.Reason), strings.TrimSpace(ban.BannedBy), now,
+	)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err == nil {
+		ban.ID = id
+	}
+	return nil
+}
+
+// ListPlayerBans queries banned players. If serverID is non-nil, returns instance bans + global bans.
+// If serverID is nil, returns all bans across the manager.
+func (db *ManagerDB) ListPlayerBans(ctx context.Context, serverID *string) ([]models.BannedPlayer, error) {
+	var rows *sql.Rows
+	var err error
+
+	if serverID != nil && *serverID != "" {
+		rows, err = db.QueryContext(ctx, `
+			SELECT id, server_id, gamertag, xuid, reason, banned_by, created_at
+			FROM banned_players
+			WHERE server_id = ? OR server_id IS NULL OR server_id = ''
+			ORDER BY id DESC`, *serverID,
+		)
+	} else {
+		rows, err = db.QueryContext(ctx, `
+			SELECT id, server_id, gamertag, xuid, reason, banned_by, created_at
+			FROM banned_players
+			ORDER BY id DESC`,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bans := make([]models.BannedPlayer, 0)
+	for rows.Next() {
+		var b models.BannedPlayer
+		var sID sql.NullString
+		var createdAtStr string
+		if err := rows.Scan(&b.ID, &sID, &b.Gamertag, &b.XUID, &b.Reason, &b.BannedBy, &createdAtStr); err != nil {
+			return nil, err
+		}
+		if sID.Valid && sID.String != "" {
+			val := sID.String
+			b.ServerID = &val
+		}
+		if t, err := ParseTime(createdAtStr); err == nil {
+			b.CreatedAt = t
+		}
+		bans = append(bans, b)
+	}
+	return bans, rows.Err()
+}
+
+// GetPlayerBan retrieves a single ban rule by ID.
+func (db *ManagerDB) GetPlayerBan(ctx context.Context, id int64) (*models.BannedPlayer, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT id, server_id, gamertag, xuid, reason, banned_by, created_at
+		FROM banned_players
+		WHERE id = ?`, id,
+	)
+	var b models.BannedPlayer
+	var sID sql.NullString
+	var createdAtStr string
+	if err := row.Scan(&b.ID, &sID, &b.Gamertag, &b.XUID, &b.Reason, &b.BannedBy, &createdAtStr); err != nil {
+		return nil, err
+	}
+	if sID.Valid && sID.String != "" {
+		val := sID.String
+		b.ServerID = &val
+	}
+	if t, err := ParseTime(createdAtStr); err == nil {
+		b.CreatedAt = t
+	}
+	return &b, nil
+}
+
+// DeletePlayerBan deletes a ban rule by ID.
+func (db *ManagerDB) DeletePlayerBan(ctx context.Context, id int64) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM banned_players WHERE id = ?", id)
+	return err
+}
+
+// DeletePlayerBanByGamertag deletes ban rules matching a gamertag (and optional serverID).
+func (db *ManagerDB) DeletePlayerBanByGamertag(ctx context.Context, serverID *string, gamertag string) error {
+	if serverID != nil && *serverID != "" {
+		_, err := db.ExecContext(ctx, `
+			DELETE FROM banned_players
+			WHERE (server_id = ? OR server_id IS NULL OR server_id = '')
+			  AND LOWER(gamertag) = LOWER(?)`, *serverID, strings.TrimSpace(gamertag),
+		)
+		return err
+	}
+	_, err := db.ExecContext(ctx, "DELETE FROM banned_players WHERE LOWER(gamertag) = LOWER(?)", strings.TrimSpace(gamertag))
+	return err
+}
+
+// IsPlayerBanned checks if a gamertag or XUID is banned for a given server (instance or global ban).
+func (db *ManagerDB) IsPlayerBanned(ctx context.Context, serverID, gamertag, xuid string) (bool, string, error) {
+	cleanGT := strings.TrimSpace(strings.ToLower(gamertag))
+	cleanXUID := strings.TrimSpace(xuid)
+
+	bans, err := db.ListPlayerBans(ctx, &serverID)
+	if err != nil {
+		return false, "", err
+	}
+
+	for _, ban := range bans {
+		if cleanGT != "" && strings.EqualFold(ban.Gamertag, cleanGT) {
+			reason := ban.Reason
+			if reason == "" {
+				reason = "Banned by administrator"
+			}
+			return true, reason, nil
+		}
+		if cleanXUID != "" && ban.XUID != "" && ban.XUID == cleanXUID {
+			reason := ban.Reason
+			if reason == "" {
+				reason = "Banned by administrator"
+			}
+			return true, reason, nil
+		}
+	}
+	return false, "", nil
+}
+
 // --- MetricsDB Operations ---
 
 func (db *MetricsDB) InsertRawBatch(ctx context.Context, samples []models.MetricRaw) error {

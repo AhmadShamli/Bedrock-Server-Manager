@@ -156,6 +156,19 @@ CREATE TABLE IF NOT EXISTS global_players (
 CREATE INDEX IF NOT EXISTS idx_global_players_xuid ON global_players(xuid);
 CREATE INDEX IF NOT EXISTS idx_global_players_allowlisted ON global_players(is_allowlisted);
 CREATE INDEX IF NOT EXISTS idx_global_players_permission ON global_players(permission);
+
+CREATE TABLE IF NOT EXISTS banned_players (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id TEXT NULL,
+    gamertag TEXT NOT NULL,
+    xuid TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
+    banned_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_banned_players_server ON banned_players(server_id);
+CREATE INDEX IF NOT EXISTS idx_banned_players_gamertag ON banned_players(gamertag);
+CREATE INDEX IF NOT EXISTS idx_banned_players_xuid ON banned_players(xuid);
 `
 
 // MetricsSchemaSQL contains table definitions and indices for the high-frequency telemetry database.

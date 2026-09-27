@@ -46,7 +46,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	mw := NewMiddleware(opts.DB, opts.IPResolver, opts.RateLimiter, opts.JWTSecret)
 	authHandler := NewAuthHandler(opts.DB, opts.RateLimiter, opts.JWTSecret)
 	systemHandler := NewSystemHandler(opts.DB)
-	serverHandler := NewServerHandler(opts.DB, opts.Engine, opts.PortAllocator, opts.DataDir, opts.TelemetryCollector, opts.MetricsDB)
+	serverHandler := NewServerHandler(opts.DB, opts.Engine, opts.PortAllocator, opts.DataDir, opts.TelemetryCollector, opts.MetricsDB, opts.PlayerManager)
 	knockHandler := NewKnockHandler(opts.DB, opts.RateLimiter, opts.Pepper, opts.Firewall)
 	playerHubHandler := NewPlayerHubHandler(serverHandler, opts.PlayerManager)
 	backupHandler := NewBackupHandler(opts.DB, opts.Engine, opts.DataDir)
@@ -97,6 +97,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 			// Servers
 			authGroup.Get("/servers", serverHandler.List)
+			authGroup.Get("/active-players", playerHubHandler.GetAllActivePlayers)
 
 			authGroup.Group(func(srvGroup chi.Router) {
 				srvGroup.Use(mw.RequireServerAccess)
@@ -125,6 +126,9 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				srvGroup.Post("/servers/{id}/players/kick", playerHubHandler.KickPlayer)
 				srvGroup.Post("/servers/{id}/players/op", playerHubHandler.OpPlayer)
 				srvGroup.Post("/servers/{id}/players/deop", playerHubHandler.DeopPlayer)
+				srvGroup.Post("/servers/{id}/players/ban", playerHubHandler.BanPlayer)
+				srvGroup.Get("/servers/{id}/players/bans", playerHubHandler.ListBans)
+				srvGroup.Post("/servers/{id}/players/unban", playerHubHandler.UnbanPlayer)
 
 				// RakNet Ping
 				srvGroup.Get("/servers/{id}/ping", playerHubHandler.Ping)
@@ -180,9 +184,15 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Post("/global-players", globalPlayerHandler.Create)
 				adminGroup.Get("/global-players/{id}", globalPlayerHandler.Get)
 				adminGroup.Put("/global-players/{id}", globalPlayerHandler.Update)
+				adminGroup.Post("/global-players/{id}/role", globalPlayerHandler.SetRole)
 				adminGroup.Delete("/global-players/{id}", globalPlayerHandler.Delete)
 				adminGroup.Post("/global-players/remove-by-name", globalPlayerHandler.RemoveByName)
 				adminGroup.Post("/global-players/sync-all", globalPlayerHandler.SyncAll)
+
+				// Banned Players Management
+				adminGroup.Get("/banned-players", playerHubHandler.ListAllBans)
+				adminGroup.Post("/banned-players", playerHubHandler.BanPlayer)
+				adminGroup.Delete("/banned-players/{id}", playerHubHandler.DeleteBan)
 
 				// Task Scheduler
 				adminGroup.Get("/tasks", taskHandler.List)

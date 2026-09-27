@@ -23,6 +23,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/raknet"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/scheduler"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
@@ -138,10 +139,22 @@ func main() {
 	// 6. Initialize Webhook Dispatcher
 	webhookDispatcher := webhook.NewDispatcher()
 
+	var serverEngine engine.ServerEngine
+
 	// 7. Initialize Player Manager
 	playerMgr := player.NewManager(
 		func(serverID, gamertag, xuid string) {
 			log.Printf("[PlayerHub] Player '%s' (XUID: %s) joined %s", gamertag, xuid, serverID)
+
+			// Enforce automated ban if player is banned on instance or globally
+			if banned, reason, _ := mgrDB.IsPlayerBanned(context.Background(), serverID, gamertag, xuid); banned {
+				log.Printf("[PlayerHub] Enforcing ban on '%s' (XUID: %s) on server %s (Reason: %s)", gamertag, xuid, serverID, reason)
+				if s, err := mgrDB.GetServer(context.Background(), serverID); err == nil && serverEngine != nil {
+					_ = serverEngine.SendConsoleCommand(context.Background(), s, fmt.Sprintf("kick %s %s", gamertag, reason))
+				}
+				return
+			}
+
 			webhookURL, _ := mgrDB.GetSetting(context.Background(), "discord_webhook_url")
 			if webhookURL != "" {
 				_ = webhookDispatcher.NotifyPlayerJoined(context.Background(), webhookURL, serverID, gamertag, 1)
@@ -157,7 +170,6 @@ func main() {
 	)
 
 	// 8. Initialize Container Orchestration Engine
-	var serverEngine engine.ServerEngine
 	dockerEng, err := engine.NewDockerEngine(cfg.DockerHost)
 	if err == nil {
 		serverEngine = dockerEng
@@ -197,7 +209,13 @@ func main() {
 			for _, s := range servers {
 				if s.Status == models.ServerStatusRunning {
 					if stats, err := serverEngine.GetContainerStats(context.Background(), &s); err == nil && stats != nil {
-						telemetryCollector.Ingest(s.ID, stats.CPUPercent, stats.RAMBytes, stats.PlayerCount)
+						playerCount := len(playerMgr.GetOnlinePlayers(s.ID))
+						if playerCount == 0 && s.Port > 0 {
+							if pong, err := raknet.PingServer("127.0.0.1", s.Port, 300*time.Millisecond); err == nil && pong.OnlinePlayers > 0 {
+								playerCount = pong.OnlinePlayers
+							}
+						}
+						telemetryCollector.Ingest(s.ID, stats.CPUPercent, stats.RAMBytes, playerCount)
 					}
 				}
 			}

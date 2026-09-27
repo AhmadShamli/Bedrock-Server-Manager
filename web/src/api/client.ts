@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, GlobalPlayer, MetricsData, Preset, SeedPreset } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -212,7 +212,14 @@ class APIClient {
 
   // Player Hub & Live Chat
   async getPlayers(id: string): Promise<{
-    online_players: Array<{ server_id: string; gamertag: string; xuid: string; joined_at: string }>;
+    online_players: Array<{
+      server_id: string;
+      gamertag: string;
+      xuid: string;
+      joined_at: string;
+      is_op?: boolean;
+      permission?: string;
+    }>;
     online_count: number;
   }> {
     const res = await this.request(`/api/servers/${id}/players`);
@@ -252,6 +259,47 @@ class APIClient {
     return this.request(`/api/servers/${id}/players/deop`, {
       method: 'POST',
       body: JSON.stringify({ gamertag }),
+    });
+  }
+
+  async banPlayer(id: string, data: { gamertag: string; xuid?: string; reason?: string; scope?: 'instance' | 'global'; ban_ip?: boolean; ip_address?: string }): Promise<{ status: string; gamertag: string; scope: string; ip_banned: boolean; banned_ip?: string }> {
+    return this.request(`/api/servers/${id}/players/ban`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async banGlobalPlayer(data: { gamertag: string; xuid?: string; reason?: string; ban_ip?: boolean; ip_address?: string }): Promise<{ status: string; gamertag: string; scope: string; ip_banned: boolean; banned_ip?: string }> {
+    return this.request('/api/banned-players', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, scope: 'global' }),
+    });
+  }
+
+  async getActivePlayers(): Promise<ActivePlayerInfo[]> {
+    const res = await this.request('/api/active-players');
+    return Array.isArray(res) ? res : [];
+  }
+
+  async listPlayerBans(id: string): Promise<BannedPlayer[]> {
+    return this.request(`/api/servers/${id}/players/bans`);
+  }
+
+  async unbanPlayer(id: string, data: { gamertag?: string; id?: number }): Promise<{ status: string }> {
+    return this.request(`/api/servers/${id}/players/unban`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async listAllBannedPlayers(): Promise<BannedPlayer[]> {
+    const res = await this.request('/api/banned-players');
+    return Array.isArray(res) ? res : [];
+  }
+
+  async deleteBan(id: number): Promise<{ status: string }> {
+    return this.request(`/api/banned-players/${id}`, {
+      method: 'DELETE',
     });
   }
 
@@ -679,6 +727,13 @@ class APIClient {
     return this.request(`/api/global-players/${id}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
+    });
+  }
+
+  async setGlobalPlayerRole(id: number, role: 'operator' | 'member' | 'visitor'): Promise<GlobalPlayer> {
+    return this.request(`/api/global-players/${id}/role`, {
+      method: 'POST',
+      body: JSON.stringify({ role }),
     });
   }
 

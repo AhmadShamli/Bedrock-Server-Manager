@@ -15,17 +15,19 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/raknet"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/go-chi/chi/v5"
 )
 
 type ServerHandler struct {
-	db        *database.ManagerDB
-	engine    engine.ServerEngine
-	allocator *allocator.PortAllocator
-	dataDir   string
-	telemetry *telemetry.TelemetryCollector
-	metricsDB *database.MetricsDB
+	db            *database.ManagerDB
+	engine        engine.ServerEngine
+	allocator     *allocator.PortAllocator
+	dataDir       string
+	telemetry     *telemetry.TelemetryCollector
+	metricsDB     *database.MetricsDB
+	playerManager *player.Manager
 }
 
 func NewServerHandler(
@@ -35,14 +37,16 @@ func NewServerHandler(
 	dataDir string,
 	tc *telemetry.TelemetryCollector,
 	mdb *database.MetricsDB,
+	pm *player.Manager,
 ) *ServerHandler {
 	return &ServerHandler{
-		db:        db,
-		engine:    eng,
-		allocator: pa,
-		dataDir:   dataDir,
-		telemetry: tc,
-		metricsDB: mdb,
+		db:            db,
+		engine:        eng,
+		allocator:     pa,
+		dataDir:       dataDir,
+		telemetry:     tc,
+		metricsDB:     mdb,
+		playerManager: pm,
 	}
 }
 
@@ -402,6 +406,15 @@ func (h *ServerHandler) Stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.playerManager != nil {
+		stats.PlayerCount = len(h.playerManager.GetOnlinePlayers(server.ID))
+		if stats.PlayerCount == 0 && server.Port > 0 && server.Status == models.ServerStatusRunning {
+			if pong, err := raknet.PingServer("127.0.0.1", server.Port, 300*time.Millisecond); err == nil && pong.OnlinePlayers > 0 {
+				stats.PlayerCount = pong.OnlinePlayers
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(stats)
 }
@@ -491,6 +504,14 @@ func (h *ServerHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 	var currentStats *models.MetricRaw
 	if server.Status == models.ServerStatusRunning {
 		if cs, err := h.engine.GetContainerStats(r.Context(), server); err == nil && cs != nil {
+			if h.playerManager != nil {
+				cs.PlayerCount = len(h.playerManager.GetOnlinePlayers(server.ID))
+				if cs.PlayerCount == 0 && server.Port > 0 {
+					if pong, err := raknet.PingServer("127.0.0.1", server.Port, 300*time.Millisecond); err == nil && pong.OnlinePlayers > 0 {
+						cs.PlayerCount = pong.OnlinePlayers
+					}
+				}
+			}
 			currentStats = cs
 		}
 	}

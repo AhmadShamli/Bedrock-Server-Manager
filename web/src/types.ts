@@ -71,6 +71,16 @@ export interface PortGateBanRule {
   created_at: string;
 }
 
+export interface BannedPlayer {
+  id: number;
+  server_id?: string | null;
+  gamertag: string;
+  xuid?: string;
+  reason: string;
+  banned_by: string;
+  created_at: string;
+}
+
 export interface KnockConfig {
   server_id: string;
   server_name: string;
@@ -184,3 +194,14 @@ export interface SeedPreset {
   difficulty?: string;
   icon?: string;
 }
+
+export interface ActivePlayerInfo {
+  server_id: string;
+  server_name: string;
+  gamertag: string;
+  xuid: string;
+  joined_at: string;
+  permission?: string;
+  is_op?: boolean;
+}
+

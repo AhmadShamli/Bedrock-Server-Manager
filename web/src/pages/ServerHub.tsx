@@ -5,10 +5,10 @@ import {
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
-  ChevronDown, ChevronRight, Plus, Activity
+  ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule } from '../types';
+import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
@@ -102,10 +102,12 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [metricsLoading, setMetricsLoading] = useState(false);
 
   // Player Hub & Chat state
-  const [onlinePlayers, setOnlinePlayers] = useState<Array<{ gamertag: string; xuid: string; joined_at: string }>>([]);
+  const [onlinePlayers, setOnlinePlayers] = useState<Array<{ gamertag: string; xuid: string; joined_at: string; is_op?: boolean; permission?: string }>>([]);
   const [chatFeed, setChatFeed] = useState<Array<{ gamertag: string; message: string; timestamp: string }>>([]);
   const [broadcastMsg, setBroadcastMsg] = useState('');
   const [broadcastTarget, setBroadcastTarget] = useState('');
+  const [serverBans, setServerBans] = useState<BannedPlayer[]>([]);
+  const [serverBansLoading, setServerBansLoading] = useState(false);
 
   // Configuration state
   const [properties, setProperties] = useState<Record<string, string>>({});
@@ -136,6 +138,20 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   // Version update info
   const [updateInfo, setUpdateInfo] = useState<{ current_version: string; latest_version: string; update_available: boolean; release_url: string } | null>(null);
+
+  // Player Moderation & Management Modal state
+  const [selectedPlayer, setSelectedPlayer] = useState<{
+    gamertag: string;
+    xuid: string;
+    is_op?: boolean;
+    ip_address?: string;
+  } | null>(null);
+  const [playerModalRole, setPlayerModalRole] = useState<'member' | 'operator'>('member');
+  const [playerBanScope, setPlayerBanScope] = useState<'instance' | 'global'>('instance');
+  const [playerBanReason, setPlayerBanReason] = useState('Banned by administrator');
+  const [playerBanIP, setPlayerBanIP] = useState(true);
+  const [playerBanLoading, setPlayerBanLoading] = useState(false);
+  const [playerGlobalLoading, setPlayerGlobalLoading] = useState(false);
 
   // Pagination hooks for tables
   const {
@@ -258,13 +274,18 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   // Live Stats Poller
   useEffect(() => {
-    if (!id || server?.status !== 'running') return;
-    const interval = setInterval(async () => {
+    if (!id || server?.status !== 'running') {
+      setStats(null);
+      return;
+    }
+    const fetchLiveStats = async () => {
       try {
         const res = await api.getStats(id);
         setStats(res);
       } catch {}
-    }, 2000);
+    };
+    fetchLiveStats();
+    const interval = setInterval(fetchLiveStats, 2000);
     return () => clearInterval(interval);
   }, [id, server?.status]);
 
@@ -311,9 +332,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   // Fetch tab data when active tab switches
   useEffect(() => {
     if (!id) return;
-    if (activeTab === 'players') {
+    if (activeTab === 'overview') {
+      if (server?.status === 'running') {
+        api.getPlayers(id).then((res) => setOnlinePlayers(Array.isArray(res?.online_players) ? res.online_players : [])).catch(() => {});
+      }
+    } else if (activeTab === 'players') {
       api.getPlayers(id).then((res) => setOnlinePlayers(Array.isArray(res?.online_players) ? res.online_players : [])).catch(() => {});
+      api.getPermissions(id).then((res) => setPermissions(Array.isArray(res) ? res : [])).catch(() => {});
       api.getChat(id).then((res) => setChatFeed(Array.isArray(res) ? res : [])).catch(() => {});
+      api.listPlayerBans(id).then((res) => setServerBans(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'portgate') {
       api.listLeases(id).then((res) => setLeases(Array.isArray(res) ? res : [])).catch(() => {});
       api.listAccessKeys(id).then((res) => setAccessKeys(Array.isArray(res) ? res : [])).catch(() => {});
@@ -564,10 +591,148 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const handleOp = async (gt: string) => {
     if (!id) return;
     try {
+      setOnlinePlayers((prev) =>
+        prev.map((p) => (p.gamertag === gt ? { ...p, is_op: true, permission: 'operator' } : p))
+      );
       await api.opPlayer(id, gt);
-      alert(`Granted operator status to ${gt}`);
+      const [resPl, resPerm] = await Promise.allSettled([
+        api.getPlayers(id),
+        api.getPermissions(id),
+      ]);
+      if (resPl.status === 'fulfilled' && Array.isArray(resPl.value?.online_players)) {
+        setOnlinePlayers(resPl.value.online_players);
+      }
+      if (resPerm.status === 'fulfilled' && Array.isArray(resPerm.value)) {
+        setPermissions(resPerm.value);
+      }
     } catch (err: any) {
+      const res = await api.getPlayers(id).catch(() => null);
+      if (res?.online_players) setOnlinePlayers(res.online_players);
       alert(err.message || 'Failed to op player');
+    }
+  };
+
+  const handleDeop = async (gt: string) => {
+    if (!id) return;
+    if (!confirm(`Are you sure you want to revoke operator status from ${gt}?`)) return;
+    try {
+      setOnlinePlayers((prev) =>
+        prev.map((p) => (p.gamertag === gt ? { ...p, is_op: false, permission: 'member' } : p))
+      );
+      await api.deopPlayer(id, gt);
+      const [resPl, resPerm] = await Promise.allSettled([
+        api.getPlayers(id),
+        api.getPermissions(id),
+      ]);
+      if (resPl.status === 'fulfilled' && Array.isArray(resPl.value?.online_players)) {
+        setOnlinePlayers(resPl.value.online_players);
+      }
+      if (resPerm.status === 'fulfilled' && Array.isArray(resPerm.value)) {
+        setPermissions(resPerm.value);
+      }
+    } catch (err: any) {
+      const res = await api.getPlayers(id).catch(() => null);
+      if (res?.online_players) setOnlinePlayers(res.online_players);
+      alert(err.message || 'Failed to deop player');
+    }
+  };
+
+  const handleOpenPlayerModal = (p: { gamertag: string; xuid: string; is_op?: boolean }) => {
+    const matchedLease = leases.find(
+      (l) => l.gamertag && l.gamertag.toLowerCase() === p.gamertag.toLowerCase()
+    );
+    setSelectedPlayer({
+      ...p,
+      ip_address: matchedLease?.ip_address,
+    });
+    setPlayerModalRole(p.is_op ? 'operator' : 'member');
+    setPlayerBanScope('instance');
+    setPlayerBanReason('Banned by administrator');
+    setPlayerBanIP(Boolean(matchedLease?.ip_address));
+  };
+
+  const handleAddModalPlayerToGlobal = async () => {
+    if (!id || !selectedPlayer) return;
+    setPlayerGlobalLoading(true);
+    try {
+      await api.promotePlayerToGlobal(id, {
+        name: selectedPlayer.gamertag,
+        xuid: selectedPlayer.xuid || '',
+        permission: playerModalRole,
+        is_allowlisted: true,
+      });
+      const newGps = await api.listGlobalPlayers();
+      setGlobalPlayers(Array.isArray(newGps) ? newGps : []);
+      alert(`Player '${selectedPlayer.gamertag}' added to Global Players as ${playerModalRole}!`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to add player to Global Players');
+    } finally {
+      setPlayerGlobalLoading(false);
+    }
+  };
+
+  const handleBanModalPlayer = async () => {
+    if (!id || !selectedPlayer) return;
+    const confirmMsg =
+      playerBanScope === 'global'
+        ? `Are you sure you want to GLOBALLY ban '${selectedPlayer.gamertag}' from all instances?`
+        : `Are you sure you want to ban '${selectedPlayer.gamertag}' from this server instance?`;
+    if (!confirm(confirmMsg)) return;
+
+    setPlayerBanLoading(true);
+    try {
+      await api.banPlayer(id, {
+        gamertag: selectedPlayer.gamertag,
+        xuid: selectedPlayer.xuid || '',
+        scope: playerBanScope,
+        reason: playerBanReason,
+        ban_ip: playerBanIP,
+        ip_address: selectedPlayer.ip_address,
+      });
+
+      alert(`Player '${selectedPlayer.gamertag}' has been banned (${playerBanScope}) and kicked!`);
+      setSelectedPlayer(null);
+
+      // Refresh online players, allowlist, leases, and bans
+      const [resPl, resAl, resLeases, resBans] = await Promise.allSettled([
+        api.getPlayers(id),
+        api.getAllowlist(id),
+        api.listLeases(id),
+        api.listPlayerBans(id),
+      ]);
+      if (resPl.status === 'fulfilled' && Array.isArray(resPl.value?.online_players)) {
+        setOnlinePlayers(resPl.value.online_players);
+      }
+      if (resAl.status === 'fulfilled' && Array.isArray(resAl.value)) {
+        setAllowlist(resAl.value);
+      }
+      if (resLeases.status === 'fulfilled' && Array.isArray(resLeases.value)) {
+        setLeases(resLeases.value);
+      }
+      if (resBans.status === 'fulfilled' && Array.isArray(resBans.value)) {
+        setServerBans(resBans.value);
+      }
+      if (playerBanScope === 'global') {
+        const newGps = await api.listGlobalPlayers().catch(() => []);
+        setGlobalPlayers(Array.isArray(newGps) ? newGps : []);
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to ban player');
+    } finally {
+      setPlayerBanLoading(false);
+    }
+  };
+
+  const handleUnbanServerPlayer = async (ban: BannedPlayer) => {
+    if (!id) return;
+    if (!confirm(`Are you sure you want to unban '${ban.gamertag}'?`)) return;
+    try {
+      await api.unbanPlayer(id, { id: ban.id });
+      alert(`Player '${ban.gamertag}' has been unbanned.`);
+      const updated = await api.listPlayerBans(id);
+      setServerBans(Array.isArray(updated) ? updated : []);
+    } catch (err: any) {
+      alert(err.message || 'Failed to unban player');
     }
   };
 
@@ -1186,8 +1351,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-slate-400">Online Players</span>
-                    <span className={stats ? "text-cyber-cyan font-bold" : "text-slate-500"}>
-                      {stats ? stats.player_count : '—'}
+                    <span className={server.status === 'running' ? "text-cyber-cyan font-bold" : "text-slate-500"}>
+                      {server.status === 'running'
+                        ? (stats ? stats.player_count : (onlinePlayers.length > 0 ? onlinePlayers.length : 0))
+                        : 0}
                     </span>
                   </div>
                 </div>
@@ -1281,7 +1448,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
       {/* PLAYERS & CHAT TAB */}
       {activeTab === 'players' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Online Players */}
           <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 flex flex-col h-[520px]">
             <h3 className="font-mono text-sm font-bold text-slate-200 mb-3 flex items-center justify-between">
@@ -1295,30 +1463,65 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               {(onlinePlayers || []).length === 0 ? (
                 <p className="text-slate-600 italic">No players online right now.</p>
               ) : (
-                (onlinePlayers || []).map((p) => (
-                  <div key={p.gamertag} className="p-2.5 bg-obsidian-900 border border-obsidian-700/80 rounded-lg flex items-center justify-between">
-                    <div>
-                      <div className="font-bold text-slate-100">{p.gamertag}</div>
-                      <div className="text-[10px] text-slate-500">XUID: {p.xuid}</div>
+                (onlinePlayers || []).map((p) => {
+                  const isOp = !!p.is_op || (permissions || []).some(
+                    (perm) => (perm.xuid === p.xuid || (p.gamertag && perm.xuid?.toLowerCase() === p.gamertag.toLowerCase())) && perm.permission === 'operator'
+                  );
+
+                  return (
+                    <div key={p.gamertag} className="p-2.5 bg-obsidian-900 border border-obsidian-700/80 rounded-lg flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-bold text-slate-100">{p.gamertag}</span>
+                          {isOp && (
+                            <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold">
+                              OP
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500">XUID: {p.xuid || 'N/A'}</div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        {isOp ? (
+                          <button
+                            type="button"
+                            onClick={() => handleDeop(p.gamertag)}
+                            title="Demote from Operator (DeOP)"
+                            className="px-2.5 py-1 bg-amber-950/50 hover:bg-amber-900/80 text-amber-300 hover:text-amber-100 border border-amber-600/50 rounded text-[11px] font-semibold transition-colors"
+                          >
+                            DeOP
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleOp(p.gamertag)}
+                            title="Promote to Operator (OP)"
+                            className="px-2.5 py-1 bg-obsidian-800 hover:bg-emerald-950 hover:text-emerald-400 text-slate-300 rounded text-[11px] font-semibold transition-colors"
+                          >
+                            OP
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleKick(p.gamertag)}
+                          title="Kick Player"
+                          className="px-2.5 py-1 bg-obsidian-800 hover:bg-rose-950 hover:text-rose-400 text-slate-300 rounded text-[11px] font-semibold transition-colors"
+                        >
+                          Kick
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenPlayerModal(p)}
+                          title="Player Moderation & Actions"
+                          className="px-2.5 py-1 bg-obsidian-800 hover:bg-cyan-950/80 hover:text-cyan-300 text-slate-300 border border-obsidian-700/80 hover:border-cyan-500/40 rounded text-[11px] font-semibold transition-colors flex items-center space-x-1"
+                        >
+                          <UserCog className="w-3.5 h-3.5" />
+                          <span>Manage</span>
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => handleOp(p.gamertag)}
-                        title="Promote to Operator"
-                        className="px-2 py-1 bg-obsidian-800 hover:bg-emerald-950 hover:text-emerald-400 rounded text-[11px]"
-                      >
-                        OP
-                      </button>
-                      <button
-                        onClick={() => handleKick(p.gamertag)}
-                        title="Kick Player"
-                        className="px-2 py-1 bg-obsidian-800 hover:bg-rose-950 hover:text-rose-400 rounded text-[11px]"
-                      >
-                        Kick
-                      </button>
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
 
@@ -1365,6 +1568,93 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             </div>
           </div>
         </div>
+
+        {/* Banned Players Panel */}
+        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-mono text-sm font-bold text-slate-200 flex items-center gap-2">
+              <Ban className="w-4 h-4 text-rose-400" />
+              <span>Banned Players ({(serverBans || []).length})</span>
+            </h3>
+            <button
+              type="button"
+              disabled={serverBansLoading}
+              onClick={async () => {
+                if (!id) return;
+                setServerBansLoading(true);
+                try {
+                  const res = await api.listPlayerBans(id);
+                  setServerBans(Array.isArray(res) ? res : []);
+                } finally {
+                  setServerBansLoading(false);
+                }
+              }}
+              title="Refresh bans"
+              className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-obsidian-800 transition-colors"
+            >
+              {serverBansLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left font-mono text-xs">
+              <thead className="bg-obsidian-950/80 border-b border-obsidian-800 text-slate-400 uppercase text-[10px] tracking-wider">
+                <tr>
+                  <th className="px-4 py-2.5">Gamertag</th>
+                  <th className="px-4 py-2.5">Ban Scope</th>
+                  <th className="px-4 py-2.5">Reason</th>
+                  <th className="px-4 py-2.5">Banned By</th>
+                  <th className="px-4 py-2.5">Banned Date</th>
+                  <th className="px-4 py-2.5 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-obsidian-800/60 text-slate-300">
+                {(serverBans || []).length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-6 text-center text-slate-500 italic">
+                      No players banned on this server.
+                    </td>
+                  </tr>
+                ) : (
+                  (serverBans || []).map((b) => (
+                    <tr key={b.id} className="hover:bg-obsidian-850/60 transition-colors">
+                      <td className="px-4 py-3 font-bold text-rose-300 flex items-center gap-2">
+                        <Ban className="w-3.5 h-3.5 text-rose-400" />
+                        <span>{b.gamertag}</span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {!b.server_id ? (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-rose-950/80 text-rose-300 border border-rose-600/50">
+                            Global Ban
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-amber-950/50 text-amber-300 border border-amber-600/40">
+                            Instance Ban
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-slate-300">{b.reason || 'Banned by administrator'}</td>
+                      <td className="px-4 py-3 text-slate-400">{b.banned_by || 'Admin'}</td>
+                      <td className="px-4 py-3 text-slate-500 text-[11px]">
+                        {b.created_at ? new Date(b.created_at).toLocaleDateString() : 'N/A'}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleUnbanServerPlayer(b)}
+                          className="px-2.5 py-1 rounded bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 hover:text-emerald-100 border border-emerald-600/40 text-[11px] font-bold transition-colors"
+                        >
+                          Unban
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
       )}
 
       {/* PORT GATE TAB */}
@@ -3067,6 +3357,191 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* PLAYER MODERATION & MANAGEMENT MODAL */}
+      {selectedPlayer && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-obsidian-900 border border-obsidian-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl relative space-y-5">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-obsidian-800 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-lg bg-cyan-950/60 border border-cyan-500/40 text-cyan-400">
+                  <UserCog className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-mono text-base font-bold text-slate-100">Player Moderation</h3>
+                  <p className="text-xs text-slate-400 font-mono">Global player promotion & ban enforcement</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedPlayer(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-obsidian-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Target Player Card */}
+            <div className="bg-obsidian-950 border border-obsidian-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="font-mono font-bold text-sm text-slate-100">{selectedPlayer.gamertag}</span>
+                  {selectedPlayer.is_op ? (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-600/40">
+                      OPERATOR
+                    </span>
+                  ) : (
+                    <span className="px-1.5 py-0.5 rounded text-[10px] font-mono text-slate-400 bg-obsidian-800 border border-obsidian-700">
+                      MEMBER
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] font-mono text-slate-500 mt-0.5">
+                  XUID: {selectedPlayer.xuid || 'N/A'}
+                </div>
+              </div>
+              {selectedPlayer.ip_address && (
+                <div className="text-right">
+                  <span className="text-[10px] font-mono text-slate-500 block uppercase">Port Gate Lease IP</span>
+                  <span className="font-mono text-xs text-cyan-400 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/40">
+                    {selectedPlayer.ip_address}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* SECTION 1: GLOBAL PLAYERS */}
+            <div className="bg-obsidian-850/60 border border-obsidian-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center space-x-2 text-xs font-mono font-semibold text-slate-200">
+                <Globe className="w-4 h-4 text-emerald-400" />
+                <span>Global Player Roster</span>
+              </div>
+              <p className="text-[11px] text-slate-400 font-mono">
+                Adding to Global Players syncs this player's allowlist entry and permission across all existing and newly provisioned server instances.
+              </p>
+
+              {globalPlayers.some((g) => g.name.toLowerCase() === selectedPlayer.gamertag.toLowerCase()) ? (
+                <div className="flex items-center justify-between p-2.5 rounded-lg bg-emerald-950/20 border border-emerald-800/40 text-emerald-300 text-xs font-mono">
+                  <div className="flex items-center space-x-2">
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span>Already on Global Player Roster</span>
+                  </div>
+                  <span className="text-[11px] text-emerald-400 font-bold uppercase">
+                    {globalPlayers.find((g) => g.name.toLowerCase() === selectedPlayer.gamertag.toLowerCase())?.permission || 'MEMBER'}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center space-x-3 pt-1">
+                  <div className="flex items-center space-x-2 flex-1">
+                    <label className="text-xs font-mono text-slate-400">Role:</label>
+                    <select
+                      value={playerModalRole}
+                      onChange={(e) => setPlayerModalRole(e.target.value as 'member' | 'operator')}
+                      className="px-2.5 py-1.5 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 font-mono text-xs focus:border-emerald-500"
+                    >
+                      <option value="member">Member</option>
+                      <option value="operator">Operator (OP)</option>
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={playerGlobalLoading}
+                    onClick={handleAddModalPlayerToGlobal}
+                    className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5 transition-colors disabled:opacity-40"
+                  >
+                    {playerGlobalLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UserPlus className="w-3.5 h-3.5" />}
+                    <span>Add to Global</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* SECTION 2: BAN ENFORCEMENT */}
+            <div className="bg-rose-950/20 border border-rose-900/40 rounded-xl p-4 space-y-3">
+              <div className="flex items-center space-x-2 text-xs font-mono font-bold text-rose-300">
+                <Ban className="w-4 h-4 text-rose-400" />
+                <span>Ban Enforcement</span>
+              </div>
+              <p className="text-[11px] text-slate-400 font-mono">
+                Banning immediately disconnects the player, strips them from the allowlist, and automatically ejects them whenever they attempt to reconnect.
+              </p>
+
+              {/* Scope Selection */}
+              <div>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1.5">Ban Scope</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPlayerBanScope('instance')}
+                    className={`px-3 py-2 rounded-lg border text-left transition-colors font-mono text-xs ${
+                      playerBanScope === 'instance'
+                        ? 'bg-rose-900/40 border-rose-500 text-rose-200 font-semibold'
+                        : 'bg-obsidian-950 border-obsidian-800 text-slate-400 hover:border-obsidian-700'
+                    }`}
+                  >
+                    <div className="font-bold">Current Instance</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">Only this server</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPlayerBanScope('global')}
+                    className={`px-3 py-2 rounded-lg border text-left transition-colors font-mono text-xs ${
+                      playerBanScope === 'global'
+                        ? 'bg-rose-900/40 border-rose-500 text-rose-200 font-semibold'
+                        : 'bg-obsidian-950 border-obsidian-800 text-slate-400 hover:border-obsidian-700'
+                    }`}
+                  >
+                    <div className="font-bold text-rose-300">Global Ban</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">All servers & global roster</div>
+                  </button>
+                </div>
+              </div>
+
+              {/* Ban Reason */}
+              <div>
+                <label className="block text-[11px] font-mono text-slate-400 mb-1">Reason for Ban</label>
+                <input
+                  type="text"
+                  value={playerBanReason}
+                  onChange={(e) => setPlayerBanReason(e.target.value)}
+                  placeholder="e.g. Griefing, unauthorized modifications"
+                  className="w-full px-3 py-1.5 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-100 font-mono text-xs focus:border-rose-500"
+                />
+              </div>
+
+              {/* Firewall IP Ban Checkbox */}
+              {selectedPlayer.ip_address && (
+                <label className="flex items-center space-x-2.5 pt-1 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={playerBanIP}
+                    onChange={(e) => setPlayerBanIP(e.target.checked)}
+                    className="rounded bg-obsidian-950 border-obsidian-700 text-rose-600 focus:ring-rose-500 h-4 w-4"
+                  />
+                  <div className="text-[11px] font-mono text-slate-300">
+                    <span>Block IP Address in Port Gate: </span>
+                    <code className="text-rose-400 font-bold">{selectedPlayer.ip_address}</code>
+                  </div>
+                </label>
+              )}
+
+              {/* Ban Button */}
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  disabled={playerBanLoading}
+                  onClick={handleBanModalPlayer}
+                  className="px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold font-mono text-xs flex items-center space-x-2 shadow-lg shadow-rose-950/50 transition-colors disabled:opacity-40"
+                >
+                  {playerBanLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />}
+                  <span>{playerBanScope === 'global' ? 'Execute Global Ban' : 'Ban From Instance'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

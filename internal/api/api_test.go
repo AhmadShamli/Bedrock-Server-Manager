@@ -19,6 +19,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/preset"
 )
 
@@ -521,6 +522,52 @@ func TestAPIGlobalPlayers(t *testing.T) {
 	afterRemove, _ := db.GetGlobalPlayerByName(ctx, "LocalPromoted")
 	if afterRemove != nil {
 		t.Fatalf("expected LocalPromoted to be removed from global")
+	}
+
+	// 8. Test SetRole via POST /api/global-players/{id}/role
+	roleBody := []byte(`{"role":"member"}`)
+	req = httptest.NewRequest("POST", fmt.Sprintf("/api/global-players/%d/role", gps[0].ID), bytes.NewReader(roleBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("set-role failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	updatedGp, _ := db.GetGlobalPlayer(ctx, gps[0].ID)
+	if updatedGp == nil || updatedGp.Permission != "member" {
+		t.Fatalf("expected permission to be 'member', got: %+v", updatedGp)
+	}
+
+	// 9. Test GET /api/active-players
+	req = httptest.NewRequest("GET", "/api/active-players", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("get active-players failed: %d", w.Code)
+	}
+
+	// 10. Test Direct Global Ban via POST /api/banned-players
+	banBody := []byte(`{"gamertag":"UniversalPlayer","xuid":"999999999","reason":"Griefing globally","scope":"global"}`)
+	req = httptest.NewRequest("POST", "/api/banned-players", bytes.NewReader(banBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("direct global ban failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify player was removed from global_players
+	bannedGp, _ := db.GetGlobalPlayerByName(ctx, "UniversalPlayer")
+	if bannedGp != nil {
+		t.Fatalf("expected UniversalPlayer to be removed from global players on global ban")
+	}
+	// Verify player is in banned_players
+	isBanned, _, bErr := db.IsPlayerBanned(ctx, "any-server", "UniversalPlayer", "999999999")
+	if bErr != nil || !isBanned {
+		t.Fatalf("expected player to be banned globally")
 	}
 }
 
@@ -1397,8 +1444,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.5.6" {
-		t.Errorf("expected version 1.5.6 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.5.7" {
+		t.Errorf("expected version 1.5.7 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1412,8 +1459,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.5.6" {
-		t.Errorf("expected version 1.5.6 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.5.7" {
+		t.Errorf("expected version 1.5.7 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
@@ -1460,6 +1507,239 @@ func TestPopularSeedsEndpoint(t *testing.T) {
 
 	if !foundCherry {
 		t.Errorf("expected cherry-caldera seed in popular seeds list")
+	}
+}
+
+func TestOnlinePlayersAndOpDeop(t *testing.T) {
+	db, err := database.OpenManagerDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenManagerDB failed: %v", err)
+	}
+	defer db.Close()
+
+	jwtSecret := []byte("test-jwt-secret-key-32bytes-long!")
+	pepper := "test-pepper-1234"
+	rateLimiter := auth.NewRateLimiter(5, 5*time.Minute, 10, 5*time.Minute, 15*time.Minute)
+	resolver := ipresolver.NewResolver("direct", nil)
+	mockEngine := engine.NewMockEngine()
+	mockFw := firewall.NewMockFirewallDriver()
+	pa := allocator.NewPortAllocator()
+	pm := player.NewManager(nil, nil)
+
+	r := NewRouter(RouterOptions{
+		DB:            db,
+		IPResolver:    resolver,
+		RateLimiter:   rateLimiter,
+		Engine:        mockEngine,
+		Firewall:      mockFw,
+		PortAllocator: pa,
+		PlayerManager: pm,
+		DataDir:       t.TempDir(),
+		JWTSecret:     jwtSecret,
+		Pepper:        pepper,
+	})
+
+	token, _ := auth.GenerateJWT(jwtSecret, 1, "admin", "admin", time.Hour)
+
+	// Create running server
+	srv := &models.Server{
+		ID:        "srv-players-1",
+		Name:      "Player Test Server",
+		Port:      19132,
+		Status:    models.ServerStatusRunning,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := db.CreateServer(context.Background(), srv); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+
+	// 1. Initial /stats should have 0 players
+	req := httptest.NewRequest("GET", "/api/servers/srv-players-1/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from stats, got %d", w.Code)
+	}
+	var stats map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &stats)
+	if count, ok := stats["player_count"].(float64); !ok || int(count) != 0 {
+		t.Fatalf("expected 0 player_count initially, got %v", stats["player_count"])
+	}
+
+	// 2. Connect player Steve
+	pm.ProcessLine("srv-players-1", "Player connected: Steve, xuid: 123456789")
+
+	// 3. /stats should now return player_count = 1
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/servers/srv-players-1/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	stats = nil
+	_ = json.Unmarshal(w.Body.Bytes(), &stats)
+	if count, ok := stats["player_count"].(float64); !ok || int(count) != 1 {
+		t.Fatalf("expected 1 player_count after connect, got %v", stats["player_count"])
+	}
+
+	// 4. GET /players - verify Steve is online and not OP
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/servers/srv-players-1/players", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from get players, got %d", w.Code)
+	}
+	var plRes map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &plRes)
+	playersList, ok := plRes["online_players"].([]interface{})
+	if !ok || len(playersList) != 1 {
+		t.Fatalf("expected 1 online player, got %+v", plRes)
+	}
+	playerObj := playersList[0].(map[string]interface{})
+	if playerObj["gamertag"] != "Steve" || playerObj["is_op"] == true {
+		t.Fatalf("expected Steve is_op=false, got %+v", playerObj)
+	}
+
+	// 5. POST /players/op - OP player Steve
+	opBody := `{"gamertag":"Steve"}`
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/servers/srv-players-1/players/op", strings.NewReader(opBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from op, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 6. GET /players - verify Steve is now is_op = true and permission = operator
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/servers/srv-players-1/players", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	plRes = nil
+	_ = json.Unmarshal(w.Body.Bytes(), &plRes)
+	playersList = plRes["online_players"].([]interface{})
+	playerObj = playersList[0].(map[string]interface{})
+	if playerObj["is_op"] != true || playerObj["permission"] != "operator" {
+		t.Fatalf("expected Steve is_op=true permission=operator, got %+v", playerObj)
+	}
+
+	// 7. POST /players/deop - DeOP player Steve
+	deopBody := `{"gamertag":"Steve"}`
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/servers/srv-players-1/players/deop", strings.NewReader(deopBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from deop, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 8. GET /players - verify Steve is now is_op = false
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/servers/srv-players-1/players", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	plRes = nil
+	_ = json.Unmarshal(w.Body.Bytes(), &plRes)
+	playersList = plRes["online_players"].([]interface{})
+	playerObj = playersList[0].(map[string]interface{})
+	if playerObj["is_op"] == true || playerObj["permission"] == "operator" {
+		t.Fatalf("expected Steve is_op=false after deop, got %+v", playerObj)
+	}
+}
+
+func TestPlayerBanWorkflow(t *testing.T) {
+	db, err := database.OpenManagerDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenManagerDB failed: %v", err)
+	}
+	defer db.Close()
+
+	jwtSecret := []byte("test-jwt-secret-key-32bytes-long!")
+	pepper := "test-pepper-1234"
+	rateLimiter := auth.NewRateLimiter(5, 5*time.Minute, 10, 5*time.Minute, 15*time.Minute)
+	resolver := ipresolver.NewResolver("direct", nil)
+	mockEngine := engine.NewMockEngine()
+	mockFw := firewall.NewMockFirewallDriver()
+	pa := allocator.NewPortAllocator()
+	pm := player.NewManager(nil, nil)
+
+	r := NewRouter(RouterOptions{
+		DB:            db,
+		IPResolver:    resolver,
+		RateLimiter:   rateLimiter,
+		Engine:        mockEngine,
+		Firewall:      mockFw,
+		PortAllocator: pa,
+		PlayerManager: pm,
+		DataDir:       t.TempDir(),
+		JWTSecret:     jwtSecret,
+		Pepper:        pepper,
+	})
+
+	token, _ := auth.GenerateJWT(jwtSecret, 1, "admin", "admin", time.Hour)
+
+	// Create running server
+	srv := &models.Server{
+		ID:        "srv-ban-1",
+		Name:      "Ban Test Server",
+		Port:      19132,
+		Status:    models.ServerStatusRunning,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := db.CreateServer(context.Background(), srv); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+
+	// 1. Ban player Alex on instance
+	banBody := `{"gamertag":"Alex","xuid":"987654321","reason":"Griefing spawn","scope":"instance","ban_ip":true,"ip_address":"198.51.100.22"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/servers/srv-ban-1/players/ban", strings.NewReader(banBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from ban, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify ban is recorded
+	isBanned, reason, err := db.IsPlayerBanned(context.Background(), "srv-ban-1", "Alex", "987654321")
+	if err != nil || !isBanned || reason != "Griefing spawn" {
+		t.Fatalf("expected Alex to be banned on srv-ban-1, got isBanned=%v, reason=%s", isBanned, reason)
+	}
+
+	// Verify IP ban was created in port gate bans
+	isIPBanned, _, _ := db.IsIPBanned(context.Background(), "srv-ban-1", "198.51.100.22")
+	if !isIPBanned {
+		t.Fatalf("expected 198.51.100.22 to be banned on port gate")
+	}
+
+	// Verify list bans endpoint
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/servers/srv-ban-1/players/bans", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from list bans, got %d", w.Code)
+	}
+	var bansList []models.BannedPlayer
+	_ = json.Unmarshal(w.Body.Bytes(), &bansList)
+	if len(bansList) != 1 || bansList[0].Gamertag != "Alex" {
+		t.Fatalf("expected 1 ban for Alex, got %+v", bansList)
+	}
+
+	// 2. Unban Alex
+	unbanBody := `{"gamertag":"Alex"}`
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/servers/srv-ban-1/players/unban", strings.NewReader(unbanBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from unban, got %d", w.Code)
+	}
+
+	isBannedAfter, _, _ := db.IsPlayerBanned(context.Background(), "srv-ban-1", "Alex", "")
+	if isBannedAfter {
+		t.Fatalf("expected Alex to not be banned after unban")
 	}
 }
 
