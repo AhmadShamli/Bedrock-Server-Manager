@@ -58,8 +58,9 @@ type Server struct {
 	MemoryLimit     string    `json:"memory_limit"`      // e.g. "2G"
 	CPULimit        float64   `json:"cpu_limit"`         // e.g. 2.0
 	ContainerID     string    `json:"container_id"`
-	Seed            string    `json:"seed"`
-	CreatedAt       time.Time `json:"created_at"`
+	Seed              string    `json:"seed"`
+	GameServerAddress string    `json:"game_server_address"`
+	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 

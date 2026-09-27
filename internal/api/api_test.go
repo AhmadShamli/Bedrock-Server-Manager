@@ -1143,4 +1143,128 @@ func TestPortGateBansAndCentralizedEndpoints(t *testing.T) {
 	}
 }
 
+func TestCustomGameServerAddress(t *testing.T) {
+	router, db, _, mockFw, jwtSecret, pepper := setupTestRouter(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	u, _ := db.CreateUser(ctx, "admin", "hash", models.RoleAdmin)
+	token, _ := auth.GenerateJWT(jwtSecret, u.ID, u.Username, u.Role, 1*time.Hour)
+
+	// 1. Create server with custom game server address
+	srv := &models.Server{
+		ID:                "custom-addr-srv",
+		Name:              "Custom Realm",
+		Version:           "1.21.0.03",
+		Port:              19132,
+		PortV6:            19133,
+		Mode:              "survival",
+		Difficulty:        "normal",
+		PortGateEnabled:   true,
+		PortGateMode:      "passphrase",
+		PortGateTimeout:   3600,
+		GameServerAddress: "play.customrealm.net",
+		Status:            "stopped",
+	}
+	body, _ := json.Marshal(srv)
+	req := httptest.NewRequest("POST", "/api/servers", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create server failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Verify Knock Config returns custom game server address
+	req = httptest.NewRequest("GET", "/api/knock/custom-addr-srv/config", nil)
+	req.Host = "panel.webadmin.io:8080"
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("knock config failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var conf KnockConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &conf)
+	if conf.GameServerAddress != "play.customrealm.net" {
+		t.Fatalf("expected game_server_address 'play.customrealm.net', got '%s'", conf.GameServerAddress)
+	}
+
+	// 3. Create access key
+	keyHash := auth.HashAccessKey(pepper, "custom-secret")
+	srvID := "custom-addr-srv"
+	_ = db.CreatePortGateKey(ctx, &models.PortGateKey{
+		ServerID:  &srvID,
+		Label:     "Secret Door",
+		KeyHash:   keyHash,
+		KeyPrefix: "custom-",
+		IsActive:  true,
+	})
+
+	// 4. Perform Knock with custom address
+	knockReq := KnockRequest{
+		Passphrase: "custom-secret",
+	}
+	kBody, _ := json.Marshal(knockReq)
+	req = httptest.NewRequest("POST", "/api/knock/custom-addr-srv", bytes.NewReader(kBody))
+	req.Host = "panel.webadmin.io:8080"
+	req.RemoteAddr = "192.0.2.45:33221"
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("knock failed: %d, body: %s", w.Code, w.Body.String())
+	}
+	var knockRes map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &knockRes)
+	if knockRes["game_server_address"] != "play.customrealm.net" {
+		t.Fatalf("expected knock game_server_address 'play.customrealm.net', got '%v'", knockRes["game_server_address"])
+	}
+	directURL, _ := knockRes["direct_launch_url"].(string)
+	if !strings.Contains(directURL, "play.customrealm.net:19132") {
+		t.Fatalf("expected direct launch url to contain 'play.customrealm.net:19132', got '%s'", directURL)
+	}
+
+	// 5. Check Status endpoint returns custom address
+	req = httptest.NewRequest("GET", "/api/knock/custom-addr-srv/status", nil)
+	req.Host = "panel.webadmin.io:8080"
+	req.RemoteAddr = "192.0.2.45:33221"
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status failed: %d", w.Code)
+	}
+	var statusRes map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &statusRes)
+	if statusRes["game_server_address"] != "play.customrealm.net" {
+		t.Fatalf("expected status game_server_address 'play.customrealm.net', got '%v'", statusRes["game_server_address"])
+	}
+
+	// 6. Update GameServerAddress via PUT
+	newAddress := "mc.updatedaddress.com"
+	updatePayload := map[string]interface{}{
+		"game_server_address": newAddress,
+	}
+	uBody, _ := json.Marshal(updatePayload)
+	req = httptest.NewRequest("PUT", "/api/servers/custom-addr-srv", bytes.NewReader(uBody))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update server failed: %d, body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify updated address in config
+	req = httptest.NewRequest("GET", "/api/knock/custom-addr-srv/config", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	_ = json.Unmarshal(w.Body.Bytes(), &conf)
+	if conf.GameServerAddress != "mc.updatedaddress.com" {
+		t.Fatalf("expected updated game_server_address 'mc.updatedaddress.com', got '%s'", conf.GameServerAddress)
+	}
+
+	_ = mockFw
+}
+
 

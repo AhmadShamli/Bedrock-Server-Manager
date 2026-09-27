@@ -22,6 +22,7 @@ export interface Server {
   cpu_limit: number;
   container_id?: string;
   seed?: string;
+  game_server_address?: string;
   created_at: string;
   updated_at: string;
 }
@@ -74,6 +75,7 @@ export interface KnockConfig {
   server_id: string;
   server_name: string;
   port: number;
+  game_server_address?: string;
   port_gate_enabled: boolean;
   port_gate_mode: 'gamertag' | 'passphrase' | 'combined';
   heartbeat_interval_seconds: number;

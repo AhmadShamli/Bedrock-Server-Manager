@@ -67,6 +67,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [editServerPortGate, setEditServerPortGate] = useState(false);
   const [editServerPortGateMode, setEditServerPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
   const [editServerPortGateTimeout, setEditServerPortGateTimeout] = useState(7200);
+  const [editGameServerAddress, setEditGameServerAddress] = useState('');
   const [serverUpdating, setServerUpdating] = useState(false);
   const [serverUpdatedMsg, setServerUpdatedMsg] = useState<string | null>(null);
   const [propertyFilter, setPropertyFilter] = useState('');
@@ -353,6 +354,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setEditServerPortGate(server.port_gate_enabled);
       setEditServerPortGateMode(server.port_gate_mode);
       setEditServerPortGateTimeout(server.port_gate_timeout);
+      setEditGameServerAddress(server.game_server_address || '');
     }
   }, [server]);
 
@@ -443,6 +445,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         port_gate_enabled: editServerPortGate,
         port_gate_mode: editServerPortGateMode,
         port_gate_timeout: Number(editServerPortGateTimeout),
+        game_server_address: editGameServerAddress.trim(),
       });
       setServer((prev) => (prev ? { ...prev, ...updated, status: prev.status } : null));
       setServerUpdatedMsg('Server instance configuration updated successfully!');
@@ -1397,6 +1400,38 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4 font-mono text-xs">
+              <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-lg flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Game Server Address</span>
+                  <span className="text-slate-200 font-bold">{server.game_server_address || `${window.location.hostname} (default)`}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('settings')}
+                  className="text-[11px] text-emerald-400 hover:underline"
+                >
+                  Configure
+                </button>
+              </div>
+              <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-lg flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Knock Portal URL</span>
+                  <span className="text-slate-300 truncate max-w-[180px] sm:max-w-[240px] block">{`${window.location.origin}/knock/${server.id}`}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(`${window.location.origin}/knock/${server.id}`);
+                    alert('Knock Portal URL copied to clipboard!');
+                  }}
+                  className="px-2 py-1 rounded bg-obsidian-800 hover:bg-obsidian-750 text-slate-300 text-[10px] font-bold shrink-0 ml-2"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
             <div className="p-4 bg-obsidian-950 border border-obsidian-800 rounded-lg text-xs font-mono text-slate-300 mb-6">
               <p className="text-emerald-400 mb-1 font-bold">Mobile Roaming Handoff Ready</p>
               <p className="text-slate-400">
@@ -2313,6 +2348,20 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   value={editServerSeed}
                   onChange={(e) => setEditServerSeed(e.target.value)}
                   placeholder="e.g. 123456789 or custom-seed (leave empty for random seed)"
+                  className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-400 mb-1 font-bold flex items-center justify-between">
+                  <span>Game Server Address (Knock Portal Hostname / IP)</span>
+                  <span className="text-[10px] text-slate-500 font-normal">Optional: e.g. play.example.com or server public IP. Defaults to panel host.</span>
+                </label>
+                <input
+                  type="text"
+                  value={editGameServerAddress}
+                  onChange={(e) => setEditGameServerAddress(e.target.value)}
+                  placeholder={`Optional (defaults to ${window.location.hostname})`}
                   className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500 font-mono"
                 />
               </div>

@@ -57,6 +57,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
   const [portGate, setPortGate] = useState(false);
   const [portGateMode, setPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
   const [seed, setSeed] = useState('');
+  const [gameServerAddress, setGameServerAddress] = useState('');
   const [creating, setCreating] = useState(false);
 
   const fetchServers = async (isManualRefresh = false) => {
@@ -111,6 +112,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
   const openDeployModal = async () => {
     setShowModal(true);
     setSeed('');
+    setGameServerAddress('');
     try {
       const suggested = await api.suggestPorts();
       if (suggested && suggested.port) {
@@ -153,6 +155,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
         id: serverId.trim().toLowerCase().replace(/\s+/g, '-'),
         name: serverName.trim(),
         seed: seed.trim() || undefined,
+        game_server_address: gameServerAddress.trim() || undefined,
         port: Number(port),
         portv6: Number(port) + 1,
         mode,
@@ -168,6 +171,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
       setServerId('');
       setServerName('');
       setSeed('');
+      setGameServerAddress('');
       fetchServers();
     } catch (err: any) {
       alert(err.message || 'Failed to create server');
@@ -746,6 +750,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                   onChange={(e) => setSeed(e.target.value)}
                   className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
                   placeholder="e.g. 123456789 or bedrock-seed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                  <span>Game Server Address (Knock Host)</span>
+                  <span className="text-[10px] text-slate-500">Optional (e.g. play.example.com or public IP)</span>
+                </label>
+                <input
+                  type="text"
+                  value={gameServerAddress}
+                  onChange={(e) => setGameServerAddress(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
+                  placeholder={`Optional (defaults to ${window.location.hostname})`}
                 />
               </div>
 

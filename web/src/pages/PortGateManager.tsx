@@ -884,6 +884,7 @@ export const PortGateManager: React.FC = () => {
                 <tr>
                   <th className="px-4 py-3">Server Instance</th>
                   <th className="px-4 py-3">UDP Port</th>
+                  <th className="px-4 py-3">Game Address</th>
                   <th className="px-4 py-3">Port Gate Status</th>
                   <th className="px-4 py-3">Auth Mode</th>
                   <th className="px-4 py-3">Portal Link</th>
@@ -906,6 +907,13 @@ export const PortGateManager: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 font-bold text-slate-300">
                         UDP {srv.port} {srv.portv6 > 0 ? `/ ${srv.portv6}` : ''}
+                      </td>
+                      <td className="px-4 py-3">
+                        {srv.game_server_address ? (
+                          <span className="text-emerald-400 font-mono font-semibold">{srv.game_server_address}</span>
+                        ) : (
+                          <span className="text-slate-500 font-mono text-[11px] italic">Host ({window.location.hostname})</span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         {srv.port_gate_enabled ? (

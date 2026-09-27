@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
@@ -177,6 +178,7 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if s.PortGateTimeout <= 0 {
 		s.PortGateTimeout = 7200
 	}
+	s.GameServerAddress = strings.TrimSpace(s.GameServerAddress)
 
 	// Validate ports
 	existing, _ := h.db.ListServers(r.Context())
@@ -554,8 +556,9 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		PortGateMode    *string  `json:"port_gate_mode"`
 		PortGateTimeout *int     `json:"port_gate_timeout"`
 		MemoryLimit     *string  `json:"memory_limit"`
-		CPULimit        *float64 `json:"cpu_limit"`
-		Seed            *string  `json:"seed"`
+		CPULimit          *float64 `json:"cpu_limit"`
+		Seed              *string  `json:"seed"`
+		GameServerAddress *string  `json:"game_server_address"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -636,6 +639,9 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 			}
 			_ = configfile.WriteProperties(propPath, props, keys)
 		}
+	}
+	if req.GameServerAddress != nil {
+		existing.GameServerAddress = strings.TrimSpace(*req.GameServerAddress)
 	}
 
 	if err := h.db.UpdateServer(r.Context(), existing); err != nil {

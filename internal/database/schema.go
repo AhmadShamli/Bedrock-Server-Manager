@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS servers (
     cpu_limit REAL NOT NULL DEFAULT 2.0,
     container_id TEXT NOT NULL DEFAULT '',
     seed TEXT NOT NULL DEFAULT '',
+    game_server_address TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

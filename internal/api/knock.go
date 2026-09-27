@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -37,6 +38,7 @@ type KnockConfigResponse struct {
 	ServerID                 string `json:"server_id"`
 	ServerName               string `json:"server_name"`
 	Port                     int    `json:"port"`
+	GameServerAddress        string `json:"game_server_address"`
 	PortGateEnabled          bool   `json:"port_gate_enabled"`
 	PortGateMode             string `json:"port_gate_mode"`
 	HeartbeatIntervalSeconds int    `json:"heartbeat_interval_seconds"`
@@ -45,6 +47,22 @@ type KnockConfigResponse struct {
 	RuleComment              string `json:"rule_comment,omitempty"`
 	IsBanned                 bool   `json:"is_banned,omitempty"`
 	BanReason                string `json:"ban_reason,omitempty"`
+}
+
+func (h *KnockHandler) getEffectiveGameHost(ctx context.Context, r *http.Request, server *models.Server) string {
+	if server != nil && strings.TrimSpace(server.GameServerAddress) != "" {
+		return strings.TrimSpace(server.GameServerAddress)
+	}
+	if h.db != nil {
+		if val, err := h.db.GetSetting(ctx, "default_game_server_address"); err == nil && strings.TrimSpace(val) != "" {
+			return strings.TrimSpace(val)
+		}
+	}
+	host := r.Host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
 }
 
 // GetConfig returns public knock settings for a given server.
@@ -65,6 +83,7 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientIP := GetClientIP(r).String()
+	gameHost := h.getEffectiveGameHost(r.Context(), r, server)
 
 	// Check if caller's IP is banned
 	if banned, banReason, _ := h.db.IsIPBanned(r.Context(), serverID, clientIP); banned {
@@ -73,6 +92,7 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 			ServerID:                 server.ID,
 			ServerName:               server.Name,
 			Port:                     server.Port,
+			GameServerAddress:        gameHost,
 			PortGateEnabled:          server.PortGateEnabled,
 			PortGateMode:             server.PortGateMode,
 			HeartbeatIntervalSeconds: hbSec,
@@ -94,6 +114,7 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		ServerID:                 server.ID,
 		ServerName:               server.Name,
 		Port:                     server.Port,
+		GameServerAddress:        gameHost,
 		PortGateEnabled:          server.PortGateEnabled,
 		PortGateMode:             server.PortGateMode,
 		HeartbeatIntervalSeconds: hbSec,
@@ -137,7 +158,7 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now().UTC()
+	gameHost := h.getEffectiveGameHost(r.Context(), r, server)
 
 	// Check if caller's IP is already permanently allowed
 	if matchRule, allowed, _ := h.db.IsIPAllowed(r.Context(), serverID, clientIP); allowed && matchRule != nil {
@@ -148,20 +169,23 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 				_ = h.firewall.AllowPort(r.Context(), matchRule.IPOrSubnet, server.PortV6, comment)
 			}
 		}
-		directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, r.Host, server.Port)
+		directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":            true,
-			"always_allowed":     true,
-			"message":            "Your IP address is permanently authorized. Port is open without knocking.",
-			"ip_address":         clientIP,
-			"direct_launch_url":  directURL,
-			"server_name":        server.Name,
-			"server_port":        server.Port,
-			"expires_in_seconds": 86400 * 365,
+			"success":             true,
+			"always_allowed":      true,
+			"message":             "Your IP address is permanently authorized. Port is open without knocking.",
+			"ip_address":          clientIP,
+			"direct_launch_url":   directURL,
+			"server_name":         server.Name,
+			"server_port":         server.Port,
+			"game_server_address": gameHost,
+			"expires_in_seconds":  86400 * 365,
 		})
 		return
 	}
+
+	now := time.Now().UTC()
 
 	// Rate limiter check
 	rateCheck := h.rateLimiter.CheckKnockAttempt(clientIP, now)
@@ -289,19 +313,19 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Generate direct Minecraft launcher URI: minecraft://?addExternalServer=<Name>|<Host>:<Port>
-	hostHeader := r.Host
-	directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, hostHeader, server.Port)
+	directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":            true,
-		"ip_address":         clientIP,
-		"expires_at":         database.FormatTime(lease.ExpiresAt),
-		"expires_in_seconds": int(leaseDuration.Seconds()),
-		"session_token":      sessionToken,
-		"direct_launch_url":  directURL,
-		"server_name":        server.Name,
-		"server_port":        server.Port,
+		"success":             true,
+		"ip_address":          clientIP,
+		"expires_at":          database.FormatTime(lease.ExpiresAt),
+		"expires_in_seconds":  int(leaseDuration.Seconds()),
+		"session_token":       sessionToken,
+		"direct_launch_url":   directURL,
+		"server_name":         server.Name,
+		"server_port":         server.Port,
+		"game_server_address": gameHost,
 	})
 }
 
@@ -418,20 +442,23 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	gameHost := h.getEffectiveGameHost(r.Context(), r, server)
+
 	// 1. Check if caller IP is in permanent allowlist
 	if matchRule, allowed, err := h.db.IsIPAllowed(r.Context(), serverID, currentIP); err == nil && allowed && matchRule != nil {
-		directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, r.Host, server.Port)
+		directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"active":             true,
-			"always_allowed":     true,
-			"ip_address":         currentIP,
-			"rule_comment":       matchRule.Comment,
-			"is_global":          matchRule.ServerID == nil || *matchRule.ServerID == "",
-			"direct_launch_url":  directURL,
-			"server_name":        server.Name,
-			"server_port":        server.Port,
-			"expires_in_seconds": 86400 * 365,
+			"active":              true,
+			"always_allowed":      true,
+			"ip_address":          currentIP,
+			"rule_comment":        matchRule.Comment,
+			"is_global":           matchRule.ServerID == nil || *matchRule.ServerID == "",
+			"direct_launch_url":   directURL,
+			"server_name":         server.Name,
+			"server_port":         server.Port,
+			"game_server_address": gameHost,
+			"expires_in_seconds":  86400 * 365,
 		})
 		return
 	}
@@ -440,8 +467,9 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 	if err != nil || lease == nil {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"active":     false,
-			"ip_address": currentIP,
+			"active":              false,
+			"ip_address":          currentIP,
+			"game_server_address": gameHost,
 		})
 		return
 	}
@@ -451,15 +479,18 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 		remaining = 0
 	}
 
-	directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, r.Host, server.Port)
+	directURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"active":             true,
-		"ip_address":         currentIP,
-		"gamertag":           lease.Gamertag,
-		"expires_in_seconds": remaining,
-		"direct_launch_url":  directURL,
+		"active":              true,
+		"ip_address":          currentIP,
+		"gamertag":            lease.Gamertag,
+		"expires_in_seconds":  remaining,
+		"direct_launch_url":   directURL,
+		"server_name":         server.Name,
+		"server_port":         server.Port,
+		"game_server_address": gameHost,
 	})
 }
 

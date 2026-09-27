@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2 } from 'lucide-react';
+import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2, Copy, Check } from 'lucide-react';
 import { api } from '../api/client';
 import { KnockConfig } from '../types';
 
@@ -18,12 +18,20 @@ export const KnockPortal: React.FC = () => {
     direct_launch_url: string;
     server_name: string;
     server_port: number;
+    game_server_address?: string;
     session_token?: string;
     always_allowed?: boolean;
     rule_comment?: string;
   } | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [heartbeatStatus, setHeartbeatStatus] = useState<string>('Active');
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  const copyToClipboard = (text: string, fieldId: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedField(fieldId);
+    setTimeout(() => setCopiedField(null), 2000);
+  };
 
   useEffect(() => {
     if (!id) return;
@@ -42,12 +50,14 @@ export const KnockPortal: React.FC = () => {
         try {
           const status = await api.getKnockStatus(id);
           if (status.active || conf.always_allowed) {
+            const effectiveHost = status.game_server_address || conf.game_server_address || window.location.hostname;
             setActiveLease({
               ip_address: status.ip_address || conf.client_ip || '',
               expires_in_seconds: status.expires_in_seconds || 0,
-              direct_launch_url: status.direct_launch_url || `minecraft://?addExternalServer=${encodeURIComponent(conf.server_name)}|${window.location.hostname}:${conf.port}`,
+              direct_launch_url: status.direct_launch_url || `minecraft://?addExternalServer=${encodeURIComponent(conf.server_name)}|${effectiveHost}:${conf.port}`,
               server_name: conf.server_name,
               server_port: conf.port,
+              game_server_address: effectiveHost,
               always_allowed: status.always_allowed || conf.always_allowed,
               rule_comment: status.rule_comment || conf.rule_comment,
             });
@@ -100,12 +110,14 @@ export const KnockPortal: React.FC = () => {
         passphrase: passphrase.trim(),
       });
 
+      const effectiveHost = res.game_server_address || config?.game_server_address || window.location.hostname;
       setActiveLease({
         ip_address: res.ip_address,
         expires_in_seconds: res.expires_in_seconds,
         direct_launch_url: res.direct_launch_url,
         server_name: res.server_name,
         server_port: res.server_port,
+        game_server_address: effectiveHost,
         session_token: res.session_token,
         always_allowed: res.always_allowed,
         rule_comment: res.rule_comment,
@@ -132,6 +144,9 @@ export const KnockPortal: React.FC = () => {
     }
   };
 
+  const gameServerHost = activeLease?.game_server_address || config?.game_server_address || window.location.hostname;
+  const gameServerPort = activeLease?.server_port || config?.port || 19132;
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-obsidian-950 text-slate-300">
@@ -155,7 +170,7 @@ export const KnockPortal: React.FC = () => {
             {config?.server_name || 'BEDROCK SERVER'}
           </h1>
           <p className="text-xs text-slate-400 font-mono mt-1">
-            Dynamic Port Gate Access Portal (UDP {config?.port || 19132})
+            Dynamic Port Gate Access Portal ({gameServerHost}:{gameServerPort})
           </p>
         </div>
 
@@ -230,11 +245,31 @@ export const KnockPortal: React.FC = () => {
               <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-2.5 font-mono text-xs">
                 <div className="flex items-center justify-between text-slate-400">
                   <span>Server Address:</span>
-                  <span className="text-slate-200 font-semibold">{window.location.hostname}</span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-slate-200 font-semibold">{gameServerHost}</span>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(gameServerHost, 'always-host')}
+                      className="text-slate-500 hover:text-emerald-400 p-1 rounded hover:bg-obsidian-800 transition-colors"
+                      title="Copy server address"
+                    >
+                      {copiedField === 'always-host' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center justify-between text-slate-400">
                   <span>UDP Port:</span>
-                  <span className="text-emerald-400 font-semibold">{activeLease.server_port || config?.port || 19132}</span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-emerald-400 font-semibold">{gameServerPort}</span>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(String(gameServerPort), 'always-port')}
+                      className="text-slate-500 hover:text-emerald-400 p-1 rounded hover:bg-obsidian-800 transition-colors"
+                      title="Copy port"
+                    >
+                      {copiedField === 'always-port' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center justify-between text-slate-400">
                   <span>Firewall Status:</span>
@@ -266,6 +301,45 @@ export const KnockPortal: React.FC = () => {
                 <Play className="w-5 h-5 fill-current" />
                 <span>Launch Minecraft Bedrock</span>
               </a>
+
+              {/* Server Connection Info */}
+              <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-2.5 font-mono text-xs">
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Server Address:</span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-slate-200 font-semibold">{gameServerHost}</span>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(gameServerHost, 'temp-host')}
+                      className="text-slate-500 hover:text-emerald-400 p-1 rounded hover:bg-obsidian-800 transition-colors"
+                      title="Copy server address"
+                    >
+                      {copiedField === 'temp-host' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>UDP Port:</span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="text-emerald-400 font-semibold">{gameServerPort}</span>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(String(gameServerPort), 'temp-port')}
+                      className="text-slate-500 hover:text-emerald-400 p-1 rounded hover:bg-obsidian-800 transition-colors"
+                      title="Copy port"
+                    >
+                      {copiedField === 'temp-port' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between text-slate-400">
+                  <span>Access Lease:</span>
+                  <span className="text-emerald-400 font-semibold flex items-center space-x-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>Unlocked for {activeLease.ip_address}</span>
+                  </span>
+                </div>
+              </div>
 
               {/* Mobile Roaming & Heartbeat indicator */}
               <div className="bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 space-y-3 font-mono text-xs">
@@ -345,7 +419,7 @@ export const KnockPortal: React.FC = () => {
             </button>
 
             <p className="text-center text-[11px] text-slate-500 font-mono mt-3">
-              Dynamic IP verification grants immediate access to UDP {config?.port || 19132}.
+              Dynamic IP verification grants immediate access to {gameServerHost}:{gameServerPort}.
             </p>
           </form>
         )}
