@@ -19,6 +19,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/preset"
 )
 
 func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, *engine.MockEngine, *firewall.MockFirewallDriver, []byte, string) {
@@ -1392,8 +1393,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.5.3" {
-		t.Errorf("expected version 1.5.3 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.5.4" {
+		t.Errorf("expected version 1.5.4 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1407,11 +1408,54 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.5.3" {
-		t.Errorf("expected version 1.5.3 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.5.4" {
+		t.Errorf("expected version 1.5.4 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
+	}
+}
+
+func TestPopularSeedsEndpoint(t *testing.T) {
+	router, _, _, _, jwtSecret, _ := setupTestRouter(t)
+
+	// Auth token
+	token, _ := auth.GenerateJWT(jwtSecret, 1, "admin", "admin", time.Hour)
+
+	req := httptest.NewRequest("GET", "/api/presets/seeds", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /api/presets/seeds, got %d", w.Code)
+	}
+
+	var seeds []preset.SeedPreset
+	if err := json.Unmarshal(w.Body.Bytes(), &seeds); err != nil {
+		t.Fatalf("failed to decode seeds json: %v", err)
+	}
+
+	if len(seeds) == 0 {
+		t.Fatalf("expected non-empty seeds list")
+	}
+
+	foundCherry := false
+	for _, s := range seeds {
+		if s.ID == "cherry-caldera" {
+			foundCherry = true
+			if s.Seed != "-8219986470354173872" {
+				t.Errorf("expected cherry caldera seed '-8219986470354173872', got '%s'", s.Seed)
+			}
+			if len(s.Biomes) == 0 || len(s.Features) == 0 {
+				t.Errorf("expected biomes and features to be populated for cherry caldera")
+			}
+			break
+		}
+	}
+
+	if !foundCherry {
+		t.Errorf("expected cherry-caldera seed in popular seeds list")
 	}
 }
 

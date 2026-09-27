@@ -92,6 +92,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 			// Presets and Version checking
 			authGroup.Get("/presets", ListPresets)
+			authGroup.Get("/presets/seeds", ListSeeds)
 			authGroup.Get("/updater/check", CheckUpdates)
 
 			// Servers

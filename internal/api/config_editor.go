@@ -301,6 +301,12 @@ func ListPresets(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(preset.GetPresets())
 }
 
+// ListSeeds returns popular curated Minecraft Bedrock world seeds.
+func ListSeeds(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(preset.GetPopularSeeds())
+}
+
 // CheckUpdates checks if newer BDS versions are available.
 func CheckUpdates(w http.ResponseWriter, r *http.Request) {
 	version := r.URL.Query().Get("version")

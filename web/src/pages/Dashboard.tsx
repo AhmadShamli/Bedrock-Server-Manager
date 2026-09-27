@@ -20,6 +20,7 @@ import { api } from '../api/client';
 import { Server, User } from '../types';
 import { usePagination } from '../hooks/usePagination';
 import { Pagination } from '../components/Pagination';
+import { DeployModal } from '../components/DeployModal';
 
 interface DashboardProps {
   user: User;
@@ -44,21 +45,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     setViewMode(mode);
     localStorage.setItem('bsm_server_view_mode', mode);
   };
-
-  // New server modal fields
-  const [serverId, setServerId] = useState('');
-  const [serverName, setServerName] = useState('');
-  const [port, setPort] = useState(19132);
-  const [mode, setMode] = useState('survival');
-  const [difficulty, setDifficulty] = useState('normal');
-  const [memLimit, setMemLimit] = useState('2G');
-  const [cpuLimit, setCpuLimit] = useState(2.0);
-  const [autostartOnBoot, setAutostartOnBoot] = useState(false);
-  const [portGate, setPortGate] = useState(false);
-  const [portGateMode, setPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
-  const [seed, setSeed] = useState('');
-  const [gameServerAddress, setGameServerAddress] = useState('');
-  const [creating, setCreating] = useState(false);
 
   const fetchServers = async (isManualRefresh = false) => {
     if (isManualRefresh) setRefreshing(true);
@@ -109,18 +95,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     setPageSize,
   } = usePagination(filteredServers, viewMode === 'grid' ? 12 : 10);
 
-  const openDeployModal = async () => {
+  const openDeployModal = () => {
     setShowModal(true);
-    setSeed('');
-    setGameServerAddress('');
-    try {
-      const suggested = await api.suggestPorts();
-      if (suggested && suggested.port) {
-        setPort(suggested.port);
-      }
-    } catch {
-      // Keep default port
-    }
   };
 
   const handleStart = async (id: string) => {
@@ -144,39 +120,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
       alert(err.message || 'Failed to stop server');
     } finally {
       setActionLoading(null);
-    }
-  };
-
-  const handleCreateServer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreating(true);
-    try {
-      await api.createServer({
-        id: serverId.trim().toLowerCase().replace(/\s+/g, '-'),
-        name: serverName.trim(),
-        seed: seed.trim() || undefined,
-        game_server_address: gameServerAddress.trim() || undefined,
-        port: Number(port),
-        portv6: Number(port) + 1,
-        mode,
-        difficulty,
-        memory_limit: memLimit,
-        cpu_limit: Number(cpuLimit),
-        autostart_on_boot: autostartOnBoot,
-        port_gate_enabled: portGate,
-        port_gate_mode: portGateMode,
-        port_gate_timeout: 7200,
-      });
-      setShowModal(false);
-      setServerId('');
-      setServerName('');
-      setSeed('');
-      setGameServerAddress('');
-      fetchServers();
-    } catch (err: any) {
-      alert(err.message || 'Failed to create server');
-    } finally {
-      setCreating(false);
     }
   };
 
@@ -628,202 +571,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
         </div>
       )}
 
-      {/* Create Server Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-obsidian-900 border border-obsidian-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl">
-            <h3 className="text-lg font-mono font-bold text-slate-100 mb-4 flex items-center gap-2">
-              <Plus className="w-5 h-5 text-emerald-400" />
-              <span>Deploy New Bedrock Instance</span>
-            </h3>
-
-            <form onSubmit={handleCreateServer} className="space-y-4">
-              <div>
-                <label className="block text-xs font-mono text-slate-300 mb-1">Server Name</label>
-                <input
-                  type="text"
-                  required
-                  value={serverName}
-                  onChange={(e) => {
-                    setServerName(e.target.value);
-                    if (!serverId) {
-                      setServerId(e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '-'));
-                    }
-                  }}
-                  className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                  placeholder="Survival Realm"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1">Server ID (Slug)</label>
-                  <input
-                    type="text"
-                    required
-                    value={serverId}
-                    onChange={(e) => setServerId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                    placeholder="survival-realm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
-                    <span>UDP Port</span>
-                    <span className="text-[10px] text-emerald-400">IPv6: {port + 1}</span>
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    value={port}
-                    onChange={(e) => setPort(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1">Game Mode</label>
-                  <select
-                    value={mode}
-                    onChange={(e) => setMode(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                  >
-                    <option value="survival">Survival</option>
-                    <option value="creative">Creative</option>
-                    <option value="adventure">Adventure</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1">Difficulty</label>
-                  <select
-                    value={difficulty}
-                    onChange={(e) => setDifficulty(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                  >
-                    <option value="peaceful">Peaceful</option>
-                    <option value="easy">Easy</option>
-                    <option value="normal">Normal</option>
-                    <option value="hard">Hard</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1">RAM Capping</label>
-                  <select
-                    value={memLimit}
-                    onChange={(e) => setMemLimit(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                  >
-                    <option value="1G">1 GB</option>
-                    <option value="2G">2 GB (Recommended)</option>
-                    <option value="4G">4 GB</option>
-                    <option value="8G">8 GB</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1">CPU Allocation</label>
-                  <select
-                    value={cpuLimit}
-                    onChange={(e) => setCpuLimit(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                  >
-                    <option value={1.0}>1.0 Core</option>
-                    <option value={2.0}>2.0 Cores (Recommended)</option>
-                    <option value={4.0}>4.0 Cores</option>
-                    <option value={8.0}>8.0 Cores</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
-                  <span>World Seed</span>
-                  <span className="text-[10px] text-slate-500">Optional (Leave blank for random seed)</span>
-                </label>
-                <input
-                  type="text"
-                  value={seed}
-                  onChange={(e) => setSeed(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                  placeholder="e.g. 123456789 or bedrock-seed"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
-                  <span>Game Server Address (Knock Host)</span>
-                  <span className="text-[10px] text-slate-500">Optional (e.g. play.example.com or public IP)</span>
-                </label>
-                <input
-                  type="text"
-                  value={gameServerAddress}
-                  onChange={(e) => setGameServerAddress(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                  placeholder={`Optional (defaults to ${window.location.hostname})`}
-                />
-              </div>
-
-              <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-lg space-y-2.5">
-                <label className="flex items-center space-x-2 text-xs font-mono text-slate-200 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={autostartOnBoot}
-                    onChange={(e) => setAutostartOnBoot(e.target.checked)}
-                    className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500"
-                  />
-                  <span>Autostart on Daemon Boot</span>
-                </label>
-
-                <label className="flex items-center space-x-2 text-xs font-mono text-slate-200 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={portGate}
-                    onChange={(e) => setPortGate(e.target.checked)}
-                    className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500"
-                  />
-                  <span>Enable Dynamic Port Gating (Firewall Block)</span>
-                </label>
-
-                {portGate && (
-                  <div className="pt-2">
-                    <label className="block text-[11px] font-mono text-slate-400 mb-1">Verification Mode</label>
-                    <select
-                      value={portGateMode}
-                      onChange={(e) => setPortGateMode(e.target.value as any)}
-                      className="w-full px-2.5 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-200 text-xs font-mono"
-                    >
-                      <option value="passphrase">Passphrase / Knock Key</option>
-                      <option value="gamertag">Gamertag Allowlist</option>
-                      <option value="combined">Combined (Passphrase + Gamertag)</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex items-center justify-end space-x-3 pt-4 border-t border-obsidian-800">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 font-mono text-xs"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={creating}
-                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5"
-                >
-                  {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Confirm Deploy</span>}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Deploy Instance Modal (Quick Deploy or Guided Wizard with Popular Seeds) */}
+      <DeployModal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        onSuccess={() => fetchServers(true)}
+      />
     </div>
   );
 };

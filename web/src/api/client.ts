@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, GlobalPlayer, MetricsData } from '../types';
+import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, GlobalPlayer, MetricsData, Preset, SeedPreset } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -594,6 +594,16 @@ class APIClient {
 
   async getVersion(): Promise<{ version: string; app_name: string; author: string; repository_url: string }> {
     return this.request('/api/version');
+  }
+
+  async listPresets(): Promise<Preset[]> {
+    const res = await this.request('/api/presets');
+    return Array.isArray(res) ? res : [];
+  }
+
+  async listSeeds(): Promise<SeedPreset[]> {
+    const res = await this.request('/api/presets/seeds');
+    return Array.isArray(res) ? res : [];
   }
 
   async getSettings(): Promise<Record<string, string>> {

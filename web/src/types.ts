@@ -164,4 +164,23 @@ export interface MetricsData {
   };
   series: MetricPoint[];
 }
+export interface Preset {
+  id: string;
+  name: string;
+  description: string;
+  mode: string;
+  difficulty: string;
+  properties: Record<string, string>;
+}
 
+export interface SeedPreset {
+  id: string;
+  name: string;
+  seed: string;
+  category: string;
+  description: string;
+  biomes: string[];
+  features: string[];
+  difficulty?: string;
+  icon?: string;
+}
