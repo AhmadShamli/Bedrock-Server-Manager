@@ -316,6 +316,20 @@ export const KnockPortal: React.FC = () => {
             </p>
           </form>
         )}
+
+        {/* Footer */}
+        <div className="mt-6 pt-4 border-t border-obsidian-800 text-center font-mono text-[11px] text-slate-500 flex items-center justify-center space-x-2">
+          <span>&copy; {new Date().getFullYear()} Bedrock Server Manager</span>
+          <span>•</span>
+          <a
+            href="https://github.com/AhmadShamli/Bedrock-Server-Manager"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-emerald-400 transition-colors"
+          >
+            GitHub
+          </a>
+        </div>
       </div>
     </div>
   );

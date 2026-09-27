@@ -12,6 +12,7 @@ import { Tasks } from './pages/Tasks';
 import { AuditLogs } from './pages/AuditLogs';
 import { GlobalPlayers } from './pages/GlobalPlayers';
 import { UsersPage } from './pages/Users';
+import { Footer } from './components/Footer';
 import { Loader2 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -127,6 +128,8 @@ export const App: React.FC = () => {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+
+      {!isKnock && <Footer />}
     </div>
   );
 };
