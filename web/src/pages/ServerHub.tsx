@@ -520,8 +520,6 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       return;
     }
 
-    // Immediately echo the command into local terminal
-    setLogs((prev) => [...prev, `> ${cmd}`]);
     setCommand('');
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {

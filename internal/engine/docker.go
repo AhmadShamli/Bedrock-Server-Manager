@@ -339,30 +339,70 @@ func (e *DockerEngine) SendConsoleCommand(ctx context.Context, server *models.Se
 	}
 	e.mu.Unlock()
 
-	// Safe command delivery:
-	// 1. itzg/minecraft-bedrock-server ships with `send-command`
-	// 2. Fallback: find bedrock_server PID and write directly to /proc/$pid/fd/0
-	// 3. Fallback: write to /proc/1/fd/0
-	shScript := `if command -v send-command >/dev/null 2>&1; then
-  send-command "$@"
-else
-  pid=$(pidof bedrock_server 2>/dev/null || pgrep -f bedrock_server 2>/dev/null || echo 1)
-  printf '%s\n' "$*" > "/proc/$pid/fd/0"
-fi`
+	// 2. Primary Method: Attach directly to container standard input (PTY / stdin stream)
+	// Because containers are created with OpenStdin: true and Tty: true, writing to
+	// ContainerAttach stream writes directly to the Bedrock console, identical to docker attach
+	// and Portainer console.
+	var attachErr error
+	hijacked, err := e.cli.ContainerAttach(ctx, containerID, container.AttachOptions{
+		Stream: true,
+		Stdin:  true,
+	})
+	if err == nil {
+		defer hijacked.Close()
+		_, writeErr := fmt.Fprintf(hijacked.Conn, "%s\n", cmd)
+		if writeErr == nil {
+			return nil
+		}
+		attachErr = writeErr
+	} else {
+		attachErr = err
+	}
+
+	// 3. Fallback Method: Container Exec as root
+	// If ContainerAttach failed or container does not have stdin attached, run send-command or write to /proc
+	shScript := `export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+if command -v send-command >/dev/null 2>&1; then
+  send-command "$@" && exit 0
+elif [ -x /usr/local/bin/send-command ]; then
+  /usr/local/bin/send-command "$@" && exit 0
+fi
+
+# Locate the bedrock process in /proc
+for proc in $(find /proc -mindepth 2 -maxdepth 2 -name exe \( -lname '*/bedrock_server*' -o -lname '*/box64*' \) -printf '%h\n' 2>/dev/null); do
+  if [ -e "$proc/fd/0" ]; then
+    printf '%s\n' "$*" > "$proc/fd/0" 2>/dev/null && exit 0
+  fi
+done
+
+for pid in $(pidof bedrock_server 2>/dev/null) $(pgrep -f bedrock_server 2>/dev/null) 1; do
+  if [ -e "/proc/$pid/fd/0" ]; then
+    printf '%s\n' "$*" > "/proc/$pid/fd/0" 2>/dev/null && exit 0
+  fi
+done
+exit 1`
 
 	execConfig := types.ExecConfig{
+		User:         "root",
+		Privileged:   true,
 		AttachStdout: true,
 		AttachStderr: true,
-		Tty:          false,
+		Tty:          true,
 		Cmd:          []string{"sh", "-c", shScript, "--", cmd},
 	}
 
 	execID, err := e.cli.ContainerExecCreate(ctx, containerID, execConfig)
 	if err != nil {
+		if attachErr != nil {
+			return fmt.Errorf("failed delivery via attach (%v) and exec create (%w)", attachErr, err)
+		}
 		return fmt.Errorf("failed to create exec: %w", err)
 	}
 
-	if err := e.cli.ContainerExecStart(ctx, execID.ID, types.ExecStartCheck{Tty: false}); err != nil {
+	if err := e.cli.ContainerExecStart(ctx, execID.ID, types.ExecStartCheck{Tty: true}); err != nil {
+		if attachErr != nil {
+			return fmt.Errorf("failed delivery via attach (%v) and exec start (%w)", attachErr, err)
+		}
 		return fmt.Errorf("failed to start exec: %w", err)
 	}
 
