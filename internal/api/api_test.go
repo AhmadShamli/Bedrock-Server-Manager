@@ -1393,8 +1393,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.5.4" {
-		t.Errorf("expected version 1.5.4 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.5.5" {
+		t.Errorf("expected version 1.5.5 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1408,8 +1408,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.5.4" {
-		t.Errorf("expected version 1.5.4 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.5.5" {
+		t.Errorf("expected version 1.5.5 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
@@ -1436,8 +1436,8 @@ func TestPopularSeedsEndpoint(t *testing.T) {
 		t.Fatalf("failed to decode seeds json: %v", err)
 	}
 
-	if len(seeds) == 0 {
-		t.Fatalf("expected non-empty seeds list")
+	if len(seeds) < 50 {
+		t.Fatalf("expected at least 50 seeds, got %d", len(seeds))
 	}
 
 	foundCherry := false
