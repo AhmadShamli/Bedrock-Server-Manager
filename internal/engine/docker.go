@@ -24,16 +24,26 @@ import (
 
 const DefaultImage = "itzg/minecraft-bedrock-server:latest"
 
+// containerCPUSample holds previous sample ticks for delta calculation.
+type containerCPUSample struct {
+	containerUsage uint64
+	systemUsage    uint64
+	timestamp      time.Time
+}
+
 // DockerEngine orchestrates Minecraft Bedrock instances via Docker Engine API.
 type DockerEngine struct {
 	cli            *dockerclient.Client
 	circuitBreaker *CrashCircuitBreaker
 
-	mu          sync.RWMutex
-	ringBuffers map[string]*RingBuffer
-	logChans    map[string][]chan string
-	logCancels  map[string]context.CancelFunc
-	logListener func(serverID, line string)
+	mu             sync.RWMutex
+	ringBuffers    map[string]*RingBuffer
+	logChans       map[string][]chan string
+	logCancels     map[string]context.CancelFunc
+	logListener    func(serverID, line string)
+
+	prevCPUMu      sync.Mutex
+	prevCPUSamples map[string]containerCPUSample
 }
 
 // NewDockerEngine initializes a DockerEngine connected to the local socket or DOCKER_HOST.
@@ -58,6 +68,7 @@ func NewDockerEngine(dockerHost string) (*DockerEngine, error) {
 		ringBuffers:    make(map[string]*RingBuffer),
 		logChans:       make(map[string][]chan string),
 		logCancels:     make(map[string]context.CancelFunc),
+		prevCPUSamples: make(map[string]containerCPUSample),
 	}, nil
 }
 
@@ -235,16 +246,26 @@ func (e *DockerEngine) GetServerStatus(ctx context.Context, server *models.Serve
 	}
 
 	containerID := server.ContainerID
+	canonicalName := fmt.Sprintf("bsm-%s", server.ID)
 	if containerID == "" {
-		containerID = fmt.Sprintf("bsm-%s", server.ID)
+		containerID = canonicalName
 	}
 
 	inspect, err := e.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
-		if dockerclient.IsErrNotFound(err) {
-			return models.ServerStatusStopped, nil
+		if dockerclient.IsErrNotFound(err) && containerID != canonicalName {
+			// ContainerID might be outdated, try inspecting canonical name
+			inspect, err = e.cli.ContainerInspect(ctx, canonicalName)
+			if err == nil {
+				server.ContainerID = inspect.ID
+			}
 		}
-		return "", err
+		if err != nil {
+			if dockerclient.IsErrNotFound(err) {
+				return models.ServerStatusStopped, nil
+			}
+			return "", err
+		}
 	}
 
 	if inspect.State.Running {
@@ -265,13 +286,20 @@ func (e *DockerEngine) GetServerStatus(ctx context.Context, server *models.Serve
 // GetContainerStats samples real-time CPU % and RAM usage from Docker.
 func (e *DockerEngine) GetContainerStats(ctx context.Context, server *models.Server) (*models.MetricRaw, error) {
 	containerID := server.ContainerID
+	canonicalName := fmt.Sprintf("bsm-%s", server.ID)
 	if containerID == "" {
-		containerID = fmt.Sprintf("bsm-%s", server.ID)
+		containerID = canonicalName
 	}
 
 	statsResp, err := e.cli.ContainerStats(ctx, containerID, false)
 	if err != nil {
-		return nil, err
+		if dockerclient.IsErrNotFound(err) && containerID != canonicalName {
+			containerID = canonicalName
+			statsResp, err = e.cli.ContainerStats(ctx, containerID, false)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer statsResp.Body.Close()
 
@@ -280,26 +308,69 @@ func (e *DockerEngine) GetContainerStats(ctx context.Context, server *models.Ser
 		return nil, err
 	}
 
-	// Calculate CPU percentage
-	cpuDelta := float64(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage)
-	systemDelta := float64(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage)
-	cpuPercent := 0.0
-	if systemDelta > 0.0 && cpuDelta > 0.0 {
-		onlineCPUs := float64(stats.CPUStats.OnlineCPUs)
-		if onlineCPUs == 0.0 {
-			onlineCPUs = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
+	now := time.Now()
+	curContainerUsage := stats.CPUStats.CPUUsage.TotalUsage
+	curSystemUsage := stats.CPUStats.SystemUsage
+
+	onlineCPUs := float64(stats.CPUStats.OnlineCPUs)
+	if onlineCPUs == 0.0 {
+		onlineCPUs = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
+	}
+	if onlineCPUs == 0.0 {
+		onlineCPUs = 1.0
+	}
+
+	e.prevCPUMu.Lock()
+	prev, hasPrev := e.prevCPUSamples[server.ID]
+	e.prevCPUSamples[server.ID] = containerCPUSample{
+		containerUsage: curContainerUsage,
+		systemUsage:    curSystemUsage,
+		timestamp:      now,
+	}
+	e.prevCPUMu.Unlock()
+
+	var cpuPercent float64
+
+	// Strategy 1: Check if Docker daemon returned valid non-zero PreCPUStats
+	if stats.PreCPUStats.CPUUsage.TotalUsage > 0 && stats.PreCPUStats.SystemUsage > 0 && stats.CPUStats.SystemUsage > stats.PreCPUStats.SystemUsage {
+		cpuDelta := float64(curContainerUsage - stats.PreCPUStats.CPUUsage.TotalUsage)
+		systemDelta := float64(curSystemUsage - stats.PreCPUStats.SystemUsage)
+		if systemDelta > 0.0 && cpuDelta >= 0.0 {
+			cpuPercent = (cpuDelta / systemDelta) * onlineCPUs * 100.0
 		}
-		if onlineCPUs == 0.0 {
-			onlineCPUs = 1.0
+	} else if hasPrev && curContainerUsage >= prev.containerUsage {
+		// Strategy 2: Use in-memory delta from previous sample
+		cpuDelta := float64(curContainerUsage - prev.containerUsage)
+		var systemDelta float64
+		if curSystemUsage > prev.systemUsage {
+			systemDelta = float64(curSystemUsage - prev.systemUsage)
+		} else {
+			elapsedNs := float64(now.Sub(prev.timestamp).Nanoseconds())
+			if elapsedNs > 0 {
+				systemDelta = elapsedNs * onlineCPUs
+			}
 		}
-		cpuPercent = (cpuDelta / systemDelta) * onlineCPUs * 100.0
+		if systemDelta > 0.0 && cpuDelta >= 0.0 {
+			cpuPercent = (cpuDelta / systemDelta) * onlineCPUs * 100.0
+		}
 	}
 
 	ramBytes := int64(stats.MemoryStats.Usage)
+	// Subtract inactive_file or cache if present (matching standard docker stats)
+	if v, ok := stats.MemoryStats.Stats["inactive_file"]; ok && int64(v) < ramBytes {
+		ramBytes -= int64(v)
+	} else if v, ok := stats.MemoryStats.Stats["total_inactive_file"]; ok && int64(v) < ramBytes {
+		ramBytes -= int64(v)
+	} else if v, ok := stats.MemoryStats.Stats["cache"]; ok && int64(v) < ramBytes {
+		ramBytes -= int64(v)
+	}
+	if ramBytes < 0 {
+		ramBytes = 0
+	}
 
 	return &models.MetricRaw{
 		ServerID:   server.ID,
-		Timestamp:  time.Now().UTC(),
+		Timestamp:  now.UTC(),
 		CPUPercent: cpuPercent,
 		RAMBytes:   ramBytes,
 	}, nil

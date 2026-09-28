@@ -120,7 +120,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
             <h1 className="text-2xl font-bold tracking-tight text-slate-100 flex items-center gap-2">
               <span>Overview Dashboard</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-normal">
-                v{summary?.host_system?.version || '1.5.9'}
+                v{summary?.host_system?.version || '1.6.0'}
               </span>
             </h1>
           </div>
@@ -247,10 +247,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
           </div>
           <div className="mt-3 flex items-baseline gap-2">
             <span className="text-2xl font-mono font-bold text-slate-100">
-              {coresUsed.toFixed(2)}
+              {coresUsed < 0.01 && coresUsed > 0 ? '< 0.01' : coresUsed.toFixed(2)}
             </span>
             <span className="text-xs font-mono text-slate-400">
-              / {coresAllocated.toFixed(1)} vCPU
+              {coresAllocated > 0 ? `/ ${coresAllocated.toFixed(1)} vCPU` : 'vCPU'}
             </span>
           </div>
           <div className="mt-3 w-full bg-obsidian-800 rounded-full h-1.5 overflow-hidden">
@@ -262,13 +262,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                   ? 'bg-amber-500'
                   : 'bg-emerald-500'
               }`}
-              style={{ width: `${cpuPercentOfAllocated}%` }}
+              style={{ width: `${coresAllocated > 0 ? Math.min(100, Math.max(0, cpuPercentOfAllocated)) : 0}%` }}
             ></div>
           </div>
           <div className="mt-2.5 flex items-center justify-between text-xs text-slate-400">
             <span>Load vs Cap:</span>
             <span className="font-mono text-slate-300 font-medium">
-              {(summary?.total_used_cpu_percent ?? 0).toFixed(1)}% ({cpuPercentOfAllocated}% cap)
+              {(summary?.total_used_cpu_percent ?? 0).toFixed(1)}% {coresAllocated > 0 ? `(${cpuPercentOfAllocated}% cap)` : ''}
             </span>
           </div>
         </div>
@@ -286,7 +286,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
               {formatBytes(ramUsed)}
             </span>
             <span className="text-xs font-mono text-slate-400">
-              / {formatBytes(ramAllocated)} cap
+              {ramAllocated > 0 ? `/ ${formatBytes(ramAllocated)} cap` : ''}
             </span>
           </div>
           <div className="mt-3 w-full bg-obsidian-800 rounded-full h-1.5 overflow-hidden">
@@ -298,13 +298,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                   ? 'bg-amber-500'
                   : 'bg-emerald-500'
               }`}
-              style={{ width: `${ramPercentOfAllocated}%` }}
+              style={{ width: `${ramAllocated > 0 ? Math.min(100, Math.max(0, ramPercentOfAllocated)) : 0}%` }}
             ></div>
           </div>
           <div className="mt-2.5 flex items-center justify-between text-xs text-slate-400">
-            <span>Headroom:</span>
+            <span>{ramAllocated > 0 ? 'Headroom:' : 'Usage:'}</span>
             <span className="font-mono text-slate-300 font-medium">
-              {formatBytes(Math.max(0, ramAllocated - ramUsed))} free
+              {ramAllocated > 0
+                ? `${formatBytes(Math.max(0, ramAllocated - ramUsed))} free (${ramPercentOfAllocated}% cap)`
+                : `${formatBytes(ramUsed)} active`}
             </span>
           </div>
         </div>

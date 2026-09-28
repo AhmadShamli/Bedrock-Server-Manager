@@ -261,6 +261,62 @@ func (h *DashboardHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		servers = filtered
 	}
 
+	// 1. Sync live engine status for all servers first
+	for i := range servers {
+		if h.engine != nil {
+			if st, err := h.engine.GetServerStatus(r.Context(), &servers[i]); err == nil && st != servers[i].Status {
+				servers[i].Status = st
+				_ = h.db.UpdateServerStatus(r.Context(), servers[i].ID, st, servers[i].ContainerID)
+			}
+		}
+	}
+
+	// 2. Collect container metrics for running servers (preferring in-memory telemetry, falling back to concurrent engine calls)
+	type serverMetric struct {
+		cpuPercent float64
+		ramBytes   int64
+	}
+	metricsMap := make(map[string]serverMetric)
+	var metricsMu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, s := range servers {
+		if s.Status != models.ServerStatusRunning {
+			continue
+		}
+
+		var found bool
+		if h.telemetryCollector != nil {
+			if latest := h.telemetryCollector.GetLatest(s.ID); latest != nil && time.Since(latest.Timestamp) < 15*time.Second {
+				metricsMap[s.ID] = serverMetric{
+					cpuPercent: latest.CPUPercent,
+					ramBytes:   latest.RAMBytes,
+				}
+				found = true
+			}
+		}
+
+		if !found && h.engine != nil {
+			srv := s
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ctxTimeout, cancel := context.WithTimeout(r.Context(), 1500*time.Millisecond)
+				defer cancel()
+				stats, err := h.engine.GetContainerStats(ctxTimeout, &srv)
+				if err == nil && stats != nil {
+					metricsMu.Lock()
+					metricsMap[srv.ID] = serverMetric{
+						cpuPercent: stats.CPUPercent,
+						ramBytes:   stats.RAMBytes,
+					}
+					metricsMu.Unlock()
+				}
+			}()
+		}
+	}
+	wg.Wait()
+
 	totalServers := len(servers)
 	runningServers := 0
 	stoppedServers := 0
@@ -277,14 +333,6 @@ func (h *DashboardHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		s := servers[i]
 		serverNameMap[s.ID] = s.Name
 
-		// Sync live engine status if available
-		if h.engine != nil {
-			if st, err := h.engine.GetServerStatus(r.Context(), &s); err == nil && st != s.Status {
-				s.Status = st
-				_ = h.db.UpdateServerStatus(r.Context(), s.ID, st, s.ContainerID)
-			}
-		}
-
 		totalAllocatedCores += s.CPULimit
 		if memBytes, err := engine.ParseMemoryBytes(s.MemoryLimit); err == nil {
 			totalAllocatedRAM += memBytes
@@ -300,17 +348,14 @@ func (h *DashboardHandler) Summary(w http.ResponseWriter, r *http.Request) {
 
 		if s.Status == models.ServerStatusRunning {
 			runningServers++
-			if h.engine != nil {
-				ctxTimeout, cancel := context.WithTimeout(r.Context(), 1200*time.Millisecond)
-				stats, err := h.engine.GetContainerStats(ctxTimeout, &s)
-				cancel()
-				if err == nil && stats != nil {
-					cpuPercent = stats.CPUPercent
-					ramBytes = stats.RAMBytes
-					totalUsedRAM += ramBytes
-					totalCPUPercent += cpuPercent
-					sampledServers++
-				}
+			if m, ok := metricsMap[s.ID]; ok {
+				cpuPercent = m.cpuPercent
+				ramBytes = m.ramBytes
+			}
+			totalUsedRAM += ramBytes
+			totalCPUPercent += cpuPercent
+			if cpuPercent > 0 || ramBytes > 0 {
+				sampledServers++
 			}
 		} else {
 			stoppedServers++

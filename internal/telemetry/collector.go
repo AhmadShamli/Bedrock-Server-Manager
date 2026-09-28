@@ -17,6 +17,7 @@ type TelemetryCollector struct {
 	mu           sync.Mutex
 	metricsDB    *database.MetricsDB
 	buffer       []models.MetricRaw
+	latest       map[string]models.MetricRaw
 	flushTicker  *time.Ticker
 	rollupTicker *time.Ticker
 	pruneTicker  *time.Ticker
@@ -33,6 +34,7 @@ func NewTelemetryCollector(db *database.MetricsDB) *TelemetryCollector {
 	return &TelemetryCollector{
 		metricsDB:      db,
 		buffer:         make([]models.MetricRaw, 0, 200),
+		latest:         make(map[string]models.MetricRaw),
 		stopChan:       make(chan struct{}),
 		RawRetainHours: 6,
 		Rollup5mDays:   7,
@@ -40,18 +42,40 @@ func NewTelemetryCollector(db *database.MetricsDB) *TelemetryCollector {
 	}
 }
 
-// Ingest pushes a sample into the in-memory buffer.
+// Ingest pushes a sample into the in-memory buffer and updates the latest sample map.
 func (tc *TelemetryCollector) Ingest(serverID string, cpuPercent float64, ramBytes int64, playerCount int) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
-	tc.buffer = append(tc.buffer, models.MetricRaw{
+	sample := models.MetricRaw{
 		ServerID:    serverID,
 		Timestamp:   time.Now().UTC(),
 		CPUPercent:  cpuPercent,
 		RAMBytes:    ramBytes,
 		PlayerCount: playerCount,
-	})
+	}
+
+	tc.buffer = append(tc.buffer, sample)
+	if tc.latest == nil {
+		tc.latest = make(map[string]models.MetricRaw)
+	}
+	tc.latest[serverID] = sample
+}
+
+// GetLatest retrieves the most recent in-memory sample for a server, or nil if not found.
+func (tc *TelemetryCollector) GetLatest(serverID string) *models.MetricRaw {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+
+	if tc.latest == nil {
+		return nil
+	}
+	sample, ok := tc.latest[serverID]
+	if !ok {
+		return nil
+	}
+	res := sample
+	return &res
 }
 
 // QueryRaw retrieves metrics for a server since a given timestamp, combining database records and in-memory buffer.

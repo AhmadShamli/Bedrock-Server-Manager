@@ -1446,8 +1446,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.5.9" {
-		t.Errorf("expected version 1.5.9 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.6.0" {
+		t.Errorf("expected version 1.6.0 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1461,8 +1461,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.5.9" {
-		t.Errorf("expected version 1.5.9 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.6.0" {
+		t.Errorf("expected version 1.6.0 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
@@ -2011,6 +2011,15 @@ func TestDashboardSummary(t *testing.T) {
 	}
 	if summary.TotalAllocatedCores != 6.0 {
 		t.Errorf("expected 6.0 allocated cores, got %f", summary.TotalAllocatedCores)
+	}
+	if summary.TotalUsedRAM != 1024*1024*450 {
+		t.Errorf("expected 450MB total used ram, got %d", summary.TotalUsedRAM)
+	}
+	if summary.TotalUsedCPUPercent != 14.5 {
+		t.Errorf("expected 14.5 total used cpu percent, got %f", summary.TotalUsedCPUPercent)
+	}
+	if summary.TotalUsedCPUCores != 0.145 {
+		t.Errorf("expected 0.145 used cpu cores, got %f", summary.TotalUsedCPUCores)
 	}
 	if summary.HostSystem.Version == "" || summary.HostSystem.OS == "" {
 		t.Errorf("expected valid host system telemetry, got %+v", summary.HostSystem)

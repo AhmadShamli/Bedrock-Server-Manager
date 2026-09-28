@@ -48,4 +48,17 @@ func TestTelemetryCollector(t *testing.T) {
 	if combined[2].CPUPercent != 20.0 || combined[2].PlayerCount != 6 {
 		t.Errorf("unexpected combined sample: %+v", combined[2])
 	}
+
+	// Verify GetLatest returns the newest ingested sample
+	latest := col.GetLatest("srv-1")
+	if latest == nil {
+		t.Fatalf("expected GetLatest to return sample, got nil")
+	}
+	if latest.CPUPercent != 20.0 || latest.RAMBytes != 1024*1024*600 || latest.PlayerCount != 6 {
+		t.Errorf("unexpected GetLatest sample: %+v", latest)
+	}
+
+	if none := col.GetLatest("non-existent-server"); none != nil {
+		t.Errorf("expected nil for non-existent server, got %+v", none)
+	}
 }

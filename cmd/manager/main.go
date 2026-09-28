@@ -207,6 +207,10 @@ func main() {
 				continue
 			}
 			for _, s := range servers {
+				if st, err := serverEngine.GetServerStatus(context.Background(), &s); err == nil && st != s.Status {
+					s.Status = st
+					_ = mgrDB.UpdateServerStatus(context.Background(), s.ID, st, s.ContainerID)
+				}
 				if s.Status == models.ServerStatusRunning {
 					if stats, err := serverEngine.GetContainerStats(context.Background(), &s); err == nil && stats != nil {
 						playerCount := len(playerMgr.GetOnlinePlayers(s.ID))
