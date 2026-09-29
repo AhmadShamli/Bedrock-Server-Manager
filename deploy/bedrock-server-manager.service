@@ -18,7 +18,6 @@ RestartSec=3s
 LimitNOFILE=65536
 
 # Process security and networking capabilities for host firewall management
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 
 # Filesystem sandboxing (protects OS binaries while allowing custom DATA_DIR paths)
