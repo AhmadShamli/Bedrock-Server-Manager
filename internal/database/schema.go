@@ -2,14 +2,45 @@ package database
 
 // ManagerSchemaSQL contains table definitions and indices for the primary metadata database.
 const ManagerSchemaSQL = `
+CREATE TABLE IF NOT EXISTS plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    billing_interval TEXT NOT NULL DEFAULT 'permanent',
+    trial_duration_days INTEGER NOT NULL DEFAULT 0,
+    max_servers INTEGER NOT NULL DEFAULT 1,
+    max_memory TEXT NOT NULL DEFAULT '2G',
+    max_cpu REAL NOT NULL DEFAULT 2.0,
+    max_backups_per_server INTEGER NOT NULL DEFAULT 3,
+    max_disk_mb INTEGER NOT NULL DEFAULT 0,
+    max_player_slots INTEGER NOT NULL DEFAULT 10,
+    max_collaborators INTEGER NOT NULL DEFAULT 0,
+    idle_timeout_minutes INTEGER NOT NULL DEFAULT 0,
+    allow_custom_seed INTEGER NOT NULL DEFAULT 1,
+    allow_custom_port INTEGER NOT NULL DEFAULT 0,
+    allow_preview_versions INTEGER NOT NULL DEFAULT 0,
+    allow_addons INTEGER NOT NULL DEFAULT 1,
+    allow_port_gate_keys INTEGER NOT NULL DEFAULT 1,
+    allow_tasks INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_plans_default ON plans(is_default);
+
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
+    email TEXT NOT NULL DEFAULT '',
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'admin',
+    plan_id INTEGER REFERENCES plans(id) ON DELETE SET NULL,
+    plan_status TEXT NOT NULL DEFAULT 'active',
+    plan_expires_at TEXT NULL,
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_plan ON users(plan_id);
 
 CREATE TABLE IF NOT EXISTS user_server_access (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,10 +70,12 @@ CREATE TABLE IF NOT EXISTS servers (
     container_id TEXT NOT NULL DEFAULT '',
     seed TEXT NOT NULL DEFAULT '',
     game_server_address TEXT NOT NULL DEFAULT '',
+    owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_servers_status ON servers(status);
+CREATE INDEX IF NOT EXISTS idx_servers_owner ON servers(owner_user_id);
 
 CREATE TABLE IF NOT EXISTS port_gate_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

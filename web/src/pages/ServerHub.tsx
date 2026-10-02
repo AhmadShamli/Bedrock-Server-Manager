@@ -3331,7 +3331,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
           )}
 
           {/* DANGER ZONE - DELETE SERVER */}
-          {user.role === 'admin' && (
+          {(user.role === 'admin' || (server && server.owner_user_id === user.id)) && (
             <div className="pt-6 border-t border-rose-900/40">
               <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-5 space-y-3">
                 <h3 className="font-mono text-base font-bold text-rose-300 flex items-center gap-2">

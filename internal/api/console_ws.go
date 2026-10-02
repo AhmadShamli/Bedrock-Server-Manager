@@ -133,7 +133,14 @@ func (h *ServerHandler) ConsoleWS(w http.ResponseWriter, r *http.Request) {
 				_ = safeWriteJSON(WSMessage{Type: "error", Payload: "Server is offline. Start the server before sending console commands."})
 				continue
 			}
-			if err := h.engine.SendConsoleCommand(ctx, server, wsMsg.Payload); err != nil {
+			cleanCmd := strings.TrimSpace(wsMsg.Payload)
+			if claims := GetUserClaims(r); claims != nil && claims.Role == models.RoleUser {
+				if !isSafeCommand(cleanCmd) {
+					_ = safeWriteJSON(WSMessage{Type: "error", Payload: "Command not permitted for normal user accounts. Allowed commands: say, tell, me, list, time, weather, difficulty, gamemode, kick, whitelist, gamerule."})
+					continue
+				}
+			}
+			if err := h.engine.SendConsoleCommand(ctx, server, cleanCmd); err != nil {
 				_ = safeWriteJSON(WSMessage{Type: "error", Payload: "Failed to send command: " + err.Error()})
 			}
 		}

@@ -17,7 +17,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User } from '../types';
+import { Server, User, UserPlanStatus } from '../types';
 import { usePagination } from '../hooks/usePagination';
 import { Pagination } from '../components/Pagination';
 import { DeployModal } from '../components/DeployModal';
@@ -28,6 +28,7 @@ interface ServersProps {
 
 export const Servers: React.FC<ServersProps> = ({ user }) => {
   const [servers, setServers] = useState<Server[]>([]);
+  const [userPlan, setUserPlan] = useState<UserPlanStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -51,6 +52,10 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
     try {
       const data = await api.listServers();
       setServers(data);
+      if (user.role === 'user') {
+        const plan = await api.getMyPlan();
+        setUserPlan(plan);
+      }
       setError(null);
     } catch (err: any) {
       setError(err.message || 'Failed to load servers');
@@ -59,6 +64,10 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
       if (isManualRefresh) setRefreshing(false);
     }
   };
+
+  const isUserQuotaFull = Boolean(
+    user.role === 'user' && userPlan && userPlan.usage.servers_count >= userPlan.usage.servers_max
+  );
 
   useEffect(() => {
     fetchServers();
@@ -147,7 +156,7 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin text-emerald-400' : ''}`} />
           </button>
 
-          {user.role === 'admin' && (
+          {user.role === 'admin' ? (
             <button
               onClick={openDeployModal}
               className="px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-sm tracking-wider flex items-center space-x-2 transition-all shadow-[0_0_15px_rgba(16,185,129,0.25)] hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]"
@@ -155,9 +164,108 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
               <Plus className="w-4 h-4" />
               <span>Deploy Instance</span>
             </button>
-          )}
+          ) : user.role === 'user' ? (
+            <button
+              onClick={openDeployModal}
+              disabled={isUserQuotaFull}
+              className={`px-4 py-2.5 rounded-lg font-bold font-mono text-sm tracking-wider flex items-center space-x-2 transition-all shadow-sm ${
+                isUserQuotaFull
+                  ? 'bg-obsidian-800 text-slate-500 border border-obsidian-700 cursor-not-allowed opacity-60'
+                  : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950 shadow-[0_0_15px_rgba(16,185,129,0.25)] hover:shadow-[0_0_20px_rgba(16,185,129,0.4)]'
+              }`}
+            >
+              {isUserQuotaFull ? (
+                <>
+                  <AlertTriangle className="w-4 h-4 text-amber-500" />
+                  <span>Quota Full ({userPlan?.usage.servers_count}/{userPlan?.usage.servers_max})</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-4 h-4" />
+                  <span>Deploy Instance</span>
+                </>
+              )}
+            </button>
+          ) : null}
         </div>
       </div>
+
+      {/* Normal User Plan Quota Overview */}
+      {user.role === 'user' && userPlan && (
+        <div className="mb-8 p-5 rounded-xl bg-obsidian-900 border border-obsidian-700/80 shadow-lg">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-obsidian-800">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs uppercase font-mono tracking-wider text-slate-400">Current Plan:</span>
+                <span className="font-mono font-bold text-slate-100 text-base">{userPlan.plan.name}</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded font-mono font-semibold uppercase ${
+                  userPlan.user.plan_status === 'active' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {userPlan.user.plan_status || 'active'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 mt-1 font-mono">{userPlan.plan.description || 'Self-service Bedrock Dedicated Server allocation.'}</p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <div className="text-xs text-slate-400 font-mono">Server Quota</div>
+                <div className="font-mono font-bold text-sm text-slate-100">
+                  <span className={userPlan.usage.servers_count >= userPlan.usage.servers_max ? 'text-amber-400' : 'text-emerald-400'}>
+                    {userPlan.usage.servers_count}
+                  </span>
+                  <span className="text-slate-500"> / </span>
+                  <span>{userPlan.usage.servers_max} Active</span>
+                </div>
+              </div>
+
+              {/* Progress mini bar */}
+              <div className="w-24 h-3 bg-obsidian-950 rounded-full border border-obsidian-800 overflow-hidden">
+                <div
+                  className={`h-full transition-all ${
+                    userPlan.usage.servers_count >= userPlan.usage.servers_max ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`}
+                  style={{
+                    width: `${Math.min(100, (userPlan.usage.servers_count / Math.max(1, userPlan.usage.servers_max)) * 100)}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Plan Limits Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 pt-4 text-xs font-mono">
+            <div className="bg-obsidian-950 p-2.5 rounded-lg border border-obsidian-800/80">
+              <span className="text-[10px] text-slate-500 block uppercase">RAM Limit</span>
+              <span className="font-bold text-slate-200">{userPlan.plan.max_memory}</span>
+            </div>
+            <div className="bg-obsidian-950 p-2.5 rounded-lg border border-obsidian-800/80">
+              <span className="text-[10px] text-slate-500 block uppercase">CPU Cores</span>
+              <span className="font-bold text-slate-200">{userPlan.plan.max_cpu} Cores</span>
+            </div>
+            <div className="bg-obsidian-950 p-2.5 rounded-lg border border-obsidian-800/80">
+              <span className="text-[10px] text-slate-500 block uppercase">Max Backups</span>
+              <span className="font-bold text-slate-200">{userPlan.plan.max_backups_per_server} / srv</span>
+            </div>
+            <div className="bg-obsidian-950 p-2.5 rounded-lg border border-obsidian-800/80">
+              <span className="text-[10px] text-slate-500 block uppercase">Max Players</span>
+              <span className="font-bold text-slate-200">{userPlan.plan.max_player_slots}</span>
+            </div>
+            <div className="bg-obsidian-950 p-2.5 rounded-lg border border-obsidian-800/80">
+              <span className="text-[10px] text-slate-500 block uppercase">Custom Port</span>
+              <span className={userPlan.plan.allow_custom_port ? 'text-emerald-400 font-bold' : 'text-slate-400'}>
+                {userPlan.plan.allow_custom_port ? 'Allowed' : 'Auto'}
+              </span>
+            </div>
+            <div className="bg-obsidian-950 p-2.5 rounded-lg border border-obsidian-800/80">
+              <span className="text-[10px] text-slate-500 block uppercase">Port Gate</span>
+              <span className={userPlan.plan.allow_port_gate_keys ? 'text-emerald-400 font-bold' : 'text-slate-500'}>
+                {userPlan.plan.allow_port_gate_keys ? 'Included' : 'Off'}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex flex-col items-center justify-center py-24 text-slate-400">
@@ -176,7 +284,7 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
           <p className="text-sm text-slate-400 max-w-sm mx-auto mt-1 mb-6">
             Create your first Minecraft Bedrock server instance with custom port and resource limits.
           </p>
-          {user.role === 'admin' && (
+          {(user.role === 'admin' || (user.role === 'user' && !isUserQuotaFull)) && (
             <button
               onClick={openDeployModal}
               className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono font-bold text-sm"
@@ -576,6 +684,7 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
         isOpen={showModal}
         onClose={() => setShowModal(false)}
         onSuccess={() => fetchServers(true)}
+        userPlan={userPlan}
       />
     </div>
   );

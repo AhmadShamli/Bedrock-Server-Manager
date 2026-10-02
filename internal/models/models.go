@@ -6,6 +6,7 @@ import "time"
 const (
 	RoleAdmin    = "admin"
 	RoleOperator = "operator"
+	RoleUser     = "user"
 )
 
 // Server status
@@ -24,16 +25,48 @@ const (
 	PortGateModeCombined   = "combined"
 )
 
-// User represents a system administrator or server operator.
-type User struct {
-	ID           int64     `json:"id"`
-	Username     string    `json:"username"`
-	PasswordHash string    `json:"-"`
-	Role         string    `json:"role"`
-	CreatedAt    time.Time `json:"created_at"`
+// Plan defines resource quotas and capabilities for normal users.
+type Plan struct {
+	ID                   int64     `json:"id"`
+	Name                 string    `json:"name"`
+	Description          string    `json:"description"`
+	IsDefault            bool      `json:"is_default"`
+	BillingInterval      string    `json:"billing_interval"` // permanent, monthly, trial
+	TrialDurationDays    int       `json:"trial_duration_days"`
+	MaxServers           int       `json:"max_servers"`
+	MaxMemory            string    `json:"max_memory"` // e.g. "2G"
+	MaxCPU               float64   `json:"max_cpu"`
+	MaxBackupsPerServer  int       `json:"max_backups_per_server"`
+	MaxDiskMB            int       `json:"max_disk_mb"` // 0 = unlimited
+	MaxPlayerSlots       int       `json:"max_player_slots"`
+	MaxCollaborators     int       `json:"max_collaborators"`
+	IdleTimeoutMinutes   int       `json:"idle_timeout_minutes"` // 0 = 24/7
+	AllowCustomSeed      bool      `json:"allow_custom_seed"`
+	AllowCustomPort      bool      `json:"allow_custom_port"`
+	AllowPreviewVersions bool      `json:"allow_preview_versions"`
+	AllowAddons          bool      `json:"allow_addons"`
+	AllowPortGateKeys    bool      `json:"allow_port_gate_keys"`
+	AllowTasks           bool      `json:"allow_tasks"`
+	UserCount            int       `json:"user_count,omitempty"` // populated dynamically in admin views
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
-// UserServerAccess maps operator access to specific servers.
+// User represents a system administrator, server operator, or normal user.
+type User struct {
+	ID            int64      `json:"id"`
+	Username      string     `json:"username"`
+	Email         string     `json:"email"`
+	PasswordHash  string     `json:"-"`
+	Role          string     `json:"role"`
+	PlanID        *int64     `json:"plan_id,omitempty"`
+	PlanName      string     `json:"plan_name,omitempty"`
+	PlanStatus    string     `json:"plan_status"` // active, trial, expired
+	PlanExpiresAt *time.Time `json:"plan_expires_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// UserServerAccess maps operator or collaborator access to specific servers.
 type UserServerAccess struct {
 	ID        int64     `json:"id"`
 	UserID    int64     `json:"user_id"`
@@ -60,6 +93,7 @@ type Server struct {
 	ContainerID     string    `json:"container_id"`
 	Seed              string    `json:"seed"`
 	GameServerAddress string    `json:"game_server_address"`
+	OwnerUserID     *int64    `json:"owner_user_id,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }

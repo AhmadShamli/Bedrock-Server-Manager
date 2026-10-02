@@ -91,6 +91,32 @@ func (db *ManagerDB) Migrate(ctx context.Context) error {
 	}
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN seed TEXT NOT NULL DEFAULT ''")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN game_server_address TEXT NOT NULL DEFAULT ''")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_id INTEGER REFERENCES plans(id) ON DELETE SET NULL")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_status TEXT NOT NULL DEFAULT 'active'")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_expires_at TEXT NULL")
+
+	// Ensure at least one default plan exists
+	var planCount int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM plans").Scan(&planCount); err == nil && planCount == 0 {
+		nowStr := FormatTime(time.Now().UTC())
+		_, _ = db.ExecContext(ctx, `
+			INSERT INTO plans (
+				name, description, is_default, billing_interval, trial_duration_days,
+				max_servers, max_memory, max_cpu, max_backups_per_server, max_disk_mb,
+				max_player_slots, max_collaborators, idle_timeout_minutes,
+				allow_custom_seed, allow_custom_port, allow_preview_versions,
+				allow_addons, allow_port_gate_keys, allow_tasks, created_at, updated_at
+			) VALUES (
+				'Default Plan', 'Standard community tier with essential server resources.', 1, 'permanent', 0,
+				1, '2G', 2.0, 3, 5120,
+				10, 0, 0,
+				1, 0, 0,
+				1, 1, 0, ?, ?
+			)`, nowStr, nowStr)
+	}
+
 	return nil
 }
 
@@ -141,11 +167,34 @@ func (db *ManagerDB) CountUsers(ctx context.Context) (int, error) {
 }
 
 func (db *ManagerDB) CreateUser(ctx context.Context, username, passwordHash, role string) (*models.User, error) {
+	return db.CreateUserExtended(ctx, username, "", passwordHash, role, nil, "active", nil)
+}
+
+func (db *ManagerDB) CreateUserExtended(ctx context.Context, username, email, passwordHash, role string, planID *int64, planStatus string, planExpiresAt *time.Time) (*models.User, error) {
 	now := time.Now().UTC()
 	nowStr := FormatTime(now)
+
+	if planStatus == "" {
+		planStatus = "active"
+	}
+
+	// Auto-assign default plan to normal users if none specified
+	if role == models.RoleUser && planID == nil {
+		if defPlan, err := db.GetDefaultPlan(ctx); err == nil && defPlan != nil {
+			planID = &defPlan.ID
+		}
+	}
+
+	var expVal interface{}
+	if expStr := FormatNullTime(planExpiresAt); expStr.Valid {
+		expVal = expStr.String
+	} else {
+		expVal = nil
+	}
+
 	res, err := db.ExecContext(ctx,
-		"INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
-		username, passwordHash, role, nowStr,
+		"INSERT INTO users (username, email, password_hash, role, plan_id, plan_status, plan_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+		username, email, passwordHash, role, planID, planStatus, expVal, nowStr,
 	)
 	if err != nil {
 		return nil, err
@@ -154,53 +203,99 @@ func (db *ManagerDB) CreateUser(ctx context.Context, username, passwordHash, rol
 	if err != nil {
 		return nil, err
 	}
-	return &models.User{
-		ID:           id,
-		Username:     username,
-		PasswordHash: passwordHash,
-		Role:         role,
-		CreatedAt:    now,
-	}, nil
+	u := &models.User{
+		ID:            id,
+		Username:      username,
+		Email:         email,
+		PasswordHash:  passwordHash,
+		Role:          role,
+		PlanID:        planID,
+		PlanStatus:    planStatus,
+		PlanExpiresAt: planExpiresAt,
+		CreatedAt:     now,
+	}
+	if planID != nil {
+		if p, err := db.GetPlan(ctx, *planID); err == nil && p != nil {
+			u.PlanName = p.Name
+		}
+	}
+	return u, nil
 }
 
 func (db *ManagerDB) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
 	var u models.User
+	var planID sql.NullInt64
+	var planName, planStatus, planExpStr sql.NullString
 	var createdAtStr string
-	err := db.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?",
+
+	err := db.QueryRowContext(ctx, `
+		SELECT u.id, u.username, u.email, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		FROM users u
+		LEFT JOIN plans p ON u.plan_id = p.id
+		WHERE u.username = ?`,
 		username,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &createdAtStr)
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr)
 	if err != nil {
 		return nil, err
 	}
-	t, err := ParseTime(createdAtStr)
-	if err != nil {
-		return nil, err
+	if planID.Valid {
+		u.PlanID = &planID.Int64
 	}
-	u.CreatedAt = t
+	if planName.Valid {
+		u.PlanName = planName.String
+	}
+	if planStatus.Valid && planStatus.String != "" {
+		u.PlanStatus = planStatus.String
+	} else {
+		u.PlanStatus = "active"
+	}
+	u.PlanExpiresAt = ParseNullTime(planExpStr)
+	if t, err := ParseTime(createdAtStr); err == nil {
+		u.CreatedAt = t
+	}
 	return &u, nil
 }
 
 func (db *ManagerDB) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
 	var u models.User
+	var planID sql.NullInt64
+	var planName, planStatus, planExpStr sql.NullString
 	var createdAtStr string
-	err := db.QueryRowContext(ctx,
-		"SELECT id, username, password_hash, role, created_at FROM users WHERE id = ?",
+
+	err := db.QueryRowContext(ctx, `
+		SELECT u.id, u.username, u.email, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		FROM users u
+		LEFT JOIN plans p ON u.plan_id = p.id
+		WHERE u.id = ?`,
 		id,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &createdAtStr)
+	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr)
 	if err != nil {
 		return nil, err
 	}
-	t, err := ParseTime(createdAtStr)
-	if err != nil {
-		return nil, err
+	if planID.Valid {
+		u.PlanID = &planID.Int64
 	}
-	u.CreatedAt = t
+	if planName.Valid {
+		u.PlanName = planName.String
+	}
+	if planStatus.Valid && planStatus.String != "" {
+		u.PlanStatus = planStatus.String
+	} else {
+		u.PlanStatus = "active"
+	}
+	u.PlanExpiresAt = ParseNullTime(planExpStr)
+	if t, err := ParseTime(createdAtStr); err == nil {
+		u.CreatedAt = t
+	}
 	return &u, nil
 }
 
 func (db *ManagerDB) ListUsers(ctx context.Context) ([]models.User, error) {
-	rows, err := db.QueryContext(ctx, "SELECT id, username, password_hash, role, created_at FROM users ORDER BY id ASC")
+	rows, err := db.QueryContext(ctx, `
+		SELECT u.id, u.username, u.email, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		FROM users u
+		LEFT JOIN plans p ON u.plan_id = p.id
+		ORDER BY u.id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -209,16 +304,67 @@ func (db *ManagerDB) ListUsers(ctx context.Context) ([]models.User, error) {
 	users := make([]models.User, 0)
 	for rows.Next() {
 		var u models.User
+		var planID sql.NullInt64
+		var planName, planStatus, planExpStr sql.NullString
 		var createdAtStr string
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &createdAtStr); err != nil {
+
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr); err != nil {
 			return nil, err
 		}
+		if planID.Valid {
+			u.PlanID = &planID.Int64
+		}
+		if planName.Valid {
+			u.PlanName = planName.String
+		}
+		if planStatus.Valid && planStatus.String != "" {
+			u.PlanStatus = planStatus.String
+		} else {
+			u.PlanStatus = "active"
+		}
+		u.PlanExpiresAt = ParseNullTime(planExpStr)
 		if t, err := ParseTime(createdAtStr); err == nil {
 			u.CreatedAt = t
 		}
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+func (db *ManagerDB) UpdateUser(ctx context.Context, u *models.User) error {
+	var expVal interface{}
+	if expStr := FormatNullTime(u.PlanExpiresAt); expStr.Valid {
+		expVal = expStr.String
+	} else {
+		expVal = nil
+	}
+
+	_, err := db.ExecContext(ctx, `
+		UPDATE users SET
+			email = ?, role = ?, plan_id = ?, plan_status = ?, plan_expires_at = ?
+		WHERE id = ?`,
+		u.Email, u.Role, u.PlanID, u.PlanStatus, expVal, u.ID,
+	)
+	return err
+}
+
+func (db *ManagerDB) UpdateUserPlan(ctx context.Context, userID int64, planID *int64, status string, expiresAt *time.Time) error {
+	var expVal interface{}
+	if expStr := FormatNullTime(expiresAt); expStr.Valid {
+		expVal = expStr.String
+	} else {
+		expVal = nil
+	}
+	if status == "" {
+		status = "active"
+	}
+	_, err := db.ExecContext(ctx, `
+		UPDATE users SET
+			plan_id = ?, plan_status = ?, plan_expires_at = ?
+		WHERE id = ?`,
+		planID, status, expVal, userID,
+	)
+	return err
 }
 
 func (db *ManagerDB) UpdateUserPassword(ctx context.Context, id int64, newHash string) error {
@@ -299,11 +445,11 @@ func (db *ManagerDB) CreateServer(ctx context.Context, s *models.Server) error {
 		INSERT INTO servers (
 			id, name, version, port, portv6, status, mode, difficulty,
 			autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-			memory_limit, cpu_limit, container_id, seed, game_server_address, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			memory_limit, cpu_limit, container_id, seed, game_server_address, owner_user_id, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Name, s.Version, s.Port, s.PortV6, s.Status, s.Mode, s.Difficulty,
 		autostartInt, portGateInt, s.PortGateMode, s.PortGateTimeout,
-		s.MemoryLimit, s.CPULimit, s.ContainerID, s.Seed, s.GameServerAddress, nowStr, nowStr,
+		s.MemoryLimit, s.CPULimit, s.ContainerID, s.Seed, s.GameServerAddress, s.OwnerUserID, nowStr, nowStr,
 	)
 	return err
 }
@@ -311,23 +457,27 @@ func (db *ManagerDB) CreateServer(ctx context.Context, s *models.Server) error {
 func (db *ManagerDB) GetServer(ctx context.Context, id string) (*models.Server, error) {
 	var s models.Server
 	var autostartInt, portGateInt int
+	var ownerID sql.NullInt64
 	var createdAtStr, updatedAtStr string
 
 	err := db.QueryRowContext(ctx, `
 		SELECT id, name, version, port, portv6, status, mode, difficulty,
 		       autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-		       memory_limit, cpu_limit, container_id, seed, game_server_address, created_at, updated_at
+		       memory_limit, cpu_limit, container_id, seed, game_server_address, owner_user_id, created_at, updated_at
 		FROM servers WHERE id = ?`, id,
 	).Scan(
 		&s.ID, &s.Name, &s.Version, &s.Port, &s.PortV6, &s.Status, &s.Mode, &s.Difficulty,
 		&autostartInt, &portGateInt, &s.PortGateMode, &s.PortGateTimeout,
-		&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &createdAtStr, &updatedAtStr,
+		&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &ownerID, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 	s.AutostartOnBoot = autostartInt == 1
 	s.PortGateEnabled = portGateInt == 1
+	if ownerID.Valid {
+		s.OwnerUserID = &ownerID.Int64
+	}
 	if t, err := ParseTime(createdAtStr); err == nil {
 		s.CreatedAt = t
 	}
@@ -341,7 +491,7 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, name, version, port, portv6, status, mode, difficulty,
 		       autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-		       memory_limit, cpu_limit, container_id, seed, game_server_address, created_at, updated_at
+		       memory_limit, cpu_limit, container_id, seed, game_server_address, owner_user_id, created_at, updated_at
 		FROM servers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -352,17 +502,21 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 	for rows.Next() {
 		var s models.Server
 		var autostartInt, portGateInt int
+		var ownerID sql.NullInt64
 		var createdAtStr, updatedAtStr string
 
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Version, &s.Port, &s.PortV6, &s.Status, &s.Mode, &s.Difficulty,
 			&autostartInt, &portGateInt, &s.PortGateMode, &s.PortGateTimeout,
-			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &createdAtStr, &updatedAtStr,
+			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &ownerID, &createdAtStr, &updatedAtStr,
 		); err != nil {
 			return nil, err
 		}
 		s.AutostartOnBoot = autostartInt == 1
 		s.PortGateEnabled = portGateInt == 1
+		if ownerID.Valid {
+			s.OwnerUserID = &ownerID.Int64
+		}
 		if t, err := ParseTime(createdAtStr); err == nil {
 			s.CreatedAt = t
 		}
@@ -372,6 +526,53 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 		servers = append(servers, s)
 	}
 	return servers, rows.Err()
+}
+
+func (db *ManagerDB) ListServersByOwner(ctx context.Context, ownerUserID int64) ([]models.Server, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, name, version, port, portv6, status, mode, difficulty,
+		       autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
+		       memory_limit, cpu_limit, container_id, seed, game_server_address, owner_user_id, created_at, updated_at
+		FROM servers WHERE owner_user_id = ? ORDER BY created_at DESC`, ownerUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	servers := make([]models.Server, 0)
+	for rows.Next() {
+		var s models.Server
+		var autostartInt, portGateInt int
+		var ownerID sql.NullInt64
+		var createdAtStr, updatedAtStr string
+
+		if err := rows.Scan(
+			&s.ID, &s.Name, &s.Version, &s.Port, &s.PortV6, &s.Status, &s.Mode, &s.Difficulty,
+			&autostartInt, &portGateInt, &s.PortGateMode, &s.PortGateTimeout,
+			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &ownerID, &createdAtStr, &updatedAtStr,
+		); err != nil {
+			return nil, err
+		}
+		s.AutostartOnBoot = autostartInt == 1
+		s.PortGateEnabled = portGateInt == 1
+		if ownerID.Valid {
+			s.OwnerUserID = &ownerID.Int64
+		}
+		if t, err := ParseTime(createdAtStr); err == nil {
+			s.CreatedAt = t
+		}
+		if t, err := ParseTime(updatedAtStr); err == nil {
+			s.UpdatedAt = t
+		}
+		servers = append(servers, s)
+	}
+	return servers, rows.Err()
+}
+
+func (db *ManagerDB) CountServersByOwner(ctx context.Context, ownerUserID int64) (int, error) {
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM servers WHERE owner_user_id = ?", ownerUserID).Scan(&count)
+	return count, err
 }
 
 func (db *ManagerDB) UpdateServerStatus(ctx context.Context, id, status, containerID string) error {
@@ -412,6 +613,305 @@ func (db *ManagerDB) UpdateServer(ctx context.Context, s *models.Server) error {
 func (db *ManagerDB) DeleteServer(ctx context.Context, id string) error {
 	_, err := db.ExecContext(ctx, "DELETE FROM servers WHERE id = ?", id)
 	return err
+}
+
+// --- Plans ---
+
+func (db *ManagerDB) CreatePlan(ctx context.Context, p *models.Plan) error {
+	now := time.Now().UTC()
+	nowStr := FormatTime(now)
+	p.CreatedAt = now
+	p.UpdatedAt = now
+
+	isDef := 0
+	if p.IsDefault {
+		isDef = 1
+	}
+	customSeed := 0
+	if p.AllowCustomSeed {
+		customSeed = 1
+	}
+	customPort := 0
+	if p.AllowCustomPort {
+		customPort = 1
+	}
+	previewVer := 0
+	if p.AllowPreviewVersions {
+		previewVer = 1
+	}
+	addons := 0
+	if p.AllowAddons {
+		addons = 1
+	}
+	portGate := 0
+	if p.AllowPortGateKeys {
+		portGate = 1
+	}
+	tasks := 0
+	if p.AllowTasks {
+		tasks = 1
+	}
+
+	if p.BillingInterval == "" {
+		p.BillingInterval = "permanent"
+	}
+	if p.MaxMemory == "" {
+		p.MaxMemory = "2G"
+	}
+	if p.MaxCPU <= 0 {
+		p.MaxCPU = 2.0
+	}
+	if p.MaxServers <= 0 {
+		p.MaxServers = 1
+	}
+
+	res, err := db.ExecContext(ctx, `
+		INSERT INTO plans (
+			name, description, is_default, billing_interval, trial_duration_days,
+			max_servers, max_memory, max_cpu, max_backups_per_server, max_disk_mb,
+			max_player_slots, max_collaborators, idle_timeout_minutes,
+			allow_custom_seed, allow_custom_port, allow_preview_versions,
+			allow_addons, allow_port_gate_keys, allow_tasks, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Name, p.Description, isDef, p.BillingInterval, p.TrialDurationDays,
+		p.MaxServers, p.MaxMemory, p.MaxCPU, p.MaxBackupsPerServer, p.MaxDiskMB,
+		p.MaxPlayerSlots, p.MaxCollaborators, p.IdleTimeoutMinutes,
+		customSeed, customPort, previewVer,
+		addons, portGate, tasks, nowStr, nowStr,
+	)
+	if err != nil {
+		return err
+	}
+	id, err := res.LastInsertId()
+	if err == nil {
+		p.ID = id
+	}
+	return err
+}
+
+func (db *ManagerDB) GetPlan(ctx context.Context, id int64) (*models.Plan, error) {
+	var p models.Plan
+	var isDef, customSeed, customPort, previewVer, addons, portGate, tasks int
+	var createdAtStr, updatedAtStr string
+
+	err := db.QueryRowContext(ctx, `
+		SELECT id, name, description, is_default, billing_interval, trial_duration_days,
+		       max_servers, max_memory, max_cpu, max_backups_per_server, max_disk_mb,
+		       max_player_slots, max_collaborators, idle_timeout_minutes,
+		       allow_custom_seed, allow_custom_port, allow_preview_versions,
+		       allow_addons, allow_port_gate_keys, allow_tasks, created_at, updated_at
+		FROM plans WHERE id = ?`, id,
+	).Scan(
+		&p.ID, &p.Name, &p.Description, &isDef, &p.BillingInterval, &p.TrialDurationDays,
+		&p.MaxServers, &p.MaxMemory, &p.MaxCPU, &p.MaxBackupsPerServer, &p.MaxDiskMB,
+		&p.MaxPlayerSlots, &p.MaxCollaborators, &p.IdleTimeoutMinutes,
+		&customSeed, &customPort, &previewVer,
+		&addons, &portGate, &tasks, &createdAtStr, &updatedAtStr,
+	)
+	if err != nil {
+		return nil, err
+	}
+	p.IsDefault = isDef == 1
+	p.AllowCustomSeed = customSeed == 1
+	p.AllowCustomPort = customPort == 1
+	p.AllowPreviewVersions = previewVer == 1
+	p.AllowAddons = addons == 1
+	p.AllowPortGateKeys = portGate == 1
+	p.AllowTasks = tasks == 1
+	if t, err := ParseTime(createdAtStr); err == nil {
+		p.CreatedAt = t
+	}
+	if t, err := ParseTime(updatedAtStr); err == nil {
+		p.UpdatedAt = t
+	}
+	return &p, nil
+}
+
+func (db *ManagerDB) GetPlanByName(ctx context.Context, name string) (*models.Plan, error) {
+	var id int64
+	err := db.QueryRowContext(ctx, "SELECT id FROM plans WHERE name = ?", name).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return db.GetPlan(ctx, id)
+}
+
+func (db *ManagerDB) GetDefaultPlan(ctx context.Context) (*models.Plan, error) {
+	var id int64
+	err := db.QueryRowContext(ctx, "SELECT id FROM plans WHERE is_default = 1 ORDER BY id ASC LIMIT 1").Scan(&id)
+	if err != nil {
+		err = db.QueryRowContext(ctx, "SELECT id FROM plans ORDER BY id ASC LIMIT 1").Scan(&id)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return db.GetPlan(ctx, id)
+}
+
+func (db *ManagerDB) ListPlans(ctx context.Context) ([]models.Plan, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT p.id, p.name, p.description, p.is_default, p.billing_interval, p.trial_duration_days,
+		       p.max_servers, p.max_memory, p.max_cpu, p.max_backups_per_server, p.max_disk_mb,
+		       p.max_player_slots, p.max_collaborators, p.idle_timeout_minutes,
+		       p.allow_custom_seed, p.allow_custom_port, p.allow_preview_versions,
+		       p.allow_addons, p.allow_port_gate_keys, p.allow_tasks, p.created_at, p.updated_at,
+		       (SELECT COUNT(*) FROM users u WHERE u.plan_id = p.id) AS user_count
+		FROM plans p ORDER BY p.id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	plans := make([]models.Plan, 0)
+	for rows.Next() {
+		var p models.Plan
+		var isDef, customSeed, customPort, previewVer, addons, portGate, tasks int
+		var createdAtStr, updatedAtStr string
+
+		if err := rows.Scan(
+			&p.ID, &p.Name, &p.Description, &isDef, &p.BillingInterval, &p.TrialDurationDays,
+			&p.MaxServers, &p.MaxMemory, &p.MaxCPU, &p.MaxBackupsPerServer, &p.MaxDiskMB,
+			&p.MaxPlayerSlots, &p.MaxCollaborators, &p.IdleTimeoutMinutes,
+			&customSeed, &customPort, &previewVer,
+			&addons, &portGate, &tasks, &createdAtStr, &updatedAtStr,
+			&p.UserCount,
+		); err != nil {
+			return nil, err
+		}
+		p.IsDefault = isDef == 1
+		p.AllowCustomSeed = customSeed == 1
+		p.AllowCustomPort = customPort == 1
+		p.AllowPreviewVersions = previewVer == 1
+		p.AllowAddons = addons == 1
+		p.AllowPortGateKeys = portGate == 1
+		p.AllowTasks = tasks == 1
+		if t, err := ParseTime(createdAtStr); err == nil {
+			p.CreatedAt = t
+		}
+		if t, err := ParseTime(updatedAtStr); err == nil {
+			p.UpdatedAt = t
+		}
+		plans = append(plans, p)
+	}
+	return plans, rows.Err()
+}
+
+func (db *ManagerDB) UpdatePlan(ctx context.Context, p *models.Plan) error {
+	nowStr := FormatTime(time.Now().UTC())
+	isDef := 0
+	if p.IsDefault {
+		isDef = 1
+	}
+	customSeed := 0
+	if p.AllowCustomSeed {
+		customSeed = 1
+	}
+	customPort := 0
+	if p.AllowCustomPort {
+		customPort = 1
+	}
+	previewVer := 0
+	if p.AllowPreviewVersions {
+		previewVer = 1
+	}
+	addons := 0
+	if p.AllowAddons {
+		addons = 1
+	}
+	portGate := 0
+	if p.AllowPortGateKeys {
+		portGate = 1
+	}
+	tasks := 0
+	if p.AllowTasks {
+		tasks = 1
+	}
+
+	_, err := db.ExecContext(ctx, `
+		UPDATE plans SET
+			name = ?, description = ?, is_default = ?, billing_interval = ?, trial_duration_days = ?,
+			max_servers = ?, max_memory = ?, max_cpu = ?, max_backups_per_server = ?, max_disk_mb = ?,
+			max_player_slots = ?, max_collaborators = ?, idle_timeout_minutes = ?,
+			allow_custom_seed = ?, allow_custom_port = ?, allow_preview_versions = ?,
+			allow_addons = ?, allow_port_gate_keys = ?, allow_tasks = ?, updated_at = ?
+		WHERE id = ?`,
+		p.Name, p.Description, isDef, p.BillingInterval, p.TrialDurationDays,
+		p.MaxServers, p.MaxMemory, p.MaxCPU, p.MaxBackupsPerServer, p.MaxDiskMB,
+		p.MaxPlayerSlots, p.MaxCollaborators, p.IdleTimeoutMinutes,
+		customSeed, customPort, previewVer,
+		addons, portGate, tasks, nowStr, p.ID,
+	)
+	return err
+}
+
+func (db *ManagerDB) DeletePlan(ctx context.Context, id int64) error {
+	_, err := db.ExecContext(ctx, "DELETE FROM plans WHERE id = ?", id)
+	return err
+}
+
+func (db *ManagerDB) SetDefaultPlan(ctx context.Context, id int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "UPDATE plans SET is_default = 0"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE plans SET is_default = 1 WHERE id = ?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (db *ManagerDB) CountUsersByPlanID(ctx context.Context, planID int64) (int, error) {
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users WHERE plan_id = ?", planID).Scan(&count)
+	return count, err
+}
+
+func (db *ManagerDB) ListCollaboratorUsers(ctx context.Context, serverID string) ([]models.User, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT u.id, u.username, u.email, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		FROM users u
+		JOIN user_server_access usa ON u.id = usa.user_id
+		LEFT JOIN plans p ON u.plan_id = p.id
+		WHERE usa.server_id = ?
+		ORDER BY u.username ASC`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := make([]models.User, 0)
+	for rows.Next() {
+		var u models.User
+		var planID sql.NullInt64
+		var planName, planStatus, planExpStr sql.NullString
+		var createdAtStr string
+
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr); err != nil {
+			return nil, err
+		}
+		if planID.Valid {
+			u.PlanID = &planID.Int64
+		}
+		if planName.Valid {
+			u.PlanName = planName.String
+		}
+		if planStatus.Valid && planStatus.String != "" {
+			u.PlanStatus = planStatus.String
+		} else {
+			u.PlanStatus = "active"
+		}
+		u.PlanExpiresAt = ParseNullTime(planExpStr)
+		if t, err := ParseTime(createdAtStr); err == nil {
+			u.CreatedAt = t
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
 
 // --- Port Gate Keys ---

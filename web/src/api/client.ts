@@ -1,4 +1,4 @@
-import { Server, User, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, DashboardSummary } from '../types';
+import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, DashboardSummary } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -76,8 +76,21 @@ class APIClient {
     }
   }
 
+  async register(payload: { username: string; password: string; email?: string }): Promise<{ token: string; user: User }> {
+    const res = await this.request<{ token: string; user: User }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    this.setToken(res.token);
+    return res;
+  }
+
   async getMe(): Promise<{ user: User; allowed_servers: string[] }> {
     return this.request('/api/auth/me');
+  }
+
+  async getMyPlan(): Promise<UserPlanStatus> {
+    return this.request('/api/user/plan');
   }
 
   // Servers
@@ -675,9 +688,16 @@ class APIClient {
     return Array.isArray(res) ? res : [];
   }
 
-  async createUser(payload: { username: string; password: string; role: 'admin' | 'operator' }): Promise<User> {
+  async createUser(payload: { username: string; password: string; role: 'admin' | 'operator' | 'user'; email?: string; plan_id?: number; plan_status?: string; plan_expires_at?: string }): Promise<User> {
     return this.request('/api/users', {
       method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateUser(id: number, payload: { role?: string; email?: string; plan_id?: number | null; plan_status?: string; plan_expires_at?: string | null }): Promise<User> {
+    return this.request(`/api/users/${id}`, {
+      method: 'PUT',
       body: JSON.stringify(payload),
     });
   }
@@ -704,6 +724,61 @@ class APIClient {
     return this.request(`/api/users/${id}/servers`, {
       method: 'PUT',
       body: JSON.stringify({ server_ids: serverIds }),
+    });
+  }
+
+  // --- Plans Management ---
+  async listPlans(): Promise<Plan[]> {
+    const res = await this.request('/api/plans');
+    return Array.isArray(res) ? res : [];
+  }
+
+  async getPlan(id: number): Promise<Plan> {
+    return this.request(`/api/plans/${id}`);
+  }
+
+  async createPlan(payload: Partial<Plan>): Promise<Plan> {
+    return this.request('/api/plans', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updatePlan(id: number, payload: Partial<Plan>): Promise<Plan> {
+    return this.request(`/api/plans/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async deletePlan(id: number): Promise<{ success: boolean }> {
+    return this.request(`/api/plans/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async setDefaultPlan(id: number): Promise<{ success: boolean }> {
+    return this.request(`/api/plans/${id}/set-default`, {
+      method: 'POST',
+    });
+  }
+
+  // --- Collaborators ---
+  async listCollaborators(serverId: string): Promise<User[]> {
+    const res = await this.request(`/api/servers/${serverId}/collaborators`);
+    return Array.isArray(res) ? res : [];
+  }
+
+  async addCollaborator(serverId: string, username: string): Promise<{ success: boolean }> {
+    return this.request(`/api/servers/${serverId}/collaborators`, {
+      method: 'POST',
+      body: JSON.stringify({ username }),
+    });
+  }
+
+  async removeCollaborator(serverId: string, userId: number): Promise<{ success: boolean }> {
+    return this.request(`/api/servers/${serverId}/collaborators/${userId}`, {
+      method: 'DELETE',
     });
   }
 

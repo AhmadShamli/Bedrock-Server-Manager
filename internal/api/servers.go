@@ -152,6 +152,12 @@ func (h *ServerHandler) SuggestPorts(w http.ResponseWriter, r *http.Request) {
 
 // Create registers and provisions a new server instance.
 func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
+	claims := GetUserClaims(r)
+	if claims == nil {
+		http.Error(w, `{"error": "Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
 	var s models.Server
 	if err := json.NewDecoder(r.Body).Decode(&s); err != nil {
 		http.Error(w, `{"error": "Invalid payload"}`, http.StatusBadRequest)
@@ -188,8 +194,105 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	s.GameServerAddress = strings.TrimSpace(s.GameServerAddress)
 
-	// Validate ports
 	existing, _ := h.db.ListServers(r.Context())
+
+	// If user is a normal user (RoleUser), enforce Plan limits
+	if claims.Role == models.RoleUser {
+		user, err := h.db.GetUserByID(r.Context(), claims.UserID)
+		if err != nil {
+			http.Error(w, `{"error": "User record not found"}`, http.StatusForbidden)
+			return
+		}
+
+		var plan *models.Plan
+		if user.PlanID != nil {
+			plan, _ = h.db.GetPlan(r.Context(), *user.PlanID)
+		}
+		if plan == nil {
+			plan, _ = h.db.GetDefaultPlan(r.Context())
+		}
+		if plan == nil {
+			plan = &models.Plan{Name: "Default Plan", MaxServers: 1, MaxMemory: "2G", MaxCPU: 2.0}
+		}
+
+		// 1. Enforce Server Count Quota
+		activeCount, _ := h.db.CountServersByOwner(r.Context(), claims.UserID)
+		if activeCount >= plan.MaxServers {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":          fmt.Sprintf("Server quota reached. Your plan (%s) allows a maximum of %d server(s).", plan.Name, plan.MaxServers),
+				"quota_exceeded": true,
+				"max_servers":    plan.MaxServers,
+				"active_servers": activeCount,
+			})
+			return
+		}
+
+		// 2. Enforce Memory Limit
+		reqBytes, _ := engine.ParseMemoryBytes(s.MemoryLimit)
+		maxBytes, _ := engine.ParseMemoryBytes(plan.MaxMemory)
+		if maxBytes > 0 && reqBytes > maxBytes {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("Requested memory (%s) exceeds plan limit (%s)", s.MemoryLimit, plan.MaxMemory),
+			})
+			return
+		}
+
+		// 3. Enforce CPU Limit
+		if plan.MaxCPU > 0 && s.CPULimit > plan.MaxCPU {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("Requested CPU (%.1f cores) exceeds plan limit (%.1f cores)", s.CPULimit, plan.MaxCPU),
+			})
+			return
+		}
+
+		// 4. Enforce Preview Versions
+		if !plan.AllowPreviewVersions {
+			vLower := strings.ToLower(s.Version)
+			if strings.Contains(vLower, "preview") || strings.Contains(vLower, "beta") {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"error": "Preview / beta versions are not permitted under your current plan",
+				})
+				return
+			}
+		}
+
+		// 5. Enforce Port Selection (Auto-allocated if custom ports not allowed)
+		if !plan.AllowCustomPort {
+			p4, p6, err := h.allocator.FindAvailablePortPair(19132, existing)
+			if err != nil {
+				http.Error(w, `{"error": "No available ports for auto-allocation"}`, http.StatusConflict)
+				return
+			}
+			s.Port = p4
+			s.PortV6 = p6
+		}
+
+		// 6. Enforce Custom Seed
+		if !plan.AllowCustomSeed {
+			s.Seed = ""
+		}
+
+		s.OwnerUserID = &claims.UserID
+	} else if claims.Role == models.RoleAdmin {
+		if s.OwnerUserID != nil {
+			if _, err := h.db.GetUserByID(r.Context(), *s.OwnerUserID); err != nil {
+				s.OwnerUserID = nil
+			}
+		}
+	} else {
+		http.Error(w, `{"error": "Operator accounts cannot deploy new servers"}`, http.StatusForbidden)
+		return
+	}
+
+	// Validate ports
 	if err := h.allocator.ValidatePortAssignment(s.Port, s.PortV6, "", existing); err != nil {
 		w.WriteHeader(http.StatusConflict)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -210,11 +313,15 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Automatically grant owner server access
+	if s.OwnerUserID != nil {
+		_ = h.db.GrantServerAccess(r.Context(), *s.OwnerUserID, s.ID)
+	}
+
 	// Automatically merge global allowlist and permissions on deploy/create
 	_, _ = player.SyncServerWithGlobal(r.Context(), h.dataDir, s.ID, h.db, nil)
 
-	// Update level-seed only if server.properties already exists on disk (e.g. from existing template or clone).
-	// If the file does not exist, do NOT create it so itzg/BDS can unzip the authentic Mojang template on first boot.
+	// Update level-seed only if server.properties already exists on disk
 	if s.Seed != "" {
 		if propPath, err := configfile.SafePath(h.dataDir, s.ID, "server.properties"); err == nil {
 			_, _ = configfile.UpdateExistingPropertyFile(propPath, map[string]string{
@@ -223,13 +330,8 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	claims := GetUserClaims(r)
-	actorName := "admin"
-	var userID *int64
-	if claims != nil {
-		actorName = claims.Username
-		userID = &claims.UserID
-	}
+	actorName := claims.Username
+	userID := &claims.UserID
 
 	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 		UserID:    userID,
@@ -237,7 +339,7 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ActorName: actorName,
 		Action:    "create_server",
 		Target:    s.ID,
-		Details:   fmt.Sprintf(`{"name": "%s", "port": %d, "container_id": "%s"}`, s.Name, s.Port, cid),
+		Details:   fmt.Sprintf(`{"name": "%s", "port": %d, "container_id": "%s", "owner_id": %v}`, s.Name, s.Port, cid, s.OwnerUserID),
 		ClientIP:  GetClientIP(r).String(),
 	})
 
@@ -427,6 +529,19 @@ func (h *ServerHandler) SendCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cleanCmd := strings.TrimSpace(payload.Command)
+
+	// For normal users (RoleUser), enforce safe gameplay command whitelist
+	if claims := GetUserClaims(r); claims != nil && claims.Role == models.RoleUser {
+		if !isSafeCommand(cleanCmd) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": "Command not permitted for normal user accounts. Allowed commands: say, tell, me, list, time, weather, difficulty, gamemode, kick, whitelist, gamerule.",
+			})
+			return
+		}
+	}
+
 	// Bedrock syntax quirk: BDS parser fails with `Syntax error: Unexpected "["` if `say` starts with `[`
 	cmdWithoutSlash := strings.TrimPrefix(cleanCmd, "/")
 	if strings.HasPrefix(cmdWithoutSlash, "say [") {
@@ -788,19 +903,26 @@ func (h *ServerHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims := GetUserClaims(r)
+	if claims == nil {
+		http.Error(w, `{"error": "Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	isOwner := server.OwnerUserID != nil && *server.OwnerUserID == claims.UserID
+	if claims.Role != models.RoleAdmin && !isOwner {
+		http.Error(w, `{"error": "You do not have permission to delete this server"}`, http.StatusForbidden)
+		return
+	}
+
 	_ = h.engine.RemoveServer(r.Context(), server, false)
 	if err := h.db.DeleteServer(r.Context(), id); err != nil {
 		http.Error(w, `{"error": "Failed to delete server"}`, http.StatusInternalServerError)
 		return
 	}
 
-	claims := GetUserClaims(r)
-	actorName := "admin"
-	var userID *int64
-	if claims != nil {
-		actorName = claims.Username
-		userID = &claims.UserID
-	}
+	actorName := claims.Username
+	userID := &claims.UserID
 
 	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 		UserID:    userID,
@@ -813,4 +935,162 @@ func (h *ServerHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+}
+
+// ListCollaborators returns users assigned to this server.
+func (h *ServerHandler) ListCollaborators(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	users, err := h.db.ListCollaboratorUsers(r.Context(), id)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to list collaborators"}`, http.StatusInternalServerError)
+		return
+	}
+	for i := range users {
+		users[i].PasswordHash = ""
+	}
+	if users == nil {
+		users = []models.User{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(users)
+}
+
+// AddCollaborator grants an existing user access to this server.
+func (h *ServerHandler) AddCollaborator(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	server, err := h.db.GetServer(r.Context(), id)
+	if err != nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	if claims == nil {
+		http.Error(w, `{"error": "Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	isOwner := server.OwnerUserID != nil && *server.OwnerUserID == claims.UserID
+	if claims.Role != models.RoleAdmin && !isOwner {
+		http.Error(w, `{"error": "Only the server owner or an administrator can add collaborators"}`, http.StatusForbidden)
+		return
+	}
+
+	var req struct {
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" {
+		http.Error(w, `{"error": "Username is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	targetUser, err := h.db.GetUserByUsername(r.Context(), req.Username)
+	if err != nil {
+		http.Error(w, `{"error": "User not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// Check collaborator limits if owner
+	if claims.Role != models.RoleAdmin {
+		ownerUser, _ := h.db.GetUserByID(r.Context(), claims.UserID)
+		var plan *models.Plan
+		if ownerUser != nil && ownerUser.PlanID != nil {
+			plan, _ = h.db.GetPlan(r.Context(), *ownerUser.PlanID)
+		}
+		if plan == nil {
+			plan, _ = h.db.GetDefaultPlan(r.Context())
+		}
+		maxCollab := 0
+		if plan != nil {
+			maxCollab = plan.MaxCollaborators
+		}
+		existingCollabs, _ := h.db.ListCollaboratorUsers(r.Context(), id)
+		count := 0
+		for _, u := range existingCollabs {
+			if server.OwnerUserID == nil || u.ID != *server.OwnerUserID {
+				count++
+			}
+		}
+		if count >= maxCollab {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"error": fmt.Sprintf("Collaborator limit reached. Your plan allows up to %d collaborator(s).", maxCollab),
+			})
+			return
+		}
+	}
+
+	if err := h.db.GrantServerAccess(r.Context(), targetUser.ID, server.ID); err != nil {
+		http.Error(w, `{"error": "Failed to add collaborator"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// RemoveCollaborator revokes user access to this server.
+func (h *ServerHandler) RemoveCollaborator(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	targetUserIDStr := chi.URLParam(r, "userId")
+	targetUserID, err := strconv.ParseInt(targetUserIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid user ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	server, err := h.db.GetServer(r.Context(), id)
+	if err != nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	if claims == nil {
+		http.Error(w, `{"error": "Unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	isOwner := server.OwnerUserID != nil && *server.OwnerUserID == claims.UserID
+	if claims.Role != models.RoleAdmin && !isOwner {
+		http.Error(w, `{"error": "Only the server owner or an administrator can remove collaborators"}`, http.StatusForbidden)
+		return
+	}
+
+	if err := h.db.RevokeServerAccess(r.Context(), targetUserID, server.ID); err != nil {
+		http.Error(w, `{"error": "Failed to remove collaborator"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func isSafeCommand(cmd string) bool {
+	clean := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(cmd, "/")))
+	parts := strings.Fields(clean)
+	if len(parts) == 0 {
+		return false
+	}
+	root := parts[0]
+	safeRoots := map[string]bool{
+		"say":        true,
+		"tell":       true,
+		"me":         true,
+		"list":       true,
+		"time":       true,
+		"weather":    true,
+		"difficulty": true,
+		"gamemode":   true,
+		"kick":       true,
+		"whitelist":  true,
+		"allowlist":  true,
+		"gamerule":   true,
+		"seed":       true,
+		"help":       true,
+		"tp":         true,
+		"teleport":   true,
+	}
+	return safeRoots[root]
 }

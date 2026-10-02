@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
@@ -113,6 +114,112 @@ func (h *AuthHandler) Setup(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"token":   token,
+		"user":    user,
+	})
+}
+
+// RegisterRequest payload for self-registration.
+type RegisterRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Email    string `json:"email"`
+}
+
+// Register creates a new normal user account if registration is enabled.
+func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
+	allowReg, _ := h.db.GetSetting(r.Context(), "allow_registration")
+	if allowReg != "true" && allowReg != "1" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Public registration is currently disabled by administrator"})
+		return
+	}
+
+	clientIP := GetClientIP(r).String()
+	now := time.Now()
+	rateCheck := h.rateLimiter.CheckLogin(clientIP, now)
+	if rateCheck.Blocked {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": rateCheck.Reason,
+		})
+		return
+	}
+
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request body"})
+		return
+	}
+
+	req.Username = strings.TrimSpace(req.Username)
+	req.Email = strings.TrimSpace(req.Email)
+
+	if req.Username == "" || len(req.Password) < 8 {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Username is required and password must be at least 8 characters"})
+		return
+	}
+
+	if _, err := h.db.GetUserByUsername(r.Context(), req.Username); err == nil {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Username already exists"})
+		return
+	}
+
+	pwHash, err := auth.HashPassword(req.Password, 8)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to hash password"})
+		return
+	}
+
+	defPlan, _ := h.db.GetDefaultPlan(r.Context())
+	var planID *int64
+	if defPlan != nil {
+		planID = &defPlan.ID
+	}
+
+	user, err := h.db.CreateUserExtended(r.Context(), req.Username, req.Email, pwHash, models.RoleUser, planID, "active", nil)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to register user account"})
+		return
+	}
+
+	token, err := auth.GenerateJWT(h.jwtSecret, user.ID, user.Username, user.Role, 24*time.Hour)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Failed to generate authentication token"})
+		return
+	}
+
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		UserID:    &user.ID,
+		ActorType: "user",
+		ActorName: user.Username,
+		Action:    "user_registered",
+		Target:    "system",
+		Details:   `{"role": "user", "plan": "` + user.PlanName + `"}`,
+		ClientIP:  clientIP,
+	})
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "bsm_session",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   86400,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"token":   token,

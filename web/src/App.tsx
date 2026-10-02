@@ -14,6 +14,8 @@ import { AuditLogs } from './pages/AuditLogs';
 import { GlobalPlayers } from './pages/GlobalPlayers';
 import { UsersPage } from './pages/Users';
 import { PortGateManager } from './pages/PortGateManager';
+import { Plans } from './pages/Plans';
+import { Register } from './pages/Register';
 import { Footer } from './components/Footer';
 import { Loader2 } from 'lucide-react';
 
@@ -88,11 +90,17 @@ export const App: React.FC = () => {
             }
           />
 
-          {/* Login */}
+          {/* Login & Register */}
           <Route
             path="/login"
             element={
               user ? <Navigate to="/" replace /> : <Login onLoginSuccess={(u) => setUser(u)} />
+            }
+          />
+          <Route
+            path="/register"
+            element={
+              user ? <Navigate to="/" replace /> : <Register onRegisterSuccess={(u) => setUser(u)} />
             }
           />
 
@@ -128,6 +136,10 @@ export const App: React.FC = () => {
           <Route
             path="/users"
             element={user && user.role === 'admin' ? <UsersPage currentUser={user} /> : <Navigate to="/" replace />}
+          />
+          <Route
+            path="/plans"
+            element={user && user.role === 'admin' ? <Plans /> : <Navigate to="/" replace />}
           />
 
           {/* Fallback */}

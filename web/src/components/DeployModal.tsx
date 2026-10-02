@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
-import { Preset, SeedPreset } from '../types';
+import { Preset, SeedPreset, UserPlanStatus } from '../types';
 import { PopularSeedPicker } from './PopularSeedPicker';
 import {
   Plus,
@@ -17,20 +17,55 @@ import {
   CheckCircle2,
   Sparkles,
   Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface DeployModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: () => void;
+  userPlan?: UserPlanStatus | null;
 }
 
 type DeployMethod = 'quick' | 'wizard';
 
-export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuccess }) => {
+const parseMemoryMb = (mem: string | undefined): number => {
+  if (!mem) return 8192;
+  const upper = mem.toUpperCase().trim();
+  if (upper.endsWith('G')) {
+    return (parseFloat(upper) || 2) * 1024;
+  }
+  if (upper.endsWith('M') || upper.endsWith('MB')) {
+    return parseFloat(upper) || 2048;
+  }
+  return 8192;
+};
+
+export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuccess, userPlan }) => {
   const [method, setMethod] = useState<DeployMethod>(() => {
     return (localStorage.getItem('bsm_deploy_method') as DeployMethod) || 'wizard';
   });
+
+  const isQuotaFull = Boolean(userPlan && userPlan.usage.servers_count >= userPlan.usage.servers_max);
+  const maxRamMb = userPlan?.plan?.max_memory ? parseMemoryMb(userPlan.plan.max_memory) : 8192;
+  const maxCpu = userPlan?.plan?.max_cpu || 8.0;
+  const allowCustomPort = userPlan ? userPlan.plan.allow_custom_port : true;
+  const allowCustomSeed = userPlan ? userPlan.plan.allow_custom_seed : true;
+  const allowPortGate = userPlan ? userPlan.plan.allow_port_gate_keys : true;
+
+  const ramOptions = [
+    { value: '1G', label: '1 GB', fullLabel: '1 GB (Lightweight / 2-3 players)', mb: 1024 },
+    { value: '2G', label: '2 GB', fullLabel: '2 GB (Recommended standard)', mb: 2048 },
+    { value: '4G', label: '4 GB', fullLabel: '4 GB (Medium worlds & Addons)', mb: 4096 },
+    { value: '8G', label: '8 GB', fullLabel: '8 GB (Heavy loads / Mega realm)', mb: 8192 },
+  ].filter((o) => o.mb <= maxRamMb || o.mb === 1024);
+
+  const cpuOptions = [
+    { value: 1.0, label: '1.0 Core' },
+    { value: 2.0, label: '2.0 Cores (Recommended)' },
+    { value: 4.0, label: '4.0 Cores' },
+    { value: 8.0, label: '8.0 Cores' },
+  ].filter((o) => o.value <= maxCpu || o.value === 1.0);
 
   // Wizard current step (1 to 5)
   const [step, setStep] = useState(1);
@@ -58,7 +93,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load presets & port suggestion on open
+  // Load presets & port suggestion on open and apply plan restrictions
   useEffect(() => {
     if (!isOpen) return;
 
@@ -73,7 +108,23 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
         if (data && data.length > 0) setPresets(data);
       })
       .catch(() => {});
-  }, [isOpen]);
+
+    if (userPlan) {
+      if (!ramOptions.some((r) => r.value === memLimit)) {
+        setMemLimit(ramOptions[ramOptions.length - 1].value);
+      }
+      if (cpuLimit > maxCpu) {
+        setCpuLimit(cpuOptions[cpuOptions.length - 1].value);
+      }
+      if (!allowPortGate) {
+        setPortGate(false);
+      }
+      if (!allowCustomSeed) {
+        setSeed('');
+        setSelectedSeedPreset(null);
+      }
+    }
+  }, [isOpen, userPlan]);
 
   const handleMethodChange = (newMethod: DeployMethod) => {
     setMethod(newMethod);
@@ -208,6 +259,15 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
             <button onClick={() => setError(null)} className="text-rose-400 hover:text-rose-200">
               <X className="w-4 h-4" />
             </button>
+          </div>
+        )}
+
+        {isQuotaFull && userPlan && (
+          <div className="px-5 py-3 bg-amber-950/40 border-b border-amber-500/30 text-amber-300 text-xs font-mono flex items-center space-x-2.5">
+            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>
+              <strong>Deployment Quota Reached:</strong> Your current plan (<strong>{userPlan.plan.name}</strong>) allows up to {userPlan.usage.servers_max} servers ({userPlan.usage.servers_count} deployed). Delete an existing server to deploy a new one.
+            </span>
           </div>
         )}
 
@@ -384,7 +444,17 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
               {/* STEP 2: WORLD & SEED SELECTION */}
               {step === 2 && (
                 <div className="space-y-4">
-                  <div className="bg-obsidian-950/60 border border-obsidian-800 p-4 rounded-xl">
+                  {!allowCustomSeed ? (
+                    <div className="p-8 bg-obsidian-950/60 border border-obsidian-800 rounded-xl text-center">
+                      <Compass className="w-10 h-10 text-emerald-500/70 mx-auto mb-3" />
+                      <h4 className="font-mono text-sm font-bold text-slate-200">Random World Generation Only</h4>
+                      <p className="text-xs text-slate-400 max-w-md mx-auto mt-2 font-mono">
+                        Your plan limits custom terrain seeds. The Bedrock engine will generate a brand new randomized world seed when the container starts.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
+                    <div className="bg-obsidian-950/60 border border-obsidian-800 p-4 rounded-xl">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
                       <div>
                         <h4 className="font-mono text-sm font-bold text-slate-200 flex items-center space-x-2">
@@ -521,6 +591,8 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                       </p>
                     </div>
                   )}
+                    </>
+                  )}
                 </div>
               )}
 
@@ -545,44 +617,57 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                         <input
                           type="number"
                           required
+                          disabled={!allowCustomPort}
                           value={port}
                           onChange={(e) => setPort(Number(e.target.value))}
-                          className="w-full px-3.5 py-2.5 rounded-lg bg-obsidian-900 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
+                          className={`w-full px-3.5 py-2.5 rounded-lg border font-mono text-sm focus:border-emerald-500 ${
+                            !allowCustomPort
+                              ? 'bg-obsidian-950 border-obsidian-800 text-slate-400 cursor-not-allowed'
+                              : 'bg-obsidian-900 border-obsidian-700 text-slate-100'
+                          }`}
                         />
                         <p className="text-[11px] text-slate-500 mt-1 font-mono">
-                          Auto-suggested next free port pair.
+                          {!allowCustomPort ? 'Auto-allocated per plan policy.' : 'Auto-suggested next free port pair.'}
                         </p>
                       </div>
 
                       <div>
-                        <label className="block text-xs font-mono text-slate-300 mb-1">
-                          RAM Memory Capping
+                        <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                          <span>RAM Memory Capping</span>
+                          {userPlan && (
+                            <span className="text-[10px] text-emerald-400">Plan Cap: {userPlan.plan.max_memory}</span>
+                          )}
                         </label>
                         <select
                           value={memLimit}
                           onChange={(e) => setMemLimit(e.target.value)}
                           className="w-full px-3.5 py-2.5 rounded-lg bg-obsidian-900 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
                         >
-                          <option value="1G">1 GB (Lightweight / 2-3 players)</option>
-                          <option value="2G">2 GB (Recommended standard)</option>
-                          <option value="4G">4 GB (Medium worlds & Addons)</option>
-                          <option value="8G">8 GB (Heavy loads / Mega realm)</option>
+                          {ramOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.fullLabel}
+                            </option>
+                          ))}
                         </select>
                       </div>
 
                       <div>
-                        <label className="block text-xs font-mono text-slate-300 mb-1">
-                          CPU Allocation
+                        <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                          <span>CPU Allocation</span>
+                          {userPlan && (
+                            <span className="text-[10px] text-emerald-400">Plan Cap: {userPlan.plan.max_cpu} Cores</span>
+                          )}
                         </label>
                         <select
                           value={cpuLimit}
                           onChange={(e) => setCpuLimit(Number(e.target.value))}
                           className="w-full px-3.5 py-2.5 rounded-lg bg-obsidian-900 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
                         >
-                          <option value={1.0}>1.0 Core</option>
-                          <option value={2.0}>2.0 Cores (Recommended)</option>
-                          <option value={4.0}>4.0 Cores</option>
-                          <option value={8.0}>8.0 Cores</option>
+                          {cpuOptions.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
                         </select>
                       </div>
 
@@ -618,9 +703,12 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                     </p>
 
                     <div className="space-y-3">
-                      <label className="flex items-center space-x-3 p-3.5 rounded-xl bg-obsidian-900 border border-obsidian-800 cursor-pointer">
+                      <label className={`flex items-center space-x-3 p-3.5 rounded-xl border ${
+                        !allowPortGate ? 'bg-obsidian-950 border-obsidian-800 opacity-60 cursor-not-allowed' : 'bg-obsidian-900 border-obsidian-800 cursor-pointer'
+                      }`}>
                         <input
                           type="checkbox"
+                          disabled={!allowPortGate}
                           checked={portGate}
                           onChange={(e) => setPortGate(e.target.checked)}
                           className="rounded bg-obsidian-950 border-obsidian-700 text-emerald-500 w-4 h-4"
@@ -628,9 +716,12 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                         <div>
                           <span className="font-mono text-xs font-bold text-slate-200">
                             Enable Port Gate (Zero-Trust Stealth Firewall)
+                            {!allowPortGate && <span className="text-amber-400 text-[10px] ml-2 font-normal">(Unavailable on current plan)</span>}
                           </span>
                           <p className="text-[11px] text-slate-400">
-                            UDP port {port} is dropped by default until knocked via /knock/{serverId || 'id'}
+                            {!allowPortGate
+                              ? 'Your current plan does not include the Dynamic Port Gate stealth feature.'
+                              : `UDP port ${port} is dropped by default until knocked via /knock/${serverId || 'id'}`}
                           </p>
                         </div>
                       </label>
@@ -777,14 +868,19 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                   ) : (
                     <button
                       type="button"
-                      disabled={creating}
+                      disabled={creating || isQuotaFull}
                       onClick={() => handleSubmit()}
-                      className="px-5 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black font-mono text-xs flex items-center space-x-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)]"
+                      className="px-5 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-black font-mono text-xs flex items-center space-x-2 transition-all shadow-[0_0_20px_rgba(16,185,129,0.4)]"
                     >
                       {creating ? (
                         <>
                           <Loader2 className="w-4 h-4 animate-spin" />
                           <span>Provisioning Container...</span>
+                        </>
+                      ) : isQuotaFull ? (
+                        <>
+                          <AlertTriangle className="w-4 h-4 text-amber-950" />
+                          <span>Quota Full ({userPlan?.usage.servers_count}/{userPlan?.usage.servers_max})</span>
                         </>
                       ) : (
                         <>
@@ -846,10 +942,18 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                   <input
                     type="number"
                     required
+                    disabled={!allowCustomPort}
                     value={port}
                     onChange={(e) => setPort(Number(e.target.value))}
-                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
+                    className={`w-full px-3 py-2 rounded-lg border font-mono text-sm focus:border-emerald-500 ${
+                      !allowCustomPort
+                        ? 'bg-obsidian-950 border-obsidian-800 text-slate-400 cursor-not-allowed'
+                        : 'bg-obsidian-950 border-obsidian-700 text-slate-100'
+                    }`}
                   />
+                  {!allowCustomPort && (
+                    <span className="text-[10px] text-slate-500 font-mono block mt-0.5">Auto-allocated</span>
+                  )}
                 </div>
 
                 <div>
@@ -881,92 +985,108 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
               </div>
 
               {/* World Seed Input with Popular Seed Picker trigger */}
-              <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-xl space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="block text-xs font-mono text-slate-300 flex items-center space-x-1.5">
-                    <Compass className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>World Seed</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowSeedPickerDrawer(!showSeedPickerDrawer)}
-                    className="text-[11px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center space-x-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 transition-colors"
-                  >
-                    <Sparkles className="w-3 h-3 text-amber-400" />
-                    <span>{showSeedPickerDrawer ? 'Hide Popular Seeds' : '✨ Browse Popular Seeds'}</span>
-                  </button>
+              {!allowCustomSeed ? (
+                <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-xl text-center">
+                  <span className="text-xs text-slate-400 font-mono">
+                    World seed will be randomly chosen at launch per plan restrictions.
+                  </span>
                 </div>
-
-                <div className="flex items-center space-x-2">
-                  <input
-                    type="text"
-                    value={seed}
-                    onChange={(e) => {
-                      setSeed(e.target.value);
-                      setSelectedSeedPreset(null);
-                    }}
-                    className="flex-1 px-3 py-2 rounded-lg bg-obsidian-900 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
-                    placeholder="Leave blank for random world seed"
-                  />
-                  {seed && (
+              ) : (
+                <div className="p-3 bg-obsidian-950 border border-obsidian-800 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-mono text-slate-300 flex items-center space-x-1.5">
+                      <Compass className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>World Seed</span>
+                    </label>
                     <button
                       type="button"
-                      onClick={() => handleSelectSeed('')}
-                      className="px-2.5 py-2 rounded-lg bg-obsidian-900 border border-obsidian-700 text-xs font-mono text-slate-400 hover:text-rose-400"
+                      onClick={() => setShowSeedPickerDrawer(!showSeedPickerDrawer)}
+                      className="text-[11px] font-mono text-emerald-400 hover:text-emerald-300 flex items-center space-x-1 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30 transition-colors"
                     >
-                      Clear
+                      <Sparkles className="w-3 h-3 text-amber-400" />
+                      <span>{showSeedPickerDrawer ? 'Hide Popular Seeds' : '✨ Browse Popular Seeds'}</span>
                     </button>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      value={seed}
+                      onChange={(e) => {
+                        setSeed(e.target.value);
+                        setSelectedSeedPreset(null);
+                      }}
+                      className="flex-1 px-3 py-2 rounded-lg bg-obsidian-900 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
+                      placeholder="Leave blank for random world seed"
+                    />
+                    {seed && (
+                      <button
+                        type="button"
+                        onClick={() => handleSelectSeed('')}
+                        className="px-2.5 py-2 rounded-lg bg-obsidian-900 border border-obsidian-700 text-xs font-mono text-slate-400 hover:text-rose-400"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  {selectedSeedPreset && (
+                    <div className="text-[11px] font-mono text-slate-400 flex items-center space-x-2">
+                      <span className="text-emerald-400 font-bold">{selectedSeedPreset.name}</span>
+                      <span>•</span>
+                      <span>{selectedSeedPreset.category}</span>
+                    </div>
+                  )}
+
+                  {/* Inline Drawer for Popular Seeds in Quick Mode */}
+                  {showSeedPickerDrawer && (
+                    <div className="mt-3 pt-3 border-t border-obsidian-800">
+                      <PopularSeedPicker
+                        selectedSeed={seed}
+                        onSelectSeed={(s, p) => {
+                          handleSelectSeed(s, p);
+                          setShowSeedPickerDrawer(false);
+                        }}
+                        inline={true}
+                      />
+                    </div>
                   )}
                 </div>
-
-                {selectedSeedPreset && (
-                  <div className="text-[11px] font-mono text-slate-400 flex items-center space-x-2">
-                    <span className="text-emerald-400 font-bold">{selectedSeedPreset.name}</span>
-                    <span>•</span>
-                    <span>{selectedSeedPreset.category}</span>
-                  </div>
-                )}
-
-                {/* Inline Drawer for Popular Seeds in Quick Mode */}
-                {showSeedPickerDrawer && (
-                  <div className="mt-3 pt-3 border-t border-obsidian-800">
-                    <PopularSeedPicker
-                      selectedSeed={seed}
-                      onSelectSeed={(s, p) => {
-                        handleSelectSeed(s, p);
-                        setShowSeedPickerDrawer(false);
-                      }}
-                      inline={true}
-                    />
-                  </div>
-                )}
-              </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1">RAM Capping</label>
+                  <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                    <span>RAM Capping</span>
+                    {userPlan && <span className="text-[10px] text-emerald-400">{userPlan.plan.max_memory}</span>}
+                  </label>
                   <select
                     value={memLimit}
                     onChange={(e) => setMemLimit(e.target.value)}
                     className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
                   >
-                    <option value="1G">1 GB</option>
-                    <option value="2G">2 GB (Recommended)</option>
-                    <option value="4G">4 GB</option>
-                    <option value="8G">8 GB</option>
+                    {ramOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-mono text-slate-300 mb-1">CPU Allocation</label>
+                  <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                    <span>CPU Allocation</span>
+                    {userPlan && <span className="text-[10px] text-emerald-400">{userPlan.plan.max_cpu} Cores</span>}
+                  </label>
                   <select
                     value={cpuLimit}
                     onChange={(e) => setCpuLimit(Number(e.target.value))}
                     className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
                   >
-                    <option value={1.0}>1.0 Core</option>
-                    <option value={2.0}>2.0 Cores (Recommended)</option>
-                    <option value={4.0}>4.0 Cores</option>
-                    <option value={8.0}>8.0 Cores</option>
+                    {cpuOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -996,14 +1116,17 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                   <span>Autostart on Daemon Boot</span>
                 </label>
 
-                <label className="flex items-center space-x-2 text-xs font-mono text-slate-200 cursor-pointer">
+                <label className={`flex items-center space-x-2 text-xs font-mono text-slate-200 ${
+                  !allowPortGate ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                }`}>
                   <input
                     type="checkbox"
+                    disabled={!allowPortGate}
                     checked={portGate}
                     onChange={(e) => setPortGate(e.target.checked)}
                     className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500"
                   />
-                  <span>Enable Dynamic Port Gating (Firewall Block)</span>
+                  <span>Enable Dynamic Port Gating (Firewall Block) {!allowPortGate && '(Unavailable on plan)'}</span>
                 </label>
 
                 {portGate && (
@@ -1032,10 +1155,16 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                 </button>
                 <button
                   type="submit"
-                  disabled={creating}
-                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5"
+                  disabled={creating || isQuotaFull}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-bold font-mono text-xs flex items-center space-x-1.5"
                 >
-                  {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Confirm Deploy</span>}
+                  {creating ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : isQuotaFull ? (
+                    <span>Quota Reached</span>
+                  ) : (
+                    <span>Confirm Deploy</span>
+                  )}
                 </button>
               </div>
             </form>

@@ -3,7 +3,7 @@ package version
 // Version is the current semantic version of Bedrock Server Manager.
 // Can be set at compile time via:
 // -ldflags="-X github.com/AhmadShamli/Bedrock-Server-Manager/internal/version.Version=x.y.z"
-var Version = "1.6.1"
+var Version = "1.7.0"
 
 const (
 	// AppName is the official display name of the application.

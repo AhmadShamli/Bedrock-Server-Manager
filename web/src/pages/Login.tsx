@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { KeyRound, AlertCircle, Loader2 } from 'lucide-react';
 import { api } from '../api/client';
 import { User } from '../types';
@@ -101,6 +101,13 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <span>Authenticate</span>}
           </button>
         </form>
+
+        <div className="mt-6 text-center text-xs text-slate-400">
+          Need an account?{' '}
+          <Link to="/register" className="text-emerald-400 hover:underline font-medium">
+            Register here
+          </Link>
+        </div>
       </div>
     </div>
   );

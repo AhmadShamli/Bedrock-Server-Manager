@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
@@ -41,9 +42,13 @@ func (h *UserHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // CreateUserRequest payload.
 type CreateUserRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Role     string `json:"role"`
+	Username      string     `json:"username"`
+	Password      string     `json:"password"`
+	Email         string     `json:"email"`
+	Role          string     `json:"role"`
+	PlanID        *int64     `json:"plan_id,omitempty"`
+	PlanStatus    string     `json:"plan_status,omitempty"`
+	PlanExpiresAt *time.Time `json:"plan_expires_at,omitempty"`
 }
 
 // Create registers a new user account (admin only).
@@ -55,6 +60,7 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.Username = strings.TrimSpace(req.Username)
+	req.Email = strings.TrimSpace(req.Email)
 	req.Role = strings.ToLower(strings.TrimSpace(req.Role))
 
 	if req.Username == "" || len(req.Password) < 8 {
@@ -62,8 +68,8 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Role != models.RoleAdmin && req.Role != models.RoleOperator {
-		req.Role = models.RoleOperator
+	if req.Role != models.RoleAdmin && req.Role != models.RoleOperator && req.Role != models.RoleUser {
+		req.Role = models.RoleUser
 	}
 
 	// Check if user already exists
@@ -79,7 +85,7 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.db.CreateUser(r.Context(), req.Username, pwHash, req.Role)
+	user, err := h.db.CreateUserExtended(r.Context(), req.Username, req.Email, pwHash, req.Role, req.PlanID, req.PlanStatus, req.PlanExpiresAt)
 	if err != nil {
 		http.Error(w, `{"error": "Failed to create user"}`, http.StatusInternalServerError)
 		return
@@ -98,13 +104,94 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		ActorName: actorName,
 		Action:    "user_created",
 		Target:    user.Username,
-		Details:   fmt.Sprintf(`{"user_id": %d, "role": "%s"}`, user.ID, user.Role),
+		Details:   fmt.Sprintf(`{"user_id": %d, "role": "%s", "plan": "%s"}`, user.ID, user.Role, user.PlanName),
 		ClientIP:  GetClientIP(r).String(),
 	})
 
 	user.PasswordHash = ""
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(user)
+}
+
+// UpdateUserRequest payload.
+type UpdateUserRequest struct {
+	Email         string     `json:"email"`
+	Role          string     `json:"role"`
+	PlanID        *int64     `json:"plan_id"`
+	PlanStatus    string     `json:"plan_status"`
+	PlanExpiresAt *time.Time `json:"plan_expires_at"`
+}
+
+// Update modifies an existing user's role, email, and plan assignment (admin only).
+func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, `{"error": "Invalid user ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	user, err := h.db.GetUserByID(r.Context(), id)
+	if err != nil {
+		http.Error(w, `{"error": "User not found"}`, http.StatusNotFound)
+		return
+	}
+
+	var req UpdateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	req.Email = strings.TrimSpace(req.Email)
+	req.Role = strings.ToLower(strings.TrimSpace(req.Role))
+	if req.Role != "" {
+		if req.Role != models.RoleAdmin && req.Role != models.RoleOperator && req.Role != models.RoleUser {
+			http.Error(w, `{"error": "Invalid role"}`, http.StatusBadRequest)
+			return
+		}
+		user.Role = req.Role
+	}
+	user.Email = req.Email
+	user.PlanID = req.PlanID
+	if req.PlanStatus != "" {
+		user.PlanStatus = req.PlanStatus
+	}
+	user.PlanExpiresAt = req.PlanExpiresAt
+
+	if err := h.db.UpdateUser(r.Context(), user); err != nil {
+		http.Error(w, `{"error": "Failed to update user"}`, http.StatusInternalServerError)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	actorName := "admin"
+	var actorID *int64
+	if claims != nil {
+		actorName = claims.Username
+		actorID = &claims.UserID
+	}
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		UserID:    actorID,
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "user_updated",
+		Target:    user.Username,
+		Details:   fmt.Sprintf(`{"user_id": %d, "role": "%s", "plan_id": %v}`, user.ID, user.Role, user.PlanID),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	updated, _ := h.db.GetUserByID(r.Context(), id)
+	if updated != nil {
+		updated.PasswordHash = ""
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(updated)
+		return
+	}
+
+	user.PasswordHash = ""
+	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(user)
 }
 

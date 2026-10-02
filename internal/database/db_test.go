@@ -446,3 +446,131 @@ func TestPortGateBans(t *testing.T) {
 	}
 }
 
+func TestPlanManagementAndQuotas(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenManagerDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open in-memory db: %v", err)
+	}
+	defer db.Close()
+
+	// 1. Verify default plan was seeded on migration
+	defPlan, err := db.GetDefaultPlan(ctx)
+	if err != nil {
+		t.Fatalf("GetDefaultPlan failed: %v", err)
+	}
+	if !defPlan.IsDefault {
+		t.Errorf("expected default plan to have IsDefault=true")
+	}
+	if defPlan.MaxServers != 1 {
+		t.Errorf("expected default plan max servers 1, got %d", defPlan.MaxServers)
+	}
+
+	// 2. Create custom plan
+	proPlan := &models.Plan{
+		Name:                "Pro Plan",
+		Description:         "Advanced tier with 3 servers",
+		IsDefault:           false,
+		BillingInterval:     "monthly",
+		MaxServers:          3,
+		MaxMemory:           "4G",
+		MaxCPU:              4.0,
+		MaxBackupsPerServer: 5,
+		MaxDiskMB:           10240,
+		MaxPlayerSlots:      20,
+		MaxCollaborators:    2,
+		AllowCustomPort:     true,
+		AllowCustomSeed:     true,
+		AllowAddons:         true,
+		AllowPortGateKeys:   true,
+		AllowTasks:          true,
+	}
+	if err := db.CreatePlan(ctx, proPlan); err != nil {
+		t.Fatalf("CreatePlan failed: %v", err)
+	}
+	if proPlan.ID == 0 {
+		t.Fatalf("expected non-zero ID for proPlan")
+	}
+
+	// 3. Create user with RoleUser (should auto-assign default plan)
+	user1, err := db.CreateUser(ctx, "player1", "hash1", models.RoleUser)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	if user1.PlanID == nil || *user1.PlanID != defPlan.ID {
+		t.Errorf("expected user1 to have default plan ID %d, got %v", defPlan.ID, user1.PlanID)
+	}
+	if user1.PlanName != defPlan.Name {
+		t.Errorf("expected user1 plan name '%s', got '%s'", defPlan.Name, user1.PlanName)
+	}
+
+	// 4. Update user to Pro Plan
+	exp := time.Now().Add(30 * 24 * time.Hour)
+	if err := db.UpdateUserPlan(ctx, user1.ID, &proPlan.ID, "active", &exp); err != nil {
+		t.Fatalf("UpdateUserPlan failed: %v", err)
+	}
+	fetchedUser, err := db.GetUserByID(ctx, user1.ID)
+	if err != nil {
+		t.Fatalf("GetUserByID failed: %v", err)
+	}
+	if fetchedUser.PlanID == nil || *fetchedUser.PlanID != proPlan.ID {
+		t.Errorf("expected pro plan ID, got %v", fetchedUser.PlanID)
+	}
+	if fetchedUser.PlanName != "Pro Plan" {
+		t.Errorf("expected plan name 'Pro Plan', got '%s'", fetchedUser.PlanName)
+	}
+
+	// 5. Server ownership and quota checking
+	s1 := &models.Server{
+		ID:          "user-srv-1",
+		Name:        "User Server 1",
+		Port:        19140,
+		PortV6:      19141,
+		Status:      models.ServerStatusStopped,
+		OwnerUserID: &user1.ID,
+	}
+	if err := db.CreateServer(ctx, s1); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+
+	sCount, err := db.CountServersByOwner(ctx, user1.ID)
+	if err != nil {
+		t.Fatalf("CountServersByOwner failed: %v", err)
+	}
+	if sCount != 1 {
+		t.Errorf("expected 1 server owned, got %d", sCount)
+	}
+
+	ownedList, err := db.ListServersByOwner(ctx, user1.ID)
+	if err != nil {
+		t.Fatalf("ListServersByOwner failed: %v", err)
+	}
+	if len(ownedList) != 1 || ownedList[0].ID != "user-srv-1" {
+		t.Errorf("unexpected owned servers list: %+v", ownedList)
+	}
+
+	// 6. Plan list with user count
+	plans, err := db.ListPlans(ctx)
+	if err != nil {
+		t.Fatalf("ListPlans failed: %v", err)
+	}
+	if len(plans) < 2 {
+		t.Errorf("expected at least 2 plans, got %d", len(plans))
+	}
+	for _, p := range plans {
+		if p.ID == proPlan.ID && p.UserCount != 1 {
+			t.Errorf("expected pro plan user count 1, got %d", p.UserCount)
+		}
+	}
+
+	// 7. Prevent deleting plan with assigned users
+	uCount, err := db.CountUsersByPlanID(ctx, proPlan.ID)
+	if err != nil {
+		t.Fatalf("CountUsersByPlanID failed: %v", err)
+	}
+	if uCount != 1 {
+		t.Errorf("expected 1 user on proPlan, got %d", uCount)
+	}
+}
+
+

@@ -1446,8 +1446,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.6.1" {
-		t.Errorf("expected version 1.6.1 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.7.0" {
+		t.Errorf("expected version 1.7.0 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1461,8 +1461,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.6.1" {
-		t.Errorf("expected version 1.6.1 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.7.0" {
+		t.Errorf("expected version 1.7.0 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
@@ -2023,6 +2023,170 @@ func TestDashboardSummary(t *testing.T) {
 	}
 	if summary.HostSystem.Version == "" || summary.HostSystem.OS == "" {
 		t.Errorf("expected valid host system telemetry, got %+v", summary.HostSystem)
+	}
+}
+
+func TestPlansAPIAndNormalUserQuotas(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	ctx := context.Background()
+
+	adminUser, err := db.CreateUser(ctx, "sysadmin", "hash", models.RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	adminToken, _ := auth.GenerateJWT(jwtSecret, adminUser.ID, adminUser.Username, adminUser.Role, time.Hour)
+
+	// 1. List plans as admin (verify Default Plan exists)
+	req := httptest.NewRequest("GET", "/api/plans", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from GET /api/plans, got %d: %s", w.Code, w.Body.String())
+	}
+	var plans []models.Plan
+	_ = json.Unmarshal(w.Body.Bytes(), &plans)
+	if len(plans) == 0 {
+		t.Fatalf("expected at least 1 plan")
+	}
+
+	// 2. Create custom plan
+	newPlanPayload := `{
+		"name": "Standard Tier",
+		"description": "2 servers, 2GB each",
+		"max_servers": 2,
+		"max_memory": "2G",
+		"max_cpu": 2.0,
+		"max_collaborators": 1,
+		"allow_custom_port": false,
+		"allow_custom_seed": true
+	}`
+	req = httptest.NewRequest("POST", "/api/plans", strings.NewReader(newPlanPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 from POST /api/plans, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 3. Test self-registration: blocked when disabled
+	regPayload := `{"username": "gamer1", "password": "password123", "email": "gamer1@example.com"}`
+	req = httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(regPayload))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when registration is disabled, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Enable registration via settings
+	_ = db.SetSetting(ctx, "allow_registration", "true")
+
+	// Test self-registration: success when enabled
+	req = httptest.NewRequest("POST", "/api/auth/register", strings.NewReader(regPayload))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 from registration, got %d: %s", w.Code, w.Body.String())
+	}
+	var regResp struct {
+		Token string      `json:"token"`
+		User  models.User `json:"user"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &regResp)
+	userToken := regResp.Token
+	userID := regResp.User.ID
+
+	// 4. Check user plan status via GET /api/user/plan
+	req = httptest.NewRequest("GET", "/api/user/plan", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from GET /api/user/plan, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 5. Normal user creates first server within quota (Default Plan max_servers: 1)
+	srv1Payload := `{
+		"id": "gamer-srv-1",
+		"name": "Gamer Realm 1",
+		"port": 19132,
+		"portv6": 19133,
+		"memory_limit": "2G",
+		"cpu_limit": 1.5
+	}`
+	req = httptest.NewRequest("POST", "/api/servers", strings.NewReader(srv1Payload))
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 from first server creation, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 6. Normal user attempts to create second server -> Quota Exceeded!
+	srv2Payload := `{
+		"id": "gamer-srv-2",
+		"name": "Gamer Realm 2",
+		"port": 19134,
+		"portv6": 19135,
+		"memory_limit": "2G"
+	}`
+	req = httptest.NewRequest("POST", "/api/servers", strings.NewReader(srv2Payload))
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for quota exceeded, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 7. Safe command testing: safe command allowed
+	safeCmdPayload := `{"command": "say Hello Minecraft"}`
+	req = httptest.NewRequest("POST", "/api/servers/gamer-srv-1/command", strings.NewReader(safeCmdPayload))
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from safe command, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Dangerous command blocked for normal user
+	dangerCmdPayload := `{"command": "op hacker"}`
+	req = httptest.NewRequest("POST", "/api/servers/gamer-srv-1/command", strings.NewReader(dangerCmdPayload))
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for dangerous command, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 8. User deletes their own server -> Quota reclaimed
+	req = httptest.NewRequest("DELETE", "/api/servers/gamer-srv-1", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from DELETE /api/servers/gamer-srv-1, got %d: %s", w.Code, w.Body.String())
+	}
+
+	countAfter, _ := db.CountServersByOwner(ctx, userID)
+	if countAfter != 0 {
+		t.Fatalf("expected 0 servers after deletion, got %d", countAfter)
+	}
+
+	// Now gamer can deploy again
+	req = httptest.NewRequest("POST", "/api/servers", strings.NewReader(srv1Payload))
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 after reclaiming quota, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

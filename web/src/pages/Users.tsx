@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, UserPlus, Key, Trash2, Server, Check, Loader2, AlertCircle, Clock, Save } from 'lucide-react';
+import { Shield, UserPlus, Key, Trash2, Server, Check, Loader2, AlertCircle, Clock, Save, Layers, Edit3, UserCheck, ToggleLeft, ToggleRight } from 'lucide-react';
 import { api } from '../api/client';
-import { User, Server as ServerType } from '../types';
+import { User, Server as ServerType, Plan } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 
@@ -12,6 +12,7 @@ interface UsersPageProps {
 export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
   const [users, setUsers] = useState<User[]>([]);
   const [servers, setServers] = useState<ServerType[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [userServerMap, setUserServerMap] = useState<Record<number, string[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,22 +28,32 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
 
   // System Settings state
   const [heartbeatSec, setHeartbeatSec] = useState(10);
+  const [allowRegistration, setAllowRegistration] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
   // Add User modal state
   const [showAddModal, setShowAddModal] = useState(false);
   const [newUsername, setNewUsername] = useState('');
+  const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [newRole, setNewRole] = useState<'admin' | 'operator'>('operator');
+  const [newRole, setNewRole] = useState<'admin' | 'operator' | 'user'>('user');
+  const [newPlanId, setNewPlanId] = useState<number | undefined>(undefined);
   const [creatingUser, setCreatingUser] = useState(false);
+
+  // Edit User Plan / Role modal state
+  const [editPlanUser, setEditPlanUser] = useState<User | null>(null);
+  const [editRole, setEditRole] = useState<'admin' | 'operator' | 'user'>('user');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPlanId, setEditPlanId] = useState<number | null>(null);
+  const [savingPlanUser, setSavingPlanUser] = useState(false);
 
   // Reset Password modal state
   const [pwResetUser, setPwResetUser] = useState<User | null>(null);
   const [resetPasswordVal, setResetPasswordVal] = useState('');
   const [resettingPw, setResettingPw] = useState(false);
 
-  // Server Access modal state
+  // Server Access modal state (for operators)
   const [accessUser, setAccessUser] = useState<User | null>(null);
   const [selectedServerIds, setSelectedServerIds] = useState<string[]>([]);
   const [savingAccess, setSavingAccess] = useState(false);
@@ -51,18 +62,30 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
     try {
       setLoading(true);
       setError(null);
-      const [uList, sList, settingsRes] = await Promise.all([
+      const [uList, sList, pList, settingsRes] = await Promise.all([
         api.listUsers(),
         api.listServers(),
+        api.listPlans(),
         api.getSettings(),
       ]);
       const safeUsers = Array.isArray(uList) ? uList : [];
       setUsers(safeUsers);
       setServers(Array.isArray(sList) ? sList : []);
+      setPlans(Array.isArray(pList) ? pList : []);
 
       if (settingsRes && settingsRes['heartbeat_interval_seconds']) {
         const val = parseInt(settingsRes['heartbeat_interval_seconds'], 10);
         if (!isNaN(val) && val > 0) setHeartbeatSec(val);
+      }
+
+      if (settingsRes && settingsRes['allow_registration']) {
+        setAllowRegistration(settingsRes['allow_registration'] === 'true' || settingsRes['allow_registration'] === '1');
+      }
+
+      // Default plan selection for modal
+      const def = pList.find((p) => p.is_default);
+      if (def) {
+        setNewPlanId(def.id);
       }
 
       // Fetch server access for each operator user
@@ -97,18 +120,47 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
     try {
       await api.createUser({
         username: newUsername.trim(),
+        email: newEmail.trim(),
         password: newPassword,
         role: newRole,
+        plan_id: newRole === 'user' ? newPlanId : undefined,
       });
       setShowAddModal(false);
       setNewUsername('');
+      setNewEmail('');
       setNewPassword('');
-      setNewRole('operator');
+      setNewRole('user');
       loadData();
     } catch (err: any) {
       alert(err.message || 'Failed to create user');
     } finally {
       setCreatingUser(false);
+    }
+  };
+
+  const handleOpenEditPlanModal = (u: User) => {
+    setEditPlanUser(u);
+    setEditRole(u.role);
+    setEditEmail(u.email || '');
+    setEditPlanId(u.plan_id || null);
+  };
+
+  const handleSavePlanUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editPlanUser) return;
+    setSavingPlanUser(true);
+    try {
+      await api.updateUser(editPlanUser.id, {
+        role: editRole,
+        email: editEmail.trim(),
+        plan_id: editRole === 'user' ? editPlanId : null,
+      });
+      setEditPlanUser(null);
+      await loadData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to update user');
+    } finally {
+      setSavingPlanUser(false);
     }
   };
 
@@ -162,12 +214,15 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
     }
   };
 
-  const handleSaveHeartbeatSetting = async (e: React.FormEvent) => {
+  const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     setSavingSettings(true);
     setSettingsSaved(false);
     try {
-      await api.updateSetting('heartbeat_interval_seconds', heartbeatSec.toString());
+      await Promise.all([
+        api.updateSetting('heartbeat_interval_seconds', heartbeatSec.toString()),
+        api.updateSetting('allow_registration', allowRegistration ? 'true' : 'false'),
+      ]);
       setSettingsSaved(true);
       setTimeout(() => setSettingsSaved(false), 3000);
     } catch (err: any) {
@@ -187,7 +242,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
             <span>User & Access Management</span>
           </h1>
           <p className="text-sm font-mono text-slate-400 mt-1">
-            Provision dashboard operators, manage server permissions, reset credentials, and configure global portal settings.
+            Provision users, assign deployment plans, configure operator scopes, and manage portal access policies.
           </p>
         </div>
 
@@ -211,7 +266,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
       <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl overflow-hidden shadow-xl">
         <div className="p-5 border-b border-obsidian-800 flex items-center justify-between">
           <h3 className="font-mono text-base font-bold text-slate-100 flex items-center gap-2">
-            <span>System Accounts</span>
+            <span>Registered Accounts</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
               {users.length}
             </span>
@@ -231,7 +286,8 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                   <tr>
                     <th className="px-6 py-3.5">User</th>
                     <th className="px-6 py-3.5">Role</th>
-                    <th className="px-6 py-3.5">Assigned Server Access</th>
+                    <th className="px-6 py-3.5">Assigned Plan</th>
+                    <th className="px-6 py-3.5">Server Scope</th>
                     <th className="px-6 py-3.5">Created At</th>
                     <th className="px-6 py-3.5 text-right">Actions</th>
                   </tr>
@@ -248,26 +304,52 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                               {u.username.charAt(0).toUpperCase()}
                             </div>
                             <div>
-                              <span className="font-bold text-slate-100">{u.username}</span>
-                              {isSelf && <span className="ml-2 text-[10px] text-emerald-400 font-bold">(You)</span>}
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-slate-100">{u.username}</span>
+                                {isSelf && <span className="text-[10px] text-emerald-400 font-bold">(You)</span>}
+                              </div>
+                              {u.email && <span className="text-[10px] text-slate-500 block">{u.email}</span>}
                             </div>
                           </div>
                         </td>
+
                         <td className="px-6 py-4">
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                               u.role === 'admin'
-                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                                : 'bg-cyber-cyan/10 text-cyber-cyan border border-cyber-cyan/30'
+                                ? 'bg-purple-500/10 text-purple-400 border border-purple-500/30'
+                                : u.role === 'operator'
+                                ? 'bg-cyber-cyan/10 text-cyber-cyan border border-cyber-cyan/30'
+                                : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
                             }`}
                           >
                             {u.role}
                           </span>
                         </td>
+
+                        <td className="px-6 py-4">
+                          {u.role === 'user' ? (
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 font-semibold text-[10px]">
+                                {u.plan_name || 'Default Plan'}
+                              </span>
+                              <button
+                                onClick={() => handleOpenEditPlanModal(u)}
+                                title="Change Plan / Role"
+                                className="p-1 rounded bg-obsidian-800 text-slate-400 hover:text-slate-200"
+                              >
+                                <Edit3 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-slate-500 italic">N/A ({u.role})</span>
+                          )}
+                        </td>
+
                         <td className="px-6 py-4 text-slate-300">
                           {u.role === 'admin' ? (
-                            <span className="text-slate-400 italic">All Servers (Full Admin Access)</span>
-                          ) : (
+                            <span className="text-slate-400 italic">All Servers (Admin)</span>
+                          ) : u.role === 'operator' ? (
                             <div className="flex items-center gap-2">
                               <span className="text-slate-300 font-bold">
                                 {assigned.length} {assigned.length === 1 ? 'server' : 'servers'}
@@ -279,12 +361,23 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                                 Configure
                               </button>
                             </div>
+                          ) : (
+                            <span className="text-slate-400 italic">Owned Self-Deployed</span>
                           )}
                         </td>
+
                         <td className="px-6 py-4 text-slate-400">
                           {new Date(u.created_at).toLocaleDateString()}
                         </td>
+
                         <td className="px-6 py-4 text-right space-x-2">
+                          <button
+                            onClick={() => handleOpenEditPlanModal(u)}
+                            title="Edit Role & Plan"
+                            className="p-1.5 rounded bg-obsidian-800 text-slate-300 hover:bg-emerald-600 hover:text-slate-950 transition-colors"
+                          >
+                            <UserCheck className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             onClick={() => {
                               setPwResetUser(u);
@@ -322,46 +415,79 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
         )}
       </div>
 
-      {/* SYSTEM SETTINGS CARD */}
-      <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6">
-        <h3 className="font-mono text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
-          <Clock className="w-4 h-4 text-cyber-cyan" />
-          <span>Knock Portal & Mobile Roaming Policy</span>
-        </h3>
-        <p className="text-xs text-slate-400 font-mono mb-4">
-          Configure how frequently mobile clients send background heartbeat pings to retain their dynamic firewall lease during roaming between cell networks.
-        </p>
+      {/* SYSTEM REGISTRATION & PORTAL SETTINGS CARD */}
+      <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 space-y-6">
+        <div>
+          <h3 className="font-mono text-base font-bold text-slate-100 mb-1 flex items-center gap-2">
+            <Clock className="w-4 h-4 text-emerald-400" />
+            <span>Registration & Portal Access Policies</span>
+          </h3>
+          <p className="text-xs text-slate-400 font-mono">
+            Configure open self-registration for normal users and dynamic firewall heartbeat intervals.
+          </p>
+        </div>
 
         {settingsSaved && (
-          <div className="mb-4 p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 font-mono text-xs flex items-center space-x-2">
+          <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 font-mono text-xs flex items-center space-x-2">
             <Check className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>Settings saved successfully!</span>
           </div>
         )}
 
-        <form onSubmit={handleSaveHeartbeatSetting} className="flex flex-col sm:flex-row items-start sm:items-center gap-3 font-mono text-xs">
-          <div>
-            <label className="block text-slate-400 mb-1 text-[11px] font-bold">
-              Heartbeat Timer Interval (seconds)
-            </label>
-            <input
-              type="number"
-              min="3"
-              max="120"
-              value={heartbeatSec}
-              onChange={(e) => setHeartbeatSec(parseInt(e.target.value) || 10)}
-              className="w-48 px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
-            />
+        <form onSubmit={handleSaveSettings} className="space-y-4 font-mono text-xs">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 rounded-xl bg-obsidian-950 border border-obsidian-800">
+            {/* Registration toggle */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="font-bold text-slate-200">Public Self-Registration</span>
+                <button
+                  type="button"
+                  onClick={() => setAllowRegistration(!allowRegistration)}
+                  className="text-emerald-400 focus:outline-none"
+                >
+                  {allowRegistration ? (
+                    <ToggleRight className="w-6 h-6 text-emerald-400" />
+                  ) : (
+                    <ToggleLeft className="w-6 h-6 text-slate-600" />
+                  )}
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400">
+                {allowRegistration
+                  ? 'Enabled: Visitors can register accounts at /register and receive the Default Plan.'
+                  : 'Disabled: New user accounts can only be created by administrators.'}
+              </p>
+            </div>
+
+            {/* Heartbeat seconds */}
+            <div>
+              <label className="block text-slate-200 font-bold mb-1.5">
+                Heartbeat Ping Interval (seconds)
+              </label>
+              <input
+                type="number"
+                min="3"
+                max="120"
+                value={heartbeatSec}
+                onChange={(e) => setHeartbeatSec(parseInt(e.target.value) || 10)}
+                className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Interval for client IP renewal during network roaming.
+              </p>
+            </div>
           </div>
 
-          <button
-            type="submit"
-            disabled={savingSettings}
-            className="sm:mt-5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center space-x-1.5 transition-colors"
-          >
-            {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-            <span>Save Setting</span>
-          </button>
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={savingSettings}
+              className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center space-x-1.5 transition-colors"
+            >
+              {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              <span>Save System Settings</span>
+            </button>
+          </div>
         </form>
       </div>
 
@@ -376,11 +502,11 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
 
             <form onSubmit={handleCreateUser} className="space-y-4 font-mono text-xs">
               <div>
-                <label className="block text-slate-300 mb-1 font-bold">Username</label>
+                <label className="block text-slate-300 mb-1 font-bold">Username *</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. realm_moderator"
+                  placeholder="e.g. gamer_steve"
                   value={newUsername}
                   onChange={(e) => setNewUsername(e.target.value)}
                   className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
@@ -388,7 +514,18 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
               </div>
 
               <div>
-                <label className="block text-slate-300 mb-1 font-bold">Password (min 8 characters)</label>
+                <label className="block text-slate-300 mb-1 font-bold">Email (Optional)</label>
+                <input
+                  type="email"
+                  placeholder="user@example.com"
+                  value={newEmail}
+                  onChange={(e) => setNewEmail(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Password * (min 8 characters)</label>
                 <input
                   type="password"
                   required
@@ -407,10 +544,28 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                   onChange={(e) => setNewRole(e.target.value as any)}
                   className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
                 >
+                  <option value="user">Normal User (Deploy servers under plan quotas)</option>
                   <option value="operator">Operator (Scoped to assigned servers)</option>
                   <option value="admin">Administrator (Full root access)</option>
                 </select>
               </div>
+
+              {newRole === 'user' && (
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Assigned Plan</label>
+                  <select
+                    value={newPlanId || ''}
+                    onChange={(e) => setNewPlanId(Number(e.target.value) || undefined)}
+                    className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    {plans.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} {p.is_default ? '(Default)' : ''} - {p.max_servers} Server(s), {p.max_memory} RAM
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
                 <button
@@ -426,6 +581,81 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold"
                 >
                   {creatingUser ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>Create Account</span>}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT USER ROLE & PLAN MODAL */}
+      {editPlanUser && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-md w-full p-6 shadow-2xl">
+            <h3 className="text-base font-mono font-bold text-slate-100 mb-2 flex items-center gap-2">
+              <Layers className="w-4 h-4 text-emerald-400" />
+              <span>Edit User: {editPlanUser.username}</span>
+            </h3>
+            <p className="text-xs text-slate-400 font-mono mb-4">
+              Reassign role, plan tiers, or update user details.
+            </p>
+
+            <form onSubmit={handleSavePlanUser} className="space-y-4 font-mono text-xs">
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Email</label>
+                <input
+                  type="email"
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  placeholder="user@example.com"
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Role</label>
+                <select
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value as any)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                >
+                  <option value="user">Normal User (Deploy servers under plan quotas)</option>
+                  <option value="operator">Operator (Scoped to assigned servers)</option>
+                  <option value="admin">Administrator (Full root access)</option>
+                </select>
+              </div>
+
+              {editRole === 'user' && (
+                <div>
+                  <label className="block text-slate-300 mb-1 font-bold">Assigned Deployment Plan</label>
+                  <select
+                    value={editPlanId || ''}
+                    onChange={(e) => setEditPlanId(Number(e.target.value) || null)}
+                    className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                  >
+                    {plans.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} {p.is_default ? '(Default)' : ''} - {p.max_servers} Server(s), {p.max_memory} RAM
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
+                <button
+                  type="button"
+                  onClick={() => setEditPlanUser(null)}
+                  className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPlanUser}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold"
+                >
+                  {savingPlanUser ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>Save Changes</span>}
                 </button>
               </div>
             </form>
@@ -452,7 +682,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                   type="password"
                   required
                   minLength={8}
-                  placeholder="Min 8 characters"
+                  placeholder="••••••••"
                   value={resetPasswordVal}
                   onChange={(e) => setResetPasswordVal(e.target.value)}
                   className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
@@ -483,27 +713,29 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
       {/* CONFIGURE SERVER ACCESS MODAL */}
       {accessUser && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-md w-full p-6 shadow-2xl">
-            <h3 className="text-base font-mono font-bold text-slate-100 mb-1 flex items-center gap-2">
+          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-lg w-full p-6 shadow-2xl">
+            <h3 className="text-base font-mono font-bold text-slate-100 mb-2 flex items-center gap-2">
               <Server className="w-4 h-4 text-emerald-400" />
-              <span>Server Permissions: {accessUser.username}</span>
+              <span>Assigned Servers: {accessUser.username}</span>
             </h3>
             <p className="text-xs text-slate-400 font-mono mb-4">
-              Select which Bedrock Dedicated Server instances this operator can manage.
+              Select which servers operator <strong>{accessUser.username}</strong> can view and manage.
             </p>
 
             <form onSubmit={handleSaveAccess} className="space-y-4 font-mono text-xs">
-              <div className="max-h-60 overflow-y-auto space-y-2 p-3 bg-obsidian-950 border border-obsidian-800 rounded-lg">
-                {(servers || []).length === 0 ? (
-                  <p className="text-slate-500 italic">No servers currently deployed.</p>
+              <div className="max-h-60 overflow-y-auto space-y-2 border border-obsidian-800 rounded-lg p-3 bg-obsidian-950">
+                {servers.length === 0 ? (
+                  <div className="text-slate-500 text-center py-4">No servers available</div>
                 ) : (
-                  (servers || []).map((s) => {
-                    const isChecked = (selectedServerIds || []).includes(s.id);
+                  servers.map((s) => {
+                    const isChecked = selectedServerIds.includes(s.id);
                     return (
                       <label
                         key={s.id}
-                        className={`flex items-center justify-between p-2 rounded cursor-pointer transition-colors ${
-                          isChecked ? 'bg-emerald-950/40 border border-emerald-500/40' : 'hover:bg-obsidian-900 border border-transparent'
+                        className={`flex items-center justify-between p-2.5 rounded-lg border transition-colors cursor-pointer ${
+                          isChecked
+                            ? 'bg-emerald-950/20 border-emerald-500/40 text-slate-100'
+                            : 'bg-obsidian-900 border-obsidian-800 text-slate-400 hover:border-obsidian-700'
                         }`}
                       >
                         <div className="flex items-center space-x-2.5">
@@ -512,18 +744,27 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                             checked={isChecked}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                setSelectedServerIds([...(selectedServerIds || []), s.id]);
+                                setSelectedServerIds([...selectedServerIds, s.id]);
                               } else {
-                                setSelectedServerIds((selectedServerIds || []).filter((id) => id !== s.id));
+                                setSelectedServerIds(selectedServerIds.filter((id) => id !== s.id));
                               }
                             }}
-                            className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                            className="rounded bg-obsidian-950 border-obsidian-700 text-emerald-500 focus:ring-emerald-500/20"
                           />
                           <div>
-                            <span className="text-slate-200 font-bold block">{s.name}</span>
-                            <span className="text-slate-500 text-[10px]">ID: {s.id} • UDP :{s.port}</span>
+                            <span className="font-bold block">{s.name}</span>
+                            <span className="text-[10px] text-slate-500">{s.id} • Port {s.port}</span>
                           </div>
                         </div>
+                        <span
+                          className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${
+                            s.status === 'running'
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : 'bg-slate-800 text-slate-400'
+                          }`}
+                        >
+                          {s.status}
+                        </span>
                       </label>
                     );
                   })
@@ -543,7 +784,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
                   disabled={savingAccess}
                   className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold"
                 >
-                  {savingAccess ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>Save Permissions</span>}
+                  {savingAccess ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>Save Access</span>}
                 </button>
               </div>
             </form>

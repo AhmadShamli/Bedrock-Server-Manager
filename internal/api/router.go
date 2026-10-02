@@ -54,6 +54,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	taskHandler := NewTaskHandler(opts.DB, opts.Scheduler)
 	globalPlayerHandler := NewGlobalPlayerHandler(opts.DB, opts.Engine, opts.DataDir)
 	userHandler := NewUserHandler(opts.DB)
+	planHandler := NewPlanHandler(opts.DB)
 	dashboardHandler := NewDashboardHandler(opts.DB, opts.Engine, opts.PlayerManager, opts.TelemetryCollector)
 
 	// Global Middlewares
@@ -81,6 +82,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 		// Public Auth
 		api.With(mw.RateLimitLoginMiddleware).Post("/auth/login", authHandler.Login)
+		api.With(mw.RateLimitLoginMiddleware).Post("/auth/register", authHandler.Register)
 		api.Post("/auth/logout", authHandler.Logout)
 
 		// Authenticated Routes
@@ -89,6 +91,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 			authGroup.Get("/auth/me", authHandler.Me)
 			authGroup.Post("/auth/refresh", authHandler.Refresh)
+			authGroup.Get("/user/plan", planHandler.GetMyPlan)
 			authGroup.Get("/system/info", systemHandler.SystemInfo)
 			authGroup.Get("/dashboard/summary", dashboardHandler.Summary)
 
@@ -97,14 +100,17 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 			authGroup.Get("/presets/seeds", ListSeeds)
 			authGroup.Get("/updater/check", CheckUpdates)
 
-			// Servers
+			// Servers (Listing & Creation allowed for both Admin and User roles)
 			authGroup.Get("/servers", serverHandler.List)
+			authGroup.Post("/servers", serverHandler.Create)
+			authGroup.Get("/servers/suggest-ports", serverHandler.SuggestPorts)
 			authGroup.Get("/active-players", playerHubHandler.GetAllActivePlayers)
 
 			authGroup.Group(func(srvGroup chi.Router) {
 				srvGroup.Use(mw.RequireServerAccess)
 
 				srvGroup.Get("/servers/{id}", serverHandler.Get)
+				srvGroup.Delete("/servers/{id}", serverHandler.Delete)
 				srvGroup.Get("/servers/{id}/stats", serverHandler.Stats)
 				srvGroup.Get("/servers/{id}/metrics", serverHandler.Metrics)
 				srvGroup.Get("/servers/{id}/console/ws", serverHandler.ConsoleWS)
@@ -112,6 +118,11 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				srvGroup.Post("/servers/{id}/stop", serverHandler.Stop)
 				srvGroup.Post("/servers/{id}/restart", serverHandler.Restart)
 				srvGroup.Post("/servers/{id}/command", serverHandler.SendCommand)
+
+				// Collaborators
+				srvGroup.Get("/servers/{id}/collaborators", serverHandler.ListCollaborators)
+				srvGroup.Post("/servers/{id}/collaborators", serverHandler.AddCollaborator)
+				srvGroup.Delete("/servers/{id}/collaborators/{userId}", serverHandler.RemoveCollaborator)
 
 				// Config Editor
 				srvGroup.Get("/servers/{id}/properties", serverHandler.GetProperties)
@@ -173,13 +184,18 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 			authGroup.Group(func(adminGroup chi.Router) {
 				adminGroup.Use(mw.RequireAdmin)
 
-				adminGroup.Get("/servers/suggest-ports", serverHandler.SuggestPorts)
-				adminGroup.Post("/servers", serverHandler.Create)
 				adminGroup.Put("/servers/{id}", serverHandler.Update)
-				adminGroup.Delete("/servers/{id}", serverHandler.Delete)
 				adminGroup.Post("/servers/{id}/clone", serverHandler.Clone)
 				adminGroup.Post("/servers/{id}/copy-configs", serverHandler.CopyConfigs)
 				adminGroup.Get("/servers/{id}/export", serverHandler.Export)
+
+				// Plans Management
+				adminGroup.Get("/plans", planHandler.List)
+				adminGroup.Post("/plans", planHandler.Create)
+				adminGroup.Get("/plans/{id}", planHandler.Get)
+				adminGroup.Put("/plans/{id}", planHandler.Update)
+				adminGroup.Delete("/plans/{id}", planHandler.Delete)
+				adminGroup.Post("/plans/{id}/set-default", planHandler.SetDefault)
 
 				// Global Player Access Control
 				adminGroup.Get("/global-players", globalPlayerHandler.List)
@@ -208,6 +224,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				// User Management
 				adminGroup.Get("/users", userHandler.List)
 				adminGroup.Post("/users", userHandler.Create)
+				adminGroup.Put("/users/{id}", userHandler.Update)
 				adminGroup.Put("/users/{id}/password", userHandler.UpdatePassword)
 				adminGroup.Delete("/users/{id}", userHandler.Delete)
 				adminGroup.Get("/users/{id}/servers", userHandler.GetServerAccess)

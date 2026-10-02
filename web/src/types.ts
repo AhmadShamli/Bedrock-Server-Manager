@@ -1,8 +1,55 @@
 export interface User {
   id: number;
   username: string;
-  role: 'admin' | 'operator';
+  email?: string;
+  role: 'admin' | 'operator' | 'user';
+  plan_id?: number;
+  plan_name?: string;
+  plan_status?: string;
+  plan_expires_at?: string;
   created_at: string;
+}
+
+export interface Plan {
+  id: number;
+  name: string;
+  description: string;
+  is_default: boolean;
+  billing_interval: string;
+  trial_duration_days: number;
+  max_servers: number;
+  max_memory: string;
+  max_cpu: number;
+  max_backups_per_server: number;
+  max_disk_mb: number;
+  max_player_slots: number;
+  max_collaborators: number;
+  idle_timeout_minutes: number;
+  allow_custom_seed: boolean;
+  allow_custom_port: boolean;
+  allow_preview_versions: boolean;
+  allow_addons: boolean;
+  allow_port_gate_keys: boolean;
+  allow_tasks: boolean;
+  user_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface UserPlanStatus {
+  plan: Plan;
+  usage: {
+    servers_count: number;
+    servers_max: number;
+    can_deploy_server: boolean;
+  };
+  user: {
+    id: number;
+    username: string;
+    role: string;
+    plan_status: string;
+    plan_expires_at?: string;
+  };
 }
 
 export interface Server {
@@ -23,6 +70,7 @@ export interface Server {
   container_id?: string;
   seed?: string;
   game_server_address?: string;
+  owner_user_id?: number;
   created_at: string;
   updated_at: string;
 }
