@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -570,6 +571,79 @@ func TestPlanManagementAndQuotas(t *testing.T) {
 	}
 	if uCount != 1 {
 		t.Errorf("expected 1 user on proPlan, got %d", uCount)
+	}
+}
+
+func TestLegacyDatabaseMigration(t *testing.T) {
+	ctx := context.Background()
+	// Open a raw SQLite db without the new 1.7.0 columns
+	rawDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open raw sqlite: %v", err)
+	}
+	defer rawDB.Close()
+
+	// Simulate old schema (v1.6.1)
+	oldSchema := `
+	CREATE TABLE users (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username TEXT UNIQUE NOT NULL,
+		password_hash TEXT NOT NULL,
+		role TEXT NOT NULL DEFAULT 'admin',
+		created_at TEXT NOT NULL
+	);
+	CREATE TABLE servers (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		version TEXT NOT NULL DEFAULT 'latest',
+		port INTEGER NOT NULL DEFAULT 19132,
+		portv6 INTEGER NOT NULL DEFAULT 19133,
+		status TEXT NOT NULL DEFAULT 'stopped',
+		mode TEXT NOT NULL DEFAULT 'survival',
+		difficulty TEXT NOT NULL DEFAULT 'normal',
+		autostart_on_boot INTEGER NOT NULL DEFAULT 0,
+		port_gate_enabled INTEGER NOT NULL DEFAULT 0,
+		port_gate_mode TEXT NOT NULL DEFAULT 'gamertag',
+		port_gate_timeout INTEGER NOT NULL DEFAULT 7200,
+		memory_limit TEXT NOT NULL DEFAULT '2G',
+		cpu_limit REAL NOT NULL DEFAULT 2.0,
+		container_id TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	);
+	`
+	if _, err := rawDB.ExecContext(ctx, oldSchema); err != nil {
+		t.Fatalf("failed to create old schema: %v", err)
+	}
+
+	// Insert an existing user and server
+	_, err = rawDB.ExecContext(ctx, "INSERT INTO users (username, password_hash, role, created_at) VALUES ('legacy_admin', 'hash', 'admin', '2026-01-01T00:00:00Z')")
+	if err != nil {
+		t.Fatalf("failed to insert legacy user: %v", err)
+	}
+
+	// Now run ManagerDB.Migrate
+	mdb := &ManagerDB{DB: rawDB}
+	if err := mdb.Migrate(ctx); err != nil {
+		t.Fatalf("migration on legacy database failed: %v", err)
+	}
+
+	// Verify columns exist and indices work
+	u, err := mdb.GetUserByUsername(ctx, "legacy_admin")
+	if err != nil {
+		t.Fatalf("GetUserByUsername failed after migration: %v", err)
+	}
+	if u.PlanStatus != "active" {
+		t.Errorf("expected plan_status active, got %s", u.PlanStatus)
+	}
+
+	// Verify default plan was created
+	defPlan, err := mdb.GetDefaultPlan(ctx)
+	if err != nil {
+		t.Fatalf("GetDefaultPlan failed: %v", err)
+	}
+	if defPlan == nil || !defPlan.IsDefault {
+		t.Errorf("expected default plan to exist after migration")
 	}
 }
 

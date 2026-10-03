@@ -96,6 +96,8 @@ func (db *ManagerDB) Migrate(ctx context.Context) error {
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_id INTEGER REFERENCES plans(id) ON DELETE SET NULL")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_status TEXT NOT NULL DEFAULT 'active'")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_expires_at TEXT NULL")
+	_, _ = db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_users_plan ON users(plan_id)")
+	_, _ = db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_servers_owner ON servers(owner_user_id)")
 
 	// Ensure at least one default plan exists
 	var planCount int

@@ -40,7 +40,6 @@ CREATE TABLE IF NOT EXISTS users (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_users_plan ON users(plan_id);
 
 CREATE TABLE IF NOT EXISTS user_server_access (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,7 +74,6 @@ CREATE TABLE IF NOT EXISTS servers (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_servers_status ON servers(status);
-CREATE INDEX IF NOT EXISTS idx_servers_owner ON servers(owner_user_id);
 
 CREATE TABLE IF NOT EXISTS port_gate_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
