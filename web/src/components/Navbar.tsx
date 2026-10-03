@@ -59,8 +59,8 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
   ].some((path) => location.pathname.startsWith(path));
 
   return (
-    <header className="bg-obsidian-900 border-b border-obsidian-700/60 sticky top-0 z-40 backdrop-blur-md bg-opacity-95">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+    <header className="w-full max-w-full bg-obsidian-900 border-b border-obsidian-700/60 sticky top-0 z-40 backdrop-blur-md bg-opacity-95">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between w-full">
         {/* Brand */}
         <Link to="/" className="flex items-center space-x-3 group shrink-0">
           <div className="w-9 h-9 rounded-lg bg-emerald-950 border border-emerald-500/40 flex items-center justify-center text-emerald-400 group-hover:border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.15)] transition-all">
@@ -252,7 +252,7 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
 
       {/* Mobile Drawer */}
       {user && mobileMenuOpen && (
-        <div className="md:hidden border-t border-obsidian-800 bg-obsidian-900 px-4 pt-3 pb-6 space-y-3 font-mono text-sm">
+        <div className="md:hidden border-t border-obsidian-800 bg-obsidian-900 px-4 pt-3 pb-6 space-y-3 font-mono text-sm max-h-[calc(100vh-4rem)] overflow-y-auto">
           {/* User profile info */}
           <div className="flex items-center justify-between pb-3 border-b border-obsidian-800">
             <div>

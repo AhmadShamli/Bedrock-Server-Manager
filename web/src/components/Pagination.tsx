@@ -53,7 +53,7 @@ export const Pagination: React.FC<PaginationProps> = ({
 
   return (
     <div
-      className={`flex flex-col sm:flex-row items-center justify-between gap-4 px-4 py-3 bg-obsidian-950/80 border-t border-obsidian-800 text-xs font-mono text-slate-400 ${className}`}
+      className={`flex flex-col sm:flex-row items-center justify-between gap-4 px-4 py-3 bg-obsidian-950/80 border-t border-obsidian-800 text-xs font-mono text-slate-400 w-full max-w-full ${className}`}
     >
       {/* Left: Info and Page Size Selector */}
       <div className="flex flex-wrap items-center gap-4">
@@ -87,7 +87,7 @@ export const Pagination: React.FC<PaginationProps> = ({
       </div>
 
       {/* Right: Navigation Controls */}
-      <div className="flex items-center space-x-1">
+      <div className="flex items-center space-x-1 max-w-full overflow-x-auto py-1">
         {/* First Page */}
         <button
           onClick={() => handlePageChange(1)}

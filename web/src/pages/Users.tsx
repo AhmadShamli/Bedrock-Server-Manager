@@ -280,8 +280,8 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
           </div>
         ) : (
           <div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left font-mono text-xs">
+            <div className="overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left font-mono text-xs min-w-[700px]">
                 <thead className="bg-obsidian-950/80 text-slate-400 border-b border-obsidian-800 uppercase">
                   <tr>
                     <th className="px-6 py-3.5">User</th>

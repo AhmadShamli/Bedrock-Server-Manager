@@ -138,7 +138,7 @@ export const Tasks: React.FC = () => {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="flex items-center justify-between mb-8 pb-4 border-b border-obsidian-800">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-8 pb-4 border-b border-obsidian-800">
         <div>
           <h1 className="text-2xl font-mono font-bold text-slate-100 flex items-center gap-3">
             <Clock className="w-6 h-6 text-emerald-400" />
@@ -193,8 +193,9 @@ export const Tasks: React.FC = () => {
           </button>
         </div>
       ) : (
-        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl overflow-hidden shadow-xl">
-          <table className="w-full text-left font-mono text-xs">
+        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl overflow-hidden shadow-xl w-full max-w-full">
+          <div className="overflow-x-auto w-full max-w-full">
+            <table className="w-full text-left font-mono text-xs min-w-[700px]">
             <thead className="bg-obsidian-950/80 text-slate-400 border-b border-obsidian-800 uppercase tracking-wider">
               <tr>
                 <th className="px-6 py-4">Status</th>
@@ -277,7 +278,8 @@ export const Tasks: React.FC = () => {
               })}
             </tbody>
           </table>
-          <Pagination
+        </div>
+        <Pagination
             currentPage={currentPage}
             totalItems={totalItems}
             pageSize={pageSize}

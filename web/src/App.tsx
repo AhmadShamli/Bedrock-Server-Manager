@@ -65,10 +65,10 @@ export const App: React.FC = () => {
   const isKnock = location.pathname.startsWith('/knock/');
 
   return (
-    <div className="min-h-screen bg-obsidian-950 flex flex-col font-sans">
+    <div className="min-h-screen bg-obsidian-950 flex flex-col font-sans w-full max-w-full overflow-x-hidden">
       {!isKnock && <Navbar user={user} onLogout={() => setUser(null)} />}
 
-      <main className="flex-1">
+      <main className="flex-1 w-full max-w-full min-w-0">
         <Routes>
           {/* Public Knock Portal */}
           <Route path="/knock/:id" element={<KnockPortal />} />

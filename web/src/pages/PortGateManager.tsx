@@ -317,7 +317,7 @@ export const PortGateManager: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={loadData}
             disabled={loading}
@@ -564,8 +564,8 @@ export const PortGateManager: React.FC = () => {
               No allowed rules match the current filters.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-mono">
+            <div className="overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left text-xs font-mono min-w-[650px]">
                 <thead className="bg-obsidian-800/60 text-slate-400 uppercase tracking-wider text-[11px] border-b border-obsidian-700">
                   <tr>
                     <th className="px-4 py-3">IP / CIDR Subnet</th>
@@ -672,8 +672,8 @@ export const PortGateManager: React.FC = () => {
               No IP addresses are currently banned under this filter.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-mono">
+            <div className="overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left text-xs font-mono min-w-[650px]">
                 <thead className="bg-obsidian-800/60 text-slate-400 uppercase tracking-wider text-[11px] border-b border-obsidian-700">
                   <tr>
                     <th className="px-4 py-3">Banned IP / CIDR</th>
@@ -780,8 +780,8 @@ export const PortGateManager: React.FC = () => {
               No active client leases found.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs font-mono">
+            <div className="overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left text-xs font-mono min-w-[650px]">
                 <thead className="bg-obsidian-800/60 text-slate-400 uppercase tracking-wider text-[11px] border-b border-obsidian-700">
                   <tr>
                     <th className="px-4 py-3">Server Instance</th>
@@ -878,8 +878,8 @@ export const PortGateManager: React.FC = () => {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs font-mono">
+          <div className="overflow-x-auto w-full max-w-full">
+            <table className="w-full text-left text-xs font-mono min-w-[700px]">
               <thead className="bg-obsidian-800/60 text-slate-400 uppercase tracking-wider text-[11px] border-b border-obsidian-700">
                 <tr>
                   <th className="px-4 py-3">Server Instance</th>

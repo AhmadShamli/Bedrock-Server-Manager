@@ -380,9 +380,9 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
             </div>
           ) : viewMode === 'table' ? (
             /* Table / List View */
-            <div className="bg-obsidian-900 border border-obsidian-800 rounded-xl overflow-hidden shadow-xl">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+            <div className="bg-obsidian-900 border border-obsidian-800 rounded-xl overflow-hidden shadow-xl w-full max-w-full">
+              <div className="overflow-x-auto w-full max-w-full">
+                <table className="w-full text-left border-collapse min-w-[700px]">
                   <thead>
                     <tr className="border-b border-obsidian-800 bg-obsidian-950/70 text-[11px] font-mono text-slate-400 uppercase tracking-wider">
                       <th className="py-3 px-4">Status</th>

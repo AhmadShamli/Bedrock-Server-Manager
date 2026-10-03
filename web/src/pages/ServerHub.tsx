@@ -1133,7 +1133,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2">
           {server.port_gate_enabled && (
             <Link
               to={`/knock/${server.id}`}
@@ -1179,7 +1179,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-obsidian-700/80 mb-6 font-mono text-xs overflow-x-auto">
+      <div className="flex border-b border-obsidian-700/80 mb-6 font-mono text-xs overflow-x-auto w-full max-w-full">
         <button
           onClick={() => setActiveTab('overview')}
           className={`pb-3 px-4 border-b-2 font-medium flex items-center space-x-2 whitespace-nowrap transition-colors ${
@@ -1442,7 +1442,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     <p className="text-slate-600 italic">No console logs received yet...</p>
                   ) : (
                     (logs || []).map((line, idx) => (
-                      <div key={idx} className="leading-relaxed hover:bg-obsidian-900/60 px-1 rounded">
+                      <div key={idx} className="leading-relaxed hover:bg-obsidian-900/60 px-1 rounded break-all whitespace-pre-wrap">
                         {line}
                       </div>
                     ))
@@ -1622,8 +1622,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             </button>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left font-mono text-xs">
+          <div className="overflow-x-auto w-full max-w-full">
+            <table className="w-full text-left font-mono text-xs min-w-[650px]">
               <thead className="bg-obsidian-950/80 border-b border-obsidian-800 text-slate-400 uppercase text-[10px] tracking-wider">
                 <tr>
                   <th className="px-4 py-2.5">Gamertag</th>
@@ -1765,38 +1765,40 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 No active firewall grants at this moment. Players must authenticate via the Knock Portal to unlock UDP port access.
               </div>
             ) : (
-              <div className="border border-obsidian-800 rounded-lg overflow-hidden">
-                <table className="w-full text-left font-mono text-xs">
-                  <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
-                    <tr>
-                      <th className="px-4 py-2.5">IP Address</th>
-                      <th className="px-4 py-2.5">Gamertag</th>
-                      <th className="px-4 py-2.5">Knock Method</th>
-                      <th className="px-4 py-2.5">Granted At</th>
-                      <th className="px-4 py-2.5">Expires At</th>
-                      <th className="px-4 py-2.5 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
-                    {paginatedLeases.map((lease) => (
-                      <tr key={lease.id} className="hover:bg-obsidian-800/40">
-                        <td className="px-4 py-2.5 text-emerald-400 font-bold">{lease.ip_address}</td>
-                        <td className="px-4 py-2.5 text-slate-300">{lease.gamertag || '—'}</td>
-                        <td className="px-4 py-2.5 text-slate-400 capitalize">{lease.knock_method}</td>
-                        <td className="px-4 py-2.5 text-slate-400">{new Date(lease.granted_at).toLocaleTimeString()}</td>
-                        <td className="px-4 py-2.5 text-slate-400">{new Date(lease.expires_at).toLocaleTimeString()}</td>
-                        <td className="px-4 py-2.5 text-right">
-                          <button
-                            onClick={() => handleRevokeLease(lease.id)}
-                            className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
-                          >
-                            Revoke
-                          </button>
-                        </td>
+              <div className="border border-obsidian-800 rounded-lg overflow-hidden w-full max-w-full">
+                <div className="overflow-x-auto w-full max-w-full">
+                  <table className="w-full text-left font-mono text-xs min-w-[650px]">
+                    <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
+                      <tr>
+                        <th className="px-4 py-2.5">IP Address</th>
+                        <th className="px-4 py-2.5">Gamertag</th>
+                        <th className="px-4 py-2.5">Knock Method</th>
+                        <th className="px-4 py-2.5">Granted At</th>
+                        <th className="px-4 py-2.5">Expires At</th>
+                        <th className="px-4 py-2.5 text-right">Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
+                      {paginatedLeases.map((lease) => (
+                        <tr key={lease.id} className="hover:bg-obsidian-800/40">
+                          <td className="px-4 py-2.5 text-emerald-400 font-bold">{lease.ip_address}</td>
+                          <td className="px-4 py-2.5 text-slate-300">{lease.gamertag || '—'}</td>
+                          <td className="px-4 py-2.5 text-slate-400 capitalize">{lease.knock_method}</td>
+                          <td className="px-4 py-2.5 text-slate-400">{new Date(lease.granted_at).toLocaleTimeString()}</td>
+                          <td className="px-4 py-2.5 text-slate-400">{new Date(lease.expires_at).toLocaleTimeString()}</td>
+                          <td className="px-4 py-2.5 text-right">
+                            <button
+                              onClick={() => handleRevokeLease(lease.id)}
+                              className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
+                            >
+                              Revoke
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
                 <Pagination
                   currentPage={leasesPage}
                   totalItems={totalLeases}
@@ -1908,52 +1910,54 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 No access passphrases configured for this server. Create a key to let players knock using a shared or personal passphrase.
               </div>
             ) : (
-              <div className="border border-obsidian-800 rounded-lg overflow-hidden">
-                <table className="w-full text-left font-mono text-xs">
-                  <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
-                    <tr>
-                      <th className="px-4 py-2.5">Label</th>
-                      <th className="px-4 py-2.5">Passphrase Prefix</th>
-                      <th className="px-4 py-2.5">Uses / Limit</th>
-                      <th className="px-4 py-2.5">Grant Duration</th>
-                      <th className="px-4 py-2.5">Status</th>
-                      <th className="px-4 py-2.5 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
-                    {paginatedKeys.map((k) => (
-                      <tr key={k.id} className="hover:bg-obsidian-800/40">
-                        <td className="px-4 py-2.5 text-slate-200 font-bold">{k.label}</td>
-                        <td className="px-4 py-2.5 text-emerald-400">
-                          <code>{k.key_prefix}••••••</code>
-                        </td>
-                        <td className="px-4 py-2.5 text-slate-300">
-                          {k.used_count} / {k.max_uses === 0 ? '∞' : k.max_uses}
-                        </td>
-                        <td className="px-4 py-2.5 text-slate-400">
-                          {Math.round(k.lease_duration_seconds / 60)} min
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                              k.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
-                            }`}
-                          >
-                            {k.is_active ? 'Active' : 'Inactive'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-right">
-                          <button
-                            onClick={() => handleDeleteAccessKey(k.id)}
-                            className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
-                          >
-                            Revoke
-                          </button>
-                        </td>
+              <div className="border border-obsidian-800 rounded-lg overflow-hidden w-full max-w-full">
+                <div className="overflow-x-auto w-full max-w-full">
+                  <table className="w-full text-left font-mono text-xs min-w-[650px]">
+                    <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
+                      <tr>
+                        <th className="px-4 py-2.5">Label</th>
+                        <th className="px-4 py-2.5">Passphrase Prefix</th>
+                        <th className="px-4 py-2.5">Uses / Limit</th>
+                        <th className="px-4 py-2.5">Grant Duration</th>
+                        <th className="px-4 py-2.5">Status</th>
+                        <th className="px-4 py-2.5 text-right">Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
+                      {paginatedKeys.map((k) => (
+                        <tr key={k.id} className="hover:bg-obsidian-800/40">
+                          <td className="px-4 py-2.5 text-slate-200 font-bold">{k.label}</td>
+                          <td className="px-4 py-2.5 text-emerald-400">
+                            <code>{k.key_prefix}••••••</code>
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-300">
+                            {k.used_count} / {k.max_uses === 0 ? '∞' : k.max_uses}
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-400">
+                            {Math.round(k.lease_duration_seconds / 60)} min
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                k.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
+                              }`}
+                            >
+                              {k.is_active ? 'Active' : 'Inactive'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <button
+                              onClick={() => handleDeleteAccessKey(k.id)}
+                              className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
+                            >
+                              Revoke
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
                 <Pagination
                   currentPage={keysPage}
                   totalItems={totalKeys}
@@ -2118,57 +2122,59 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 No permanent IP allowlist rules configured. Add trusted client IPs or LAN/VPN subnets (e.g. 192.168.1.0/24) for zero-friction access.
               </div>
             ) : (
-              <div className="border border-obsidian-800 rounded-lg overflow-hidden">
-                <table className="w-full text-left font-mono text-xs">
-                  <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
-                    <tr>
-                      <th className="px-4 py-2.5">IP / CIDR Range</th>
-                      <th className="px-4 py-2.5">Scope</th>
-                      <th className="px-4 py-2.5">Description / Note</th>
-                      <th className="px-4 py-2.5">Added Date</th>
-                      <th className="px-4 py-2.5 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
-                    {paginatedAllowRules.map((rule) => {
-                      const isGlobal = !rule.server_id;
-                      return (
-                        <tr key={rule.id} className="hover:bg-obsidian-800/40">
-                          <td className="px-4 py-2.5 text-emerald-400 font-bold font-mono">
-                            {rule.ip_or_subnet}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {isGlobal ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-400 border border-sky-500/30">
-                                <Globe className="w-3 h-3" />
-                                <span>All Instances (Global)</span>
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                                <Shield className="w-3 h-3" />
-                                <span>This Instance Only</span>
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-2.5 text-slate-300">
-                            {rule.comment || '—'}
-                          </td>
-                          <td className="px-4 py-2.5 text-slate-400">
-                            {new Date(rule.created_at).toLocaleString()}
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            <button
-                              onClick={() => handleDeleteAllowRule(rule.id)}
-                              className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="border border-obsidian-800 rounded-lg overflow-hidden w-full max-w-full">
+                <div className="overflow-x-auto w-full max-w-full">
+                  <table className="w-full text-left font-mono text-xs min-w-[650px]">
+                    <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
+                      <tr>
+                        <th className="px-4 py-2.5">IP / CIDR Range</th>
+                        <th className="px-4 py-2.5">Scope</th>
+                        <th className="px-4 py-2.5">Description / Note</th>
+                        <th className="px-4 py-2.5">Added Date</th>
+                        <th className="px-4 py-2.5 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
+                      {paginatedAllowRules.map((rule) => {
+                        const isGlobal = !rule.server_id;
+                        return (
+                          <tr key={rule.id} className="hover:bg-obsidian-800/40">
+                            <td className="px-4 py-2.5 text-emerald-400 font-bold font-mono">
+                              {rule.ip_or_subnet}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              {isGlobal ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-500/10 text-sky-400 border border-sky-500/30">
+                                  <Globe className="w-3 h-3" />
+                                  <span>All Instances (Global)</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                  <Shield className="w-3 h-3" />
+                                  <span>This Instance Only</span>
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 text-slate-300">
+                              {rule.comment || '—'}
+                            </td>
+                            <td className="px-4 py-2.5 text-slate-400">
+                              {new Date(rule.created_at).toLocaleString()}
+                            </td>
+                            <td className="px-4 py-2.5 text-right">
+                              <button
+                                onClick={() => handleDeleteAllowRule(rule.id)}
+                                className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
                 <Pagination
                   currentPage={allowRulesPage}
                   totalItems={totalAllowRules}
@@ -2344,73 +2350,75 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 No backups recorded yet. Click "Hot Backup Now" to create an instant LevelDB snapshot.
               </div>
             ) : (
-              <div className="border border-obsidian-800 rounded-lg overflow-hidden">
-                <table className="w-full text-left font-mono text-xs">
-                  <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
-                    <tr>
-                      <th className="px-4 py-2.5">Pin</th>
-                      <th className="px-4 py-2.5">Archive File</th>
-                      <th className="px-4 py-2.5">Size</th>
-                      <th className="px-4 py-2.5">Type</th>
-                      <th className="px-4 py-2.5">Timestamp</th>
-                      <th className="px-4 py-2.5 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
-                    {paginatedBackups.map((b) => (
-                      <tr key={b.id} className="hover:bg-obsidian-800/40">
-                        <td className="px-4 py-2.5">
-                          <button
-                            onClick={() => handleToggleBackupLock(b.id)}
-                            title={b.is_locked ? 'Pinned/Locked against retention purge' : 'Click to pin/lock'}
-                            className={`p-1 rounded hover:bg-obsidian-800 transition-colors ${
-                              b.is_locked ? 'text-amber-400' : 'text-slate-600 hover:text-slate-400'
-                            }`}
-                          >
-                            {b.is_locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
-                          </button>
-                        </td>
-                        <td className="px-4 py-2.5 font-bold text-slate-200">{b.filename}</td>
-                        <td className="px-4 py-2.5 text-slate-300">
-                          {(b.size_bytes / (1024 * 1024)).toFixed(2)} MB
-                        </td>
-                        <td className="px-4 py-2.5 capitalize text-slate-400">
-                          <span className="px-2 py-0.5 rounded bg-obsidian-800 border border-obsidian-700">
-                            {b.type}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-slate-400">
-                          {new Date(b.created_at).toLocaleString()}
-                        </td>
-                        <td className="px-4 py-2.5 text-right space-x-2">
-                          <a
-                            href={api.downloadBackupUrl(server.id, b.id)}
-                            download
-                            title="Download Archive"
-                            className="inline-block p-1.5 rounded bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 transition-colors"
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                          </a>
-                          <button
-                            onClick={() => handleRestoreBackup(b.id)}
-                            title="Restore to Server"
-                            className="p-1.5 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500 hover:text-slate-950 transition-colors"
-                          >
-                            <RefreshCw className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteBackup(b.id)}
-                            disabled={b.is_locked}
-                            title={b.is_locked ? 'Locked backup cannot be deleted' : 'Delete Backup'}
-                            className="p-1.5 rounded bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-slate-950 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
+              <div className="border border-obsidian-800 rounded-lg overflow-hidden w-full max-w-full">
+                <div className="overflow-x-auto w-full max-w-full">
+                  <table className="w-full text-left font-mono text-xs min-w-[650px]">
+                    <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
+                      <tr>
+                        <th className="px-4 py-2.5">Pin</th>
+                        <th className="px-4 py-2.5">Archive File</th>
+                        <th className="px-4 py-2.5">Size</th>
+                        <th className="px-4 py-2.5">Type</th>
+                        <th className="px-4 py-2.5">Timestamp</th>
+                        <th className="px-4 py-2.5 text-right">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
+                      {paginatedBackups.map((b) => (
+                        <tr key={b.id} className="hover:bg-obsidian-800/40">
+                          <td className="px-4 py-2.5">
+                            <button
+                              onClick={() => handleToggleBackupLock(b.id)}
+                              title={b.is_locked ? 'Pinned/Locked against retention purge' : 'Click to pin/lock'}
+                              className={`p-1 rounded hover:bg-obsidian-800 transition-colors ${
+                                b.is_locked ? 'text-amber-400' : 'text-slate-600 hover:text-slate-400'
+                              }`}
+                            >
+                              {b.is_locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+                            </button>
+                          </td>
+                          <td className="px-4 py-2.5 font-bold text-slate-200">{b.filename}</td>
+                          <td className="px-4 py-2.5 text-slate-300">
+                            {(b.size_bytes / (1024 * 1024)).toFixed(2)} MB
+                          </td>
+                          <td className="px-4 py-2.5 capitalize text-slate-400">
+                            <span className="px-2 py-0.5 rounded bg-obsidian-800 border border-obsidian-700">
+                              {b.type}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2.5 text-slate-400">
+                            {new Date(b.created_at).toLocaleString()}
+                          </td>
+                          <td className="px-4 py-2.5 text-right space-x-2">
+                            <a
+                              href={api.downloadBackupUrl(server.id, b.id)}
+                              download
+                              title="Download Archive"
+                              className="inline-block p-1.5 rounded bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 transition-colors"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </a>
+                            <button
+                              onClick={() => handleRestoreBackup(b.id)}
+                              title="Restore to Server"
+                              className="p-1.5 rounded bg-amber-500/20 text-amber-400 hover:bg-amber-500 hover:text-slate-950 transition-colors"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteBackup(b.id)}
+                              disabled={b.is_locked}
+                              title={b.is_locked ? 'Locked backup cannot be deleted' : 'Delete Backup'}
+                              className="p-1.5 rounded bg-rose-600/20 text-rose-400 hover:bg-rose-600 hover:text-slate-950 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
                 <Pagination
                   currentPage={backupsPage}
                   totalItems={totalBackups}

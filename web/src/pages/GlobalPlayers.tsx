@@ -266,7 +266,7 @@ export const GlobalPlayers: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={handleSyncAllServers}
             disabled={syncLoading}
@@ -353,9 +353,9 @@ export const GlobalPlayers: React.FC = () => {
             <p className="text-slate-500 text-[11px]">Players banned globally or per instance will be listed here with unban controls.</p>
           </div>
         ) : (
-          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left font-mono text-xs">
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl overflow-hidden w-full max-w-full">
+            <div className="overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left font-mono text-xs min-w-[700px]">
                 <thead className="bg-obsidian-950/80 border-b border-obsidian-800 text-slate-400 uppercase text-[10px] tracking-wider">
                   <tr>
                     <th className="px-6 py-3.5">Gamertag</th>
@@ -439,9 +439,9 @@ export const GlobalPlayers: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left font-mono text-xs">
+          <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl overflow-hidden w-full max-w-full">
+            <div className="overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left font-mono text-xs min-w-[700px]">
                 <thead className="bg-obsidian-950/80 border-b border-obsidian-800 text-slate-400 uppercase text-[10px] tracking-wider">
                   <tr>
                     <th className="px-6 py-3.5">Gamertag</th>

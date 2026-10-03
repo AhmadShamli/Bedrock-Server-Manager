@@ -360,8 +360,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
           </div>
 
           {summary && summary.active_players.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
+            <div className="overflow-x-auto w-full max-w-full">
+              <table className="w-full text-left text-xs min-w-[600px]">
                 <thead>
                   <tr className="border-b border-obsidian-800 text-slate-400 font-mono uppercase tracking-wider">
                     <th className="pb-2.5 font-medium">Gamertag</th>
@@ -616,8 +616,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
         </div>
 
         {summary && summary.servers.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="overflow-x-auto w-full max-w-full">
+            <table className="w-full text-left text-xs min-w-[750px]">
               <thead>
                 <tr className="border-b border-obsidian-800 text-slate-400 font-mono uppercase tracking-wider">
                   <th className="pb-2.5 font-medium">Status</th>
