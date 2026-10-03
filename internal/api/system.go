@@ -104,8 +104,12 @@ func (h *SystemHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	// Redact sensitive settings
 	safeSettings := make(map[string]string)
 	for k, v := range settings {
-		if k == "jwt_secret" || k == "pepper" {
-			safeSettings[k] = "******"
+		if k == "jwt_secret" || k == "pepper" || k == "curseforge_api_key" {
+			if v != "" {
+				safeSettings[k] = "******"
+			} else {
+				safeSettings[k] = ""
+			}
 		} else {
 			safeSettings[k] = v
 		}

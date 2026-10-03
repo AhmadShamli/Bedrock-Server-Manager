@@ -3,6 +3,9 @@ package addon
 import (
 	"archive/zip"
 	"bytes"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -236,5 +239,77 @@ func TestListIgnoresBuiltInPacks(t *testing.T) {
 	}
 	if packs[0].UUID != pack.UUID {
 		t.Fatalf("listed pack UUID %s does not match installed %s", packs[0].UUID, pack.UUID)
+	}
+}
+
+func TestInstallFromURL(t *testing.T) {
+	serverDir := t.TempDir()
+
+	// Create test server serving a valid zip pack
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+	w, _ := zw.Create("manifest.json")
+	_, _ = w.Write([]byte(`{
+		"format_version": 2,
+		"header": {
+			"name": "URL Remote Pack",
+			"description": "Installed from direct link",
+			"uuid": "43214321-4321-4321-4321-432143214321",
+			"version": [1, 5, 0]
+		},
+		"modules": [{"type": "data", "uuid": "87658765-8765-8765-8765-876587658765"}]
+	}`))
+	_ = zw.Close()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/zip")
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer ts.Close()
+
+	pack, err := InstallFromURL(context.Background(), serverDir, ts.URL+"/pack.mcpack")
+	if err != nil {
+		t.Fatalf("InstallFromURL failed: %v", err)
+	}
+	if pack.Name != "URL Remote Pack" {
+		t.Fatalf("unexpected pack name: %s", pack.Name)
+	}
+	if pack.Type != "behavior" {
+		t.Fatalf("unexpected pack type: %s", pack.Type)
+	}
+}
+
+func TestInstallMcaddonNested(t *testing.T) {
+	serverDir := t.TempDir()
+
+	// Create inner behavior pack
+	bpBuf := new(bytes.Buffer)
+	bpZw := zip.NewWriter(bpBuf)
+	bpW, _ := bpZw.Create("manifest.json")
+	_, _ = bpW.Write([]byte(`{
+		"format_version": 2,
+		"header": {
+			"name": "Nested BP",
+			"description": "Nested BP in mcaddon",
+			"uuid": "bbbbbbbb-1111-2222-3333-444444444444",
+			"version": [1, 0, 0]
+		},
+		"modules": [{"type": "data", "uuid": "cccccccc-1111-2222-3333-444444444444"}]
+	}`))
+	_ = bpZw.Close()
+
+	// Outer mcaddon containing the inner .mcpack
+	outerBuf := new(bytes.Buffer)
+	outerZw := zip.NewWriter(outerBuf)
+	innerF, _ := outerZw.Create("addon_bp.mcpack")
+	_, _ = innerF.Write(bpBuf.Bytes())
+	_ = outerZw.Close()
+
+	pack, err := InstallPack(serverDir, bytes.NewReader(outerBuf.Bytes()), int64(outerBuf.Len()))
+	if err != nil {
+		t.Fatalf("InstallPack nested mcaddon failed: %v", err)
+	}
+	if pack.Name != "Nested BP" {
+		t.Fatalf("unexpected pack name: %s", pack.Name)
 	}
 }

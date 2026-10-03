@@ -179,6 +179,33 @@ export interface AddonPack {
   version: string;
 }
 
+export interface MarketplaceItem {
+  id: string;
+  provider: 'curseforge' | 'modrinth';
+  name: string;
+  summary: string;
+  author: string;
+  icon_url: string;
+  downloads: number;
+  version?: string;
+  file_id?: number;
+  file_name?: string;
+  download_url?: string;
+  categories?: string[];
+  page_url?: string;
+}
+
+export interface MarketplaceSearchResult {
+  provider: string;
+  items: MarketplaceItem[];
+  total: number;
+  curseforge_configured: boolean;
+}
+
+export interface MarketplaceConfig {
+  curseforge_configured: boolean;
+}
+
 export interface AuditLog {
   id: number;
   user_id?: number;

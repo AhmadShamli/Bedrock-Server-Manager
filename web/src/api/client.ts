@@ -1,4 +1,4 @@
-import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary } from '../types';
+import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, MarketplaceSearchResult, MarketplaceConfig, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -612,6 +612,55 @@ class APIClient {
   async deleteAddon(serverId: string, type: string, folder: string): Promise<{ success: boolean }> {
     return this.request(`/api/servers/${serverId}/addons/${type}/${folder}`, {
       method: 'DELETE',
+    });
+  }
+
+  async installAddonFromURL(serverId: string, url: string): Promise<AddonPack> {
+    return this.request(`/api/servers/${serverId}/addons/url`, {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+  }
+
+  async searchMarketplace(params: {
+    query?: string;
+    provider?: string;
+    category?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<MarketplaceSearchResult> {
+    const q = new URLSearchParams();
+    if (params.query) q.set('query', params.query);
+    if (params.provider) q.set('provider', params.provider);
+    if (params.category) q.set('category', params.category);
+    if (params.page) q.set('page', params.page.toString());
+    if (params.pageSize) q.set('pageSize', params.pageSize.toString());
+    return this.request(`/api/addons/marketplace/search?${q.toString()}`);
+  }
+
+  async installAddonFromMarketplace(
+    serverId: string,
+    data: {
+      provider: string;
+      item_id: string;
+      file_id?: number;
+      download_url?: string;
+    }
+  ): Promise<AddonPack> {
+    return this.request(`/api/servers/${serverId}/addons/marketplace/install`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getMarketplaceConfig(): Promise<MarketplaceConfig> {
+    return this.request('/api/addons/marketplace/config');
+  }
+
+  async updateMarketplaceConfig(apiKey: string): Promise<{ status: string; curseforge_configured: boolean }> {
+    return this.request('/api/addons/marketplace/config', {
+      method: 'POST',
+      body: JSON.stringify({ curseforge_api_key: apiKey }),
     });
   }
 

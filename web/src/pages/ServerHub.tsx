@@ -6,10 +6,10 @@ import {
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
   ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles,
-  Network, Search, Clock, History
+  Network, Search, Clock, History, Save
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
+import { Server, User, Backup, AddonPack, MarketplaceItem, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
@@ -245,9 +245,25 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [backupsList, setBackupsList] = useState<Backup[]>([]);
   const [backupLoading, setBackupLoading] = useState(false);
 
-  // Addons state
+  // Addons & Marketplace state
   const [addonsList, setAddonsList] = useState<AddonPack[]>([]);
   const [addonLoading, setAddonLoading] = useState(false);
+  const [addonSubTab, setAddonSubTab] = useState<'installed' | 'marketplace'>('installed');
+  const [urlModalOpen, setUrlModalOpen] = useState(false);
+  const [addonUrlInput, setAddonUrlInput] = useState('');
+  const [installingUrl, setInstallingUrl] = useState(false);
+
+  const [marketplaceConfigModalOpen, setMarketplaceConfigModalOpen] = useState(false);
+  const [curseForgeKeyInput, setCurseForgeKeyInput] = useState('');
+  const [savingCfKey, setSavingCfKey] = useState(false);
+  const [curseForgeConfigured, setCurseForgeConfigured] = useState(false);
+
+  const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>([]);
+  const [marketplaceQuery, setMarketplaceQuery] = useState('');
+  const [marketplaceProvider, setMarketplaceProvider] = useState<'all' | 'curseforge' | 'modrinth'>('all');
+  const [marketplaceCategory, setMarketplaceCategory] = useState<'' | 'behavior' | 'resource'>('');
+  const [marketplaceLoading, setMarketplaceLoading] = useState(false);
+  const [installingMarketplaceId, setInstallingMarketplaceId] = useState<string | null>(null);
 
   // Console WebSocket state
   const [logs, setLogs] = useState<string[]>([]);
@@ -528,6 +544,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       api.listBackups(id).then((res) => setBackupsList(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'addons') {
       api.listAddons(id).then((res) => setAddonsList(Array.isArray(res) ? res : [])).catch(() => {});
+      api.getMarketplaceConfig().then((cfg) => setCurseForgeConfigured(!!cfg.curseforge_configured)).catch(() => {});
     } else if (activeTab === 'settings') {
       api.getProperties(id).then((res) => {
         setProperties(res?.properties || {});
@@ -1271,6 +1288,86 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       alert(err.message || 'Failed to delete addon');
     }
   };
+
+  const handleInstallFromURL = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !addonUrlInput.trim()) return;
+    setInstallingUrl(true);
+    try {
+      await api.installAddonFromURL(id, addonUrlInput.trim());
+      const updated = await api.listAddons(id);
+      setAddonsList(updated);
+      setUrlModalOpen(false);
+      setAddonUrlInput('');
+      alert('Addon installed successfully from URL!');
+    } catch (err: any) {
+      alert(err.message || 'Failed to install addon from URL');
+    } finally {
+      setInstallingUrl(false);
+    }
+  };
+
+  const handleSearchMarketplace = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setMarketplaceLoading(true);
+    try {
+      const res = await api.searchMarketplace({
+        query: marketplaceQuery.trim(),
+        provider: marketplaceProvider,
+        category: marketplaceCategory,
+      });
+      setMarketplaceItems(res.items || []);
+      setCurseForgeConfigured(!!res.curseforge_configured);
+    } catch (err: any) {
+      alert(err.message || 'Marketplace search failed');
+    } finally {
+      setMarketplaceLoading(false);
+    }
+  };
+
+  const handleInstallMarketplaceItem = async (item: MarketplaceItem) => {
+    if (!id) return;
+    setInstallingMarketplaceId(item.id);
+    try {
+      await api.installAddonFromMarketplace(id, {
+        provider: item.provider,
+        item_id: item.id,
+        file_id: item.file_id,
+        download_url: item.download_url,
+      });
+      const updated = await api.listAddons(id);
+      setAddonsList(updated);
+      alert(`Successfully installed "${item.name}"!`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to install addon from marketplace');
+    } finally {
+      setInstallingMarketplaceId(null);
+    }
+  };
+
+  const handleSaveCurseForgeKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!curseForgeKeyInput.trim()) return;
+    setSavingCfKey(true);
+    try {
+      const res = await api.updateMarketplaceConfig(curseForgeKeyInput.trim());
+      setCurseForgeConfigured(!!res.curseforge_configured);
+      setMarketplaceConfigModalOpen(false);
+      setCurseForgeKeyInput('');
+      alert('CurseForge API Key updated successfully!');
+      handleSearchMarketplace();
+    } catch (err: any) {
+      alert(err.message || 'Failed to save CurseForge API Key');
+    } finally {
+      setSavingCfKey(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'addons' && addonSubTab === 'marketplace' && marketplaceItems.length === 0 && !marketplaceLoading) {
+      handleSearchMarketplace();
+    }
+  }, [activeTab, addonSubTab]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -2766,14 +2863,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   <span>Bedrock Addons & Resource Packs</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1 font-mono">
-                  Upload .mcpack or .zip archives to install behavior and texture packs into the server.
+                  Install custom behavior and texture packs via direct file upload, remote URL, or online community marketplace.
                 </p>
               </div>
 
-              <div>
-                <label className="cursor-pointer px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Upload Pack File */}
+                <label className="cursor-pointer px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-2 transition-colors">
                   {addonLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  <span>Install .mcpack / .zip</span>
+                  <span>Upload .mcpack / .zip</span>
                   <input
                     type="file"
                     accept=".mcpack,.mcaddon,.zip"
@@ -2782,57 +2880,464 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     className="hidden"
                   />
                 </label>
+
+                {/* Install from URL (Admin only) */}
+                {user.role === 'admin' && (
+                  <button
+                    onClick={() => setUrlModalOpen(true)}
+                    className="px-3.5 py-2 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 border border-obsidian-700 text-slate-200 font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors"
+                  >
+                    <Globe className="w-4 h-4 text-cyan-400" />
+                    <span>Install from URL</span>
+                  </button>
+                )}
+
+                {/* Configure CurseForge Key (Admin only) */}
+                {user.role === 'admin' && (
+                  <button
+                    onClick={() => setMarketplaceConfigModalOpen(true)}
+                    className={`px-3 py-2 rounded-lg border font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors ${
+                      curseForgeConfigured
+                        ? 'bg-obsidian-800/80 hover:bg-obsidian-700 border-obsidian-700 text-slate-300'
+                        : 'bg-amber-950/30 hover:bg-amber-900/40 border-amber-600/40 text-amber-300'
+                    }`}
+                    title="CurseForge API Key Configuration"
+                  >
+                    <Key className={`w-3.5 h-3.5 ${curseForgeConfigured ? 'text-emerald-400' : 'text-amber-400'}`} />
+                    <span>CurseForge Key</span>
+                    {curseForgeConfigured && <Check className="w-3 h-3 text-emerald-400 ml-0.5" />}
+                  </button>
+                )}
               </div>
             </div>
 
-            <h4 className="font-mono text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
-              Installed Packs ({(addonsList || []).length})
-            </h4>
+            {/* Sub-navigation tabs: Installed vs Marketplace */}
+            <div className="flex items-center space-x-2 border-b border-obsidian-800 pb-3 mb-6">
+              <button
+                onClick={() => setAddonSubTab('installed')}
+                className={`px-3.5 py-1.5 rounded-lg font-mono text-xs font-bold flex items-center space-x-2 transition-colors ${
+                  addonSubTab === 'installed'
+                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-obsidian-800/60'
+                }`}
+              >
+                <Package className="w-3.5 h-3.5" />
+                <span>Installed Packs ({(addonsList || []).length})</span>
+              </button>
 
-            {(addonsList || []).length === 0 ? (
-              <div className="text-center py-10 bg-obsidian-950/60 border border-obsidian-800 rounded-lg text-slate-500 font-mono text-xs">
-                No custom addons installed yet. Click "Install .mcpack / .zip" to add behavior or texture packs.
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {(addonsList || []).map((pack) => (
-                  <div
-                    key={`${pack.type}-${pack.folder}`}
-                    className="bg-obsidian-950 border border-obsidian-800 rounded-lg p-4 flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span
-                          className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${
-                            pack.type === 'behavior'
-                              ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
-                              : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
-                          }`}
-                        >
-                          {pack.type === 'behavior' ? 'Behavior Pack' : 'Resource Pack'}
-                        </span>
-                        <span className="text-[11px] font-mono text-slate-400">v{pack.version}</span>
-                      </div>
-                      <h5 className="font-mono font-bold text-sm text-slate-200">{pack.name}</h5>
-                      <p className="font-mono text-xs text-slate-400 mt-1 line-clamp-2">
-                        {pack.description || 'No description provided.'}
-                      </p>
-                    </div>
+              <button
+                onClick={() => {
+                  setAddonSubTab('marketplace');
+                  if (marketplaceItems.length === 0 && !marketplaceLoading) {
+                    handleSearchMarketplace();
+                  }
+                }}
+                className={`px-3.5 py-1.5 rounded-lg font-mono text-xs font-bold flex items-center space-x-2 transition-colors ${
+                  addonSubTab === 'marketplace'
+                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-obsidian-800/60'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Addon Marketplace (CurseForge &amp; Modrinth)</span>
+              </button>
+            </div>
 
-                    <div className="mt-4 pt-3 border-t border-obsidian-800/80 flex items-center justify-between font-mono text-[11px] text-slate-500">
-                      <span>Folder: {pack.folder}</span>
-                      <button
-                        onClick={() => handleDeleteAddon(pack.type, pack.folder)}
-                        className="text-rose-400 hover:text-rose-300 flex items-center space-x-1"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Remove</span>
-                      </button>
+            {/* SUBTAB 1: INSTALLED PACKS */}
+            {addonSubTab === 'installed' && (
+              <div>
+                {(addonsList || []).length === 0 ? (
+                  <div className="text-center py-12 bg-obsidian-950/60 border border-obsidian-800 rounded-lg text-slate-500 font-mono text-xs space-y-3">
+                    <Package className="w-8 h-8 text-slate-600 mx-auto" />
+                    <div>No custom addons installed yet.</div>
+                    <div className="text-[11px] text-slate-600">
+                      Upload a .mcpack, paste a download URL, or browse the Community Marketplace.
                     </div>
                   </div>
-                ))}
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {(addonsList || []).map((pack) => (
+                      <div
+                        key={`${pack.type}-${pack.folder}`}
+                        className="bg-obsidian-950 border border-obsidian-800 rounded-lg p-4 flex flex-col justify-between hover:border-obsidian-700 transition-colors"
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <span
+                              className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${
+                                pack.type === 'behavior'
+                                  ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                                  : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
+                              }`}
+                            >
+                              {pack.type === 'behavior' ? 'Behavior Pack' : 'Resource Pack'}
+                            </span>
+                            <span className="text-[11px] font-mono text-slate-400">v{pack.version}</span>
+                          </div>
+                          <h5 className="font-mono font-bold text-sm text-slate-200">{pack.name}</h5>
+                          <p className="font-mono text-xs text-slate-400 mt-1 line-clamp-2">
+                            {pack.description || 'No description provided.'}
+                          </p>
+                        </div>
+
+                        <div className="mt-4 pt-3 border-t border-obsidian-800/80 flex items-center justify-between font-mono text-[11px] text-slate-500">
+                          <span>Folder: {pack.folder}</span>
+                          <button
+                            onClick={() => handleDeleteAddon(pack.type, pack.folder)}
+                            className="text-rose-400 hover:text-rose-300 flex items-center space-x-1 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Remove</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
+
+            {/* SUBTAB 2: ADDON MARKETPLACE */}
+            {addonSubTab === 'marketplace' && (
+              <div className="space-y-6">
+                {/* Search & Provider Filter Bar */}
+                <form onSubmit={handleSearchMarketplace} className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
+                  {/* Provider selector */}
+                  <div className="flex rounded-lg bg-obsidian-950 border border-obsidian-800 p-0.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => { setMarketplaceProvider('all'); }}
+                      className={`px-3 py-1.5 rounded-md font-mono text-xs font-bold transition-colors ${
+                        marketplaceProvider === 'all'
+                          ? 'bg-obsidian-800 text-slate-100'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      All Providers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setMarketplaceProvider('curseforge'); }}
+                      className={`px-3 py-1.5 rounded-md font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors ${
+                        marketplaceProvider === 'curseforge'
+                          ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />
+                      <span>CurseForge</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setMarketplaceProvider('modrinth'); }}
+                      className={`px-3 py-1.5 rounded-md font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors ${
+                        marketplaceProvider === 'modrinth'
+                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      <span>Modrinth</span>
+                    </button>
+                  </div>
+
+                  {/* Category filter */}
+                  <select
+                    value={marketplaceCategory}
+                    onChange={(e) => setMarketplaceCategory(e.target.value as any)}
+                    className="px-3 py-2 bg-obsidian-950 border border-obsidian-800 rounded-lg text-slate-300 font-mono text-xs focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="">All Categories</option>
+                    <option value="behavior">Behavior / Addons</option>
+                    <option value="resource">Resource / Textures</option>
+                  </select>
+
+                  {/* Search query input */}
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search addons, textures, mods, biomes..."
+                      value={marketplaceQuery}
+                      onChange={(e) => setMarketplaceQuery(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 bg-obsidian-950 border border-obsidian-800 rounded-lg text-slate-200 font-mono text-xs focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={marketplaceLoading}
+                    className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center justify-center space-x-2 shrink-0 transition-colors"
+                  >
+                    {marketplaceLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                    <span>Search</span>
+                  </button>
+                </form>
+
+                {/* CurseForge API Key Warning Banner */}
+                {!curseForgeConfigured && (marketplaceProvider === 'curseforge' || marketplaceProvider === 'all') && (
+                  <div className="p-3.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-amber-300 font-mono text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center space-x-2.5">
+                      <Key className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        CurseForge API Key is not set. Modrinth addons search is active, but CurseForge results require a free API key.
+                      </span>
+                    </div>
+                    {user.role === 'admin' && (
+                      <button
+                        onClick={() => setMarketplaceConfigModalOpen(true)}
+                        className="px-3 py-1 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold shrink-0 text-[11px]"
+                      >
+                        Set API Key
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Marketplace Results */}
+                {marketplaceLoading ? (
+                  <div className="text-center py-16 font-mono text-xs text-slate-400 flex flex-col items-center space-y-3">
+                    <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+                    <span>Searching community marketplaces...</span>
+                  </div>
+                ) : marketplaceItems.length === 0 ? (
+                  <div className="text-center py-12 bg-obsidian-950/60 border border-obsidian-800 rounded-lg text-slate-500 font-mono text-xs">
+                    No addons found matching your search. Try another query or switch providers.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {marketplaceItems.map((item) => {
+                      const isInstalling = installingMarketplaceId === item.id;
+                      return (
+                        <div
+                          key={`${item.provider}-${item.id}`}
+                          className="bg-obsidian-950 border border-obsidian-800 rounded-lg p-4 flex flex-col justify-between hover:border-obsidian-700 transition-colors"
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <span
+                                className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border ${
+                                  item.provider === 'curseforge'
+                                    ? 'bg-orange-500/10 text-orange-400 border-orange-500/30'
+                                    : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                                }`}
+                              >
+                                {item.provider}
+                              </span>
+
+                              <div className="flex items-center space-x-1 text-[11px] font-mono text-slate-400">
+                                <Download className="w-3 h-3 text-slate-500" />
+                                <span>{item.downloads.toLocaleString()}</span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-start space-x-3 mb-2">
+                              {item.icon_url ? (
+                                <img
+                                  src={item.icon_url}
+                                  alt={item.name}
+                                  className="w-10 h-10 rounded-lg object-cover bg-obsidian-900 border border-obsidian-800 shrink-0"
+                                  onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                                />
+                              ) : (
+                                <div className="w-10 h-10 rounded-lg bg-obsidian-900 border border-obsidian-800 flex items-center justify-center shrink-0 text-slate-600">
+                                  <Package className="w-5 h-5" />
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <h5 className="font-mono font-bold text-sm text-slate-100 truncate flex items-center space-x-1.5">
+                                  <span title={item.name}>{item.name}</span>
+                                  {item.page_url && (
+                                    <a
+                                      href={item.page_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-slate-500 hover:text-slate-300"
+                                      title="Open Project Page"
+                                    >
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  )}
+                                </h5>
+                                <p className="text-[11px] font-mono text-slate-400 truncate">
+                                  by {item.author || 'Community Creator'}
+                                </p>
+                              </div>
+                            </div>
+
+                            <p className="font-mono text-xs text-slate-400 mt-2 line-clamp-2">
+                              {item.summary || 'No summary provided.'}
+                            </p>
+
+                            {item.categories && item.categories.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mt-3">
+                                {item.categories.slice(0, 3).map((c, i) => (
+                                  <span key={i} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-obsidian-900 border border-obsidian-800 text-slate-400">
+                                    {c}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="mt-4 pt-3 border-t border-obsidian-800/80 flex items-center justify-between">
+                            <span className="font-mono text-[11px] text-slate-500 truncate max-w-[120px]">
+                              {item.version || (item.file_name ? item.file_name : 'Latest')}
+                            </span>
+
+                            <button
+                              onClick={() => handleInstallMarketplaceItem(item)}
+                              disabled={isInstalling || addonLoading}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors"
+                            >
+                              {isInstalling ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  <span>Installing...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Download className="w-3.5 h-3.5" />
+                                  <span>Install</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* INSTALL ADDON FROM URL MODAL (Admin only) */}
+      {urlModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-lg w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-mono font-bold text-slate-100 flex items-center gap-2">
+                <Globe className="w-4 h-4 text-cyan-400" />
+                <span>Install Addon from URL</span>
+              </h3>
+              <button
+                onClick={() => setUrlModalOpen(false)}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 font-mono mb-4">
+              Enter any direct download link to a <code>.mcpack</code>, <code>.mcaddon</code>, or <code>.zip</code>. The server host will download and extract it directly into the server directory without uploading from your PC.
+            </p>
+
+            <form onSubmit={handleInstallFromURL} className="space-y-4 font-mono text-xs">
+              <div>
+                <label className="block text-slate-200 font-bold mb-1.5">Direct Download URL</label>
+                <input
+                  type="url"
+                  required
+                  placeholder="https://example.com/downloads/my_pack.mcpack"
+                  value={addonUrlInput}
+                  onChange={(e) => setAddonUrlInput(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
+                <button
+                  type="button"
+                  onClick={() => setUrlModalOpen(false)}
+                  className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={installingUrl}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center space-x-1.5"
+                >
+                  {installingUrl ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                  <span>Download &amp; Install</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* CURSEFORGE API KEY CONFIGURATION MODAL (Admin only) */}
+      {marketplaceConfigModalOpen && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-lg w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-mono font-bold text-slate-100 flex items-center gap-2">
+                <Key className="w-4 h-4 text-amber-400" />
+                <span>Configure CurseForge API Key</span>
+              </h3>
+              <button
+                onClick={() => setMarketplaceConfigModalOpen(false)}
+                className="text-slate-400 hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 font-mono mb-4 leading-relaxed">
+              CurseForge uses the Eternal API to search Bedrock Addons and resolve direct CDN downloads. Register a free account at{' '}
+              <a
+                href="https://console.curseforge.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-emerald-400 hover:underline inline-flex items-center"
+              >
+                console.curseforge.com <ExternalLink className="w-3 h-3 ml-0.5 inline" />
+              </a>{' '}
+              to obtain your personal API key.
+            </p>
+
+            <form onSubmit={handleSaveCurseForgeKey} className="space-y-4 font-mono text-xs">
+              <div>
+                <label className="block text-slate-200 font-bold mb-1.5 flex items-center justify-between">
+                  <span>API Key</span>
+                  {curseForgeConfigured && (
+                    <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                      Currently Configured
+                    </span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  required
+                  placeholder="Enter your CurseForge API key"
+                  value={curseForgeKeyInput}
+                  onChange={(e) => setCurseForgeKeyInput(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
+                <button
+                  type="button"
+                  onClick={() => setMarketplaceConfigModalOpen(false)}
+                  className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingCfKey}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center space-x-1.5"
+                >
+                  {savingCfKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  <span>Save Key</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -29,6 +29,8 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
   // System Settings state
   const [heartbeatSec, setHeartbeatSec] = useState(10);
   const [allowRegistration, setAllowRegistration] = useState(false);
+  const [curseforgeApiKey, setCurseforgeApiKey] = useState('');
+  const [curseForgeConfigured, setCurseForgeConfigured] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
@@ -80,6 +82,10 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
 
       if (settingsRes && settingsRes['allow_registration']) {
         setAllowRegistration(settingsRes['allow_registration'] === 'true' || settingsRes['allow_registration'] === '1');
+      }
+
+      if (settingsRes && settingsRes['curseforge_api_key']) {
+        setCurseForgeConfigured(true);
       }
 
       // Default plan selection for modal
@@ -219,10 +225,18 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
     setSavingSettings(true);
     setSettingsSaved(false);
     try {
-      await Promise.all([
+      const updates: Promise<any>[] = [
         api.updateSetting('heartbeat_interval_seconds', heartbeatSec.toString()),
         api.updateSetting('allow_registration', allowRegistration ? 'true' : 'false'),
-      ]);
+      ];
+      if (curseforgeApiKey.trim()) {
+        updates.push(api.updateMarketplaceConfig(curseforgeApiKey.trim()));
+      }
+      await Promise.all(updates);
+      if (curseforgeApiKey.trim()) {
+        setCurseForgeConfigured(true);
+        setCurseforgeApiKey('');
+      }
       setSettingsSaved(true);
       setTimeout(() => setSettingsSaved(false), 3000);
     } catch (err: any) {
@@ -474,6 +488,28 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
               />
               <p className="text-[11px] text-slate-400 mt-1">
                 Interval for client IP renewal during network roaming.
+              </p>
+            </div>
+
+            {/* CurseForge API Key */}
+            <div className="md:col-span-2 border-t border-obsidian-800/80 pt-4">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="font-bold text-slate-200">CurseForge API Key (Eternal API)</span>
+                {curseForgeConfigured && (
+                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                    Configured
+                  </span>
+                )}
+              </div>
+              <input
+                type="password"
+                placeholder={curseForgeConfigured ? '•••••••••••••••• (Leave blank to keep existing key)' : 'Enter CurseForge API Key'}
+                value={curseforgeApiKey}
+                onChange={(e) => setCurseforgeApiKey(e.target.value)}
+                className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Required for in-app CurseForge marketplace search &amp; 1-click install. Register a free API key at console.curseforge.com.
               </p>
             </div>
           </div>

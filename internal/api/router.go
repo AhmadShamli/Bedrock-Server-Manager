@@ -100,6 +100,10 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 			authGroup.Get("/presets/seeds", ListSeeds)
 			authGroup.Get("/updater/check", CheckUpdates)
 
+			// Addon Marketplace
+			authGroup.Get("/addons/marketplace/search", addonHandler.MarketplaceSearch)
+			authGroup.Get("/addons/marketplace/config", addonHandler.GetMarketplaceConfig)
+
 			// Servers (Listing & Creation allowed for both Admin and User roles)
 			authGroup.Get("/servers", serverHandler.List)
 			authGroup.Post("/servers", serverHandler.Create)
@@ -174,6 +178,8 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				// Addon Manager
 				srvGroup.Get("/servers/{id}/addons", addonHandler.List)
 				srvGroup.Post("/servers/{id}/addons", addonHandler.Install)
+				srvGroup.Post("/servers/{id}/addons/url", addonHandler.InstallFromURL)
+				srvGroup.Post("/servers/{id}/addons/marketplace/install", addonHandler.MarketplaceInstall)
 				srvGroup.Delete("/servers/{id}/addons/{type}/{folder}", addonHandler.Delete)
 
 				// Multi-level Player Sync & Promotion
@@ -234,6 +240,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Get("/system/audit", systemHandler.ListAuditLogs)
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)
 				adminGroup.Post("/system/settings", systemHandler.UpdateSetting)
+				adminGroup.Post("/addons/marketplace/config", addonHandler.UpdateMarketplaceConfig)
 
 				// Centralized Port Gate Management (Global & Multi-Server)
 				adminGroup.Get("/portgate/allowlist", knockHandler.ListAllowRules)

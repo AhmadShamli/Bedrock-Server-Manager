@@ -1,6 +1,7 @@
 package api
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/addon"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/configfile"
@@ -23,6 +25,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/preset"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
 )
 
 func setupTestRouter(t *testing.T) (*chiMuxWrapper, *database.ManagerDB, *engine.MockEngine, *firewall.MockFirewallDriver, []byte, string) {
@@ -1446,8 +1449,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.8.2" {
-		t.Errorf("expected version 1.8.2 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != version.Version {
+		t.Errorf("expected version %s in /api/health, got %v", version.Version, healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1461,8 +1464,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.8.2" {
-		t.Errorf("expected version 1.8.2 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != version.Version {
+		t.Errorf("expected version %s in /api/version, got %v", version.Version, verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
@@ -2315,6 +2318,118 @@ func TestAPIServerDeploymentNetworkMode(t *testing.T) {
 	}
 	if updatedSrv.NetworkMode != "bridge" {
 		t.Errorf("expected updated server network_mode to be 'bridge', got '%s'", updatedSrv.NetworkMode)
+	}
+}
+
+func TestAddonURLAndMarketplaceAPIs(t *testing.T) {
+	ctx := context.Background()
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer os.RemoveAll("data_test")
+
+	// 1. Setup admin and normal user
+	adminToken, _ := auth.GenerateJWT(jwtSecret, 1, "admin", models.RoleAdmin, 1*time.Hour)
+	userToken, _ := auth.GenerateJWT(jwtSecret, 2, "normaluser", models.RoleUser, 1*time.Hour)
+
+	// Create test server assigned to admin
+	_ = db.CreateServer(ctx, &models.Server{
+		ID:        "addon-srv-1",
+		Name:      "Addon Server",
+		Port:      19132,
+		Status:    "offline",
+		Version:   "1.21.0.0",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	})
+	_ = db.GrantServerAccess(ctx, 2, "addon-srv-1")
+	_ = os.MkdirAll(filepath.Join("data_test", "servers", "addon-srv-1"), 0755)
+
+	// 2. Normal user attempts to update marketplace config -> 403
+	req := httptest.NewRequest("POST", "/api/addons/marketplace/config", strings.NewReader(`{"curseforge_api_key":"cf-secret-123"}`))
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for normal user updating marketplace config, got %d", w.Code)
+	}
+
+	// 3. Admin updates marketplace config -> 200
+	req = httptest.NewRequest("POST", "/api/addons/marketplace/config", strings.NewReader(`{"curseforge_api_key":"cf-secret-123"}`))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for admin updating marketplace config, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 4. Check marketplace config endpoint -> curseforge_configured: true
+	req = httptest.NewRequest("GET", "/api/addons/marketplace/config", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from GET /addons/marketplace/config, got %d", w.Code)
+	}
+	var cfgRes map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &cfgRes)
+	if cfgRes["curseforge_configured"] != true {
+		t.Fatalf("expected curseforge_configured = true, got %+v", cfgRes)
+	}
+
+	// 5. Test install from URL (Normal user attempt -> 403)
+	req = httptest.NewRequest("POST", "/api/servers/addon-srv-1/addons/url", strings.NewReader(`{"url":"https://example.com/pack.mcpack"}`))
+	req.Header.Set("Authorization", "Bearer "+userToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for non-admin install from URL, got %d", w.Code)
+	}
+
+	// 6. Test install from URL (Admin attempt with mock pack server)
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+	fw, _ := zw.Create("manifest.json")
+	_, _ = fw.Write([]byte(`{
+		"format_version": 2,
+		"header": {
+			"name": "Admin URL Pack",
+			"description": "Installed via API URL endpoint",
+			"uuid": "abcdef01-2345-6789-abcd-ef0123456789",
+			"version": [1, 0, 0]
+		},
+		"modules": [{"type": "data", "uuid": "feeeeeee-2345-6789-abcd-ef0123456789"}]
+	}`))
+	_ = zw.Close()
+
+	mockFileServer := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/zip")
+		_, _ = rw.Write(buf.Bytes())
+	}))
+	defer mockFileServer.Close()
+
+	req = httptest.NewRequest("POST", "/api/servers/addon-srv-1/addons/url", strings.NewReader(fmt.Sprintf(`{"url":"%s/pack.mcpack"}`, mockFileServer.URL)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for admin install from URL, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 7. Verify pack is listed
+	req = httptest.NewRequest("GET", "/api/servers/addon-srv-1/addons", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from GET /addons, got %d", w.Code)
+	}
+	var packs []addon.InstalledPack
+	_ = json.Unmarshal(w.Body.Bytes(), &packs)
+	if len(packs) != 1 || packs[0].Name != "Admin URL Pack" {
+		t.Fatalf("unexpected packs after URL install: %+v", packs)
 	}
 }
 

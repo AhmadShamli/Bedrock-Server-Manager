@@ -2,12 +2,17 @@ package addon
 
 import (
 	"archive/zip"
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // bsmInstalledMarker is a hidden file placed inside packs installed through BSM.
@@ -124,7 +129,29 @@ func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, e
 	}
 
 	if len(manifestData) == 0 {
-		return nil, fmt.Errorf("archive does not contain a valid manifest.json")
+		var firstInstalled *InstalledPack
+		for _, f := range zipReader.File {
+			lowerName := strings.ToLower(f.Name)
+			if strings.HasSuffix(lowerName, ".mcpack") || strings.HasSuffix(lowerName, ".zip") {
+				rc, err := f.Open()
+				if err != nil {
+					continue
+				}
+				packBytes, err := io.ReadAll(rc)
+				rc.Close()
+				if err != nil || len(packBytes) == 0 {
+					continue
+				}
+				p, err := InstallPack(serverDir, bytes.NewReader(packBytes), int64(len(packBytes)))
+				if err == nil && firstInstalled == nil {
+					firstInstalled = p
+				}
+			}
+		}
+		if firstInstalled != nil {
+			return firstInstalled, nil
+		}
+		return nil, fmt.Errorf("archive does not contain a valid manifest.json or .mcpack files")
 	}
 
 	var mf PackManifest
@@ -246,4 +273,50 @@ func DeletePack(serverDir, packType, folder string) error {
 	}
 
 	return os.RemoveAll(targetDir)
+}
+
+// InstallFromURL downloads a pack archive from a direct URL and installs it.
+func InstallFromURL(ctx context.Context, serverDir, downloadURL string) (*InstalledPack, error) {
+	parsed, err := url.Parse(downloadURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return nil, fmt.Errorf("invalid URL: must be http or https")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", downloadURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Bedrock-Server-Manager/1.0")
+
+	client := &http.Client{
+		Timeout: 60 * time.Second,
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("server responded with status %d", resp.StatusCode)
+	}
+
+	tempFile, err := os.CreateTemp("", "pack_url_*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	// Max 100MB limit
+	size, err := io.Copy(tempFile, io.LimitReader(resp.Body, 100<<20))
+	if err != nil {
+		return nil, fmt.Errorf("failed to read download: %w", err)
+	}
+	if size == 0 {
+		return nil, fmt.Errorf("downloaded file is empty")
+	}
+
+	return InstallPack(serverDir, tempFile, size)
 }
