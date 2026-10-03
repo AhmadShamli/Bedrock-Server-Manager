@@ -181,7 +181,7 @@ export interface AddonPack {
 
 export interface MarketplaceItem {
   id: string;
-  provider: 'curseforge' | 'modrinth';
+  provider: 'curseforge';
   name: string;
   summary: string;
   author: string;

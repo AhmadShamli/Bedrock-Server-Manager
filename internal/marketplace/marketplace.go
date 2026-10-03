@@ -17,7 +17,6 @@ import (
 
 const (
 	CurseForgeBaseURL = "https://api.curseforge.com/v1"
-	ModrinthBaseURL   = "https://api.modrinth.com/v2"
 
 	// MinecraftBedrockGameID is CurseForge's official game ID for Minecraft Bedrock Edition.
 	// Minecraft Java Edition is 432.
@@ -28,7 +27,6 @@ const (
 
 var (
 	curseForgeBaseURL = CurseForgeBaseURL
-	modrinthBaseURL   = ModrinthBaseURL
 )
 
 // SafeHTTPClient returns an http.Client with a timeout and IP safety checks.
@@ -73,10 +71,10 @@ func SafeHTTPClient(timeout time.Duration, allowPrivateIPs bool) *http.Client {
 	}
 }
 
-// MarketplaceItem represents a unified pack/addon listing from CurseForge or Modrinth.
+// MarketplaceItem represents a community addon listing (CurseForge).
 type MarketplaceItem struct {
 	ID          string   `json:"id"`
-	Provider    string   `json:"provider"` // "curseforge" | "modrinth"
+	Provider    string   `json:"provider"` // "curseforge"
 	Name        string   `json:"name"`
 	Summary     string   `json:"summary"`
 	Author      string   `json:"author"`
@@ -385,170 +383,4 @@ func GetCurseForgeDownloadURL(ctx context.Context, client *http.Client, apiKey s
 	return res.Data, nil
 }
 
-// --- Modrinth API Types ---
 
-type mrSearchResponse struct {
-	Hits      []mrHit `json:"hits"`
-	TotalHits int     `json:"total_hits"`
-}
-
-type mrHit struct {
-	ProjectID   string   `json:"project_id"`
-	ProjectType string   `json:"project_type"`
-	Slug        string   `json:"slug"`
-	Author      string   `json:"author"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Categories  []string `json:"categories"`
-	IconURL     string   `json:"icon_url"`
-	Downloads   int64    `json:"downloads"`
-}
-
-type mrVersion struct {
-	ID            string       `json:"id"`
-	ProjectID     string       `json:"project_id"`
-	Name          string       `json:"name"`
-	VersionNumber string       `json:"version_number"`
-	Files         []mrFile     `json:"files"`
-}
-
-type mrFile struct {
-	URL      string `json:"url"`
-	Filename string `json:"filename"`
-	Primary  bool   `json:"primary"`
-	Size     int64  `json:"size"`
-}
-
-// SearchModrinth queries the Modrinth API for Bedrock addons and resource packs.
-func SearchModrinth(ctx context.Context, client *http.Client, query, category string, page, pageSize int) (*SearchResult, error) {
-	if client == nil {
-		client = SafeHTTPClient(15*time.Second, false)
-	}
-	if pageSize <= 0 || pageSize > 50 {
-		pageSize = 20
-	}
-	if page < 1 {
-		page = 1
-	}
-	offset := (page - 1) * pageSize
-
-	endpoint := fmt.Sprintf("%s/search", modrinthBaseURL)
-	u, err := url.Parse(endpoint)
-	if err != nil {
-		return nil, err
-	}
-
-	q := u.Query()
-	q.Set("limit", strconv.Itoa(pageSize))
-	q.Set("offset", strconv.Itoa(offset))
-	q.Set("index", "downloads")
-
-	// Set query or default search
-	if query != "" {
-		q.Set("query", query)
-	} else {
-		q.Set("query", "bedrock")
-	}
-
-	if category == "resource" {
-		q.Set("facets", `[["project_type:resourcepack"]]`)
-	} else if category == "behavior" || category == "addon" {
-		q.Set("facets", `[["project_type:mod"]]`)
-	}
-
-	u.RawQuery = q.Encode()
-
-	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Bedrock-Server-Manager/1.0 (https://github.com/AhmadShamli/Bedrock-Server-Manager)")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("modrinth request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return nil, fmt.Errorf("modrinth api error (status %d): %s", resp.StatusCode, string(body))
-	}
-
-	var mrResp mrSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mrResp); err != nil {
-		return nil, fmt.Errorf("failed to parse modrinth response: %w", err)
-	}
-
-	items := make([]MarketplaceItem, 0, len(mrResp.Hits))
-	for _, hit := range mrResp.Hits {
-		cats := append([]string{"Java Edition"}, hit.Categories...)
-		items = append(items, MarketplaceItem{
-			ID:         hit.ProjectID,
-			Provider:   "modrinth",
-			Name:       hit.Title,
-			Summary:    hit.Description,
-			Author:     hit.Author,
-			IconURL:    hit.IconURL,
-			Downloads:  hit.Downloads,
-			Categories: cats,
-			PageURL:    fmt.Sprintf("https://modrinth.com/%s/%s", hit.ProjectType, hit.Slug),
-		})
-	}
-
-	return &SearchResult{
-		Provider: "modrinth",
-		Items:    items,
-		Total:    mrResp.TotalHits,
-	}, nil
-}
-
-// GetModrinthDownloadURL fetches the primary file download URL for a project's latest version.
-func GetModrinthDownloadURL(ctx context.Context, client *http.Client, projectID string) (downloadURL string, fileName string, version string, err error) {
-	if client == nil {
-		client = SafeHTTPClient(15*time.Second, false)
-	}
-
-	endpoint := fmt.Sprintf("%s/project/%s/version", modrinthBaseURL, url.PathEscape(projectID))
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return "", "", "", err
-	}
-	req.Header.Set("User-Agent", "Bedrock-Server-Manager/1.0 (https://github.com/AhmadShamli/Bedrock-Server-Manager)")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", "", "", fmt.Errorf("modrinth versions error (status %d)", resp.StatusCode)
-	}
-
-	var versions []mrVersion
-	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil {
-		return "", "", "", err
-	}
-
-	if len(versions) == 0 {
-		return "", "", "", errors.New("no releases found for this project")
-	}
-
-	latest := versions[0]
-	if len(latest.Files) == 0 {
-		return "", "", "", errors.New("no downloadable files in latest release")
-	}
-
-	selectedFile := latest.Files[0]
-	for _, f := range latest.Files {
-		if f.Primary {
-			selectedFile = f
-			break
-		}
-	}
-
-	return selectedFile.URL, selectedFile.Filename, latest.VersionNumber, nil
-}

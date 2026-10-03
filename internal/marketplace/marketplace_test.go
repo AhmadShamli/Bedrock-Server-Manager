@@ -92,37 +92,3 @@ func TestSearchCurseForge(t *testing.T) {
 		t.Fatalf("expected item name Super Backpacks, got %s", res.Items[0].Name)
 	}
 }
-
-func TestSearchModrinth(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"hits": [
-				{
-					"project_id": "proj123",
-					"project_type": "mod",
-					"slug": "custom-biomes",
-					"author": "AlexDev",
-					"title": "Custom Biomes",
-					"description": "More biomes for Bedrock",
-					"categories": ["bedrock", "worldgen"],
-					"icon_url": "https://img.example.com/biomes.png",
-					"downloads": 5432
-				}
-			],
-			"total_hits": 1
-		}`))
-	}))
-	defer server.Close()
-
-	// Verify hits response structure
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", server.URL+"/search?query=biomes", nil)
-	resp, err := server.Client().Do(req)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
-	}
-}

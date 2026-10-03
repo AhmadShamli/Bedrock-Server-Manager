@@ -144,12 +144,8 @@ func (h *AddonHandler) InstallFromURL(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(pack)
 }
 
-// MarketplaceSearch searches CurseForge and/or Modrinth for Bedrock addons.
+// MarketplaceSearch searches CurseForge for Bedrock addons.
 func (h *AddonHandler) MarketplaceSearch(w http.ResponseWriter, r *http.Request) {
-	provider := strings.ToLower(r.URL.Query().Get("provider"))
-	if provider == "" {
-		provider = "all"
-	}
 	query := strings.TrimSpace(r.URL.Query().Get("query"))
 	category := strings.ToLower(r.URL.Query().Get("category"))
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -167,39 +163,24 @@ func (h *AddonHandler) MarketplaceSearch(w http.ResponseWriter, r *http.Request)
 	var allItems []marketplace.MarketplaceItem
 	var totalCount int
 
-	// Search Modrinth
-	if provider == "modrinth" || provider == "all" {
-		mrResult, err := marketplace.SearchModrinth(r.Context(), nil, query, category, page, pageSize)
-		if err == nil && mrResult != nil {
-			allItems = append(allItems, mrResult.Items...)
-			totalCount += mrResult.Total
-		}
-	}
-
-	// Search CurseForge
-	if provider == "curseforge" || provider == "all" {
-		if cfConfigured {
-			cfResult, err := marketplace.SearchCurseForge(r.Context(), nil, cfKey, query, category, page, pageSize)
-			if err == nil && cfResult != nil {
-				allItems = append(allItems, cfResult.Items...)
-				totalCount += cfResult.Total
-			}
-		} else if provider == "curseforge" {
-			http.Error(w, `{"error": "CurseForge API key is not configured. Please configure it in System Settings or Marketplace."}`, http.StatusBadRequest)
-			return
+	if cfConfigured {
+		cfResult, err := marketplace.SearchCurseForge(r.Context(), nil, cfKey, query, category, page, pageSize)
+		if err == nil && cfResult != nil {
+			allItems = cfResult.Items
+			totalCount = cfResult.Total
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"provider":              provider,
+		"provider":              "curseforge",
 		"items":                 allItems,
 		"total":                 totalCount,
 		"curseforge_configured": cfConfigured,
 	})
 }
 
-// MarketplaceInstall downloads and installs a pack selected from CurseForge or Modrinth.
+// MarketplaceInstall downloads and installs a pack selected from CurseForge.
 func (h *AddonHandler) MarketplaceInstall(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	serverDir := filepath.Join(h.dataDir, "servers", serverID)
@@ -216,37 +197,30 @@ func (h *AddonHandler) MarketplaceInstall(w http.ResponseWriter, r *http.Request
 	}
 
 	provider := strings.ToLower(payload.Provider)
+	if provider != "" && provider != "curseforge" {
+		http.Error(w, `{"error": "Unsupported marketplace provider: must be curseforge"}`, http.StatusBadRequest)
+		return
+	}
+
 	downloadURL := payload.DownloadURL
 
 	if downloadURL == "" {
-		if provider == "curseforge" {
-			cfKey, _ := h.db.GetSetting(r.Context(), "curseforge_api_key")
-			if cfKey == "" {
-				http.Error(w, `{"error": "CurseForge API key is not configured"}`, http.StatusBadRequest)
-				return
-			}
-			modID, err := strconv.ParseInt(payload.ItemID, 10, 64)
-			if err != nil {
-				http.Error(w, `{"error": "Invalid CurseForge mod ID"}`, http.StatusBadRequest)
-				return
-			}
-			resolvedURL, err := marketplace.GetCurseForgeDownloadURL(r.Context(), nil, cfKey, modID, payload.FileID)
-			if err != nil {
-				http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
-				return
-			}
-			downloadURL = resolvedURL
-		} else if provider == "modrinth" {
-			resolvedURL, _, _, err := marketplace.GetModrinthDownloadURL(r.Context(), nil, payload.ItemID)
-			if err != nil {
-				http.Error(w, fmt.Sprintf(`{"error": "Modrinth download resolution failed: %s"}`, err.Error()), http.StatusBadRequest)
-				return
-			}
-			downloadURL = resolvedURL
-		} else {
-			http.Error(w, `{"error": "Unknown marketplace provider: must be curseforge or modrinth"}`, http.StatusBadRequest)
+		cfKey, _ := h.db.GetSetting(r.Context(), "curseforge_api_key")
+		if cfKey == "" {
+			http.Error(w, `{"error": "CurseForge API key is not configured"}`, http.StatusBadRequest)
 			return
 		}
+		modID, err := strconv.ParseInt(payload.ItemID, 10, 64)
+		if err != nil {
+			http.Error(w, `{"error": "Invalid CurseForge mod ID"}`, http.StatusBadRequest)
+			return
+		}
+		resolvedURL, err := marketplace.GetCurseForgeDownloadURL(r.Context(), nil, cfKey, modID, payload.FileID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		downloadURL = resolvedURL
 	}
 
 	pack, err := addon.InstallFromURL(r.Context(), serverDir, downloadURL)

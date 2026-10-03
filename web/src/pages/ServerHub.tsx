@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Play, Square, RefreshCw, Shield, Terminal, Settings, ExternalLink,
-  HardDrive, Cpu, AlertTriangle, AlertCircle, Loader2, Send, Users, MessageSquare, Copy,
+  HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
   ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles,
@@ -260,7 +260,6 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>([]);
   const [marketplaceQuery, setMarketplaceQuery] = useState('');
-  const [marketplaceProvider, setMarketplaceProvider] = useState<'all' | 'curseforge' | 'modrinth'>('curseforge');
   const [marketplaceCategory, setMarketplaceCategory] = useState<'' | 'behavior' | 'resource'>('');
   const [marketplaceLoading, setMarketplaceLoading] = useState(false);
   const [installingMarketplaceId, setInstallingMarketplaceId] = useState<string | null>(null);
@@ -598,7 +597,6 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setMarketplaceLoading(true);
       api.searchMarketplace({
         query: marketplaceQuery.trim(),
-        provider: marketplaceProvider,
         category: marketplaceCategory,
       })
         .then((res) => {
@@ -1328,16 +1326,14 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const handleSearchMarketplace = async (
     e?: React.FormEvent,
-    override?: { provider?: 'all' | 'curseforge' | 'modrinth'; category?: '' | 'behavior' | 'resource' }
+    override?: { category?: '' | 'behavior' | 'resource' }
   ) => {
     if (e) e.preventDefault();
-    const providerToUse = override?.provider !== undefined ? override.provider : marketplaceProvider;
     const categoryToUse = override?.category !== undefined ? override.category : marketplaceCategory;
     setMarketplaceLoading(true);
     try {
       const res = await api.searchMarketplace({
         query: marketplaceQuery.trim(),
-        provider: providerToUse,
         category: categoryToUse,
       });
       setMarketplaceItems(res.items || []);
@@ -1351,12 +1347,6 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const handleInstallMarketplaceItem = async (item: MarketplaceItem) => {
     if (!id) return;
-    if (item.provider === 'modrinth') {
-      const proceed = confirm(
-        `"${item.name}" is hosted on Modrinth for Minecraft Java Edition. Bedrock Dedicated Server requires native Bedrock addons (.mcpack/.mcaddon) and will reject Java jar files. Do you still want to attempt download?`
-      );
-      if (!proceed) return;
-    }
     setInstallingMarketplaceId(item.id);
     try {
       await api.installAddonFromMarketplace(id, {
@@ -2963,7 +2953,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 }`}
               >
                 <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Addon Marketplace (CurseForge &amp; Modrinth)</span>
+                <span>Addon Marketplace (CurseForge)</span>
               </button>
             </div>
 
@@ -3024,56 +3014,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             {/* SUBTAB 2: ADDON MARKETPLACE */}
             {addonSubTab === 'marketplace' && (
               <div className="space-y-6">
-                {/* Search & Provider Filter Bar */}
+                {/* Search & Category Filter Bar */}
                 <form onSubmit={handleSearchMarketplace} className="flex flex-col md:flex-row items-stretch md:items-center gap-3">
-                  {/* Provider selector */}
-                  <div className="flex rounded-lg bg-obsidian-950 border border-obsidian-800 p-0.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMarketplaceProvider('curseforge');
-                        handleSearchMarketplace(undefined, { provider: 'curseforge' });
-                      }}
-                      className={`px-3 py-1.5 rounded-md font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors ${
-                        marketplaceProvider === 'curseforge'
-                          ? 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-orange-400" />
-                      <span>CurseForge (Bedrock)</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMarketplaceProvider('modrinth');
-                        handleSearchMarketplace(undefined, { provider: 'modrinth' });
-                      }}
-                      className={`px-3 py-1.5 rounded-md font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors ${
-                        marketplaceProvider === 'modrinth'
-                          ? 'bg-sky-500/20 text-sky-400 border border-sky-500/30'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
-                      <span>Modrinth (Java)</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMarketplaceProvider('all');
-                        handleSearchMarketplace(undefined, { provider: 'all' });
-                      }}
-                      className={`px-3 py-1.5 rounded-md font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors ${
-                        marketplaceProvider === 'all'
-                          ? 'bg-obsidian-800 text-slate-100'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      <span>All</span>
-                    </button>
-                  </div>
-
                   {/* Category filter */}
                   <select
                     value={marketplaceCategory}
@@ -3082,7 +3024,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                       setMarketplaceCategory(cat);
                       handleSearchMarketplace(undefined, { category: cat });
                     }}
-                    className="px-3 py-2 bg-obsidian-950 border border-obsidian-800 rounded-lg text-slate-300 font-mono text-xs focus:outline-none focus:border-emerald-500"
+                    className="px-3 py-2 bg-obsidian-950 border border-obsidian-800 rounded-lg text-slate-300 font-mono text-xs focus:outline-none focus:border-emerald-500 shrink-0"
                   >
                     <option value="">All Categories</option>
                     <option value="behavior">Behavior / Addons</option>
@@ -3094,7 +3036,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
-                      placeholder="Search addons, textures, mods, biomes..."
+                      placeholder="Search Bedrock addons, textures, mods, biomes..."
                       value={marketplaceQuery}
                       onChange={(e) => setMarketplaceQuery(e.target.value)}
                       className="w-full pl-9 pr-4 py-2 bg-obsidian-950 border border-obsidian-800 rounded-lg text-slate-200 font-mono text-xs focus:outline-none focus:border-emerald-500"
@@ -3111,18 +3053,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   </button>
                 </form>
 
-                {/* Modrinth Java Edition Platform Notice */}
-                {marketplaceProvider === 'modrinth' && (
-                  <div className="p-3.5 rounded-lg bg-sky-950/40 border border-sky-500/30 text-sky-300 font-mono text-xs flex items-center space-x-2.5">
-                    <AlertCircle className="w-4 h-4 text-sky-400 shrink-0" />
-                    <span>
-                      <strong>Platform Notice:</strong> Modrinth is dedicated to <strong>Minecraft Java Edition</strong> mods (Fabric, Forge, Quilt). Bedrock Dedicated Servers require native Bedrock addons (<code>.mcpack</code> / <code>.mcaddon</code>), which are hosted on <strong>CurseForge</strong>.
-                    </span>
-                  </div>
-                )}
-
                 {/* CurseForge API Key Warning Banner */}
-                {!curseForgeConfigured && (marketplaceProvider === 'curseforge' || marketplaceProvider === 'all') && (
+                {!curseForgeConfigured && (
                   <div className="p-3.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-amber-300 font-mono text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center space-x-2.5">
                       <Key className="w-4 h-4 text-amber-400 shrink-0" />
@@ -3145,11 +3077,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 {marketplaceLoading ? (
                   <div className="text-center py-16 font-mono text-xs text-slate-400 flex flex-col items-center space-y-3">
                     <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
-                    <span>Searching community marketplaces...</span>
+                    <span>Searching community marketplace...</span>
                   </div>
                 ) : marketplaceItems.length === 0 ? (
                   <div className="text-center py-12 bg-obsidian-950/60 border border-obsidian-800 rounded-lg text-slate-500 font-mono text-xs">
-                    No addons found matching your search. Try another query or switch providers.
+                    No addons found matching your search. Try another query or category.
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -3163,24 +3095,12 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                           <div>
                             <div className="flex items-center justify-between mb-3">
                               <div className="flex items-center space-x-1.5">
-                                <span
-                                  className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border ${
-                                    item.provider === 'curseforge'
-                                      ? 'bg-orange-500/10 text-orange-400 border-orange-500/30'
-                                      : 'bg-sky-500/10 text-sky-400 border-sky-500/30'
-                                  }`}
-                                >
-                                  {item.provider}
+                                <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-orange-500/10 text-orange-400 border-orange-500/30">
+                                  CurseForge
                                 </span>
-                                {item.provider === 'curseforge' ? (
-                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
-                                    Bedrock
-                                  </span>
-                                ) : (
-                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-sky-500/10 text-sky-400 border-sky-500/30">
-                                    Java Edition
-                                  </span>
-                                )}
+                                <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                                  Bedrock
+                                </span>
                               </div>
 
                               <div className="flex items-center space-x-1 text-[11px] font-mono text-slate-400">
