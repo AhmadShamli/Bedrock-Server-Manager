@@ -87,7 +87,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
   const [seed, setSeed] = useState('');
   const [selectedSeedPreset, setSelectedSeedPreset] = useState<SeedPreset | null>(null);
   const [gameServerAddress, setGameServerAddress] = useState('');
-  const [networkMode, setNetworkMode] = useState<string>('bridge');
+  const [networkMode, setNetworkMode] = useState<string>('host');
   const [availableNetworks, setAvailableNetworks] = useState<string[]>(['bridge', 'host']);
 
   // Auxiliary state
@@ -196,7 +196,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
         port_gate_enabled: portGate,
         port_gate_mode: portGateMode,
         port_gate_timeout: 7200,
-        network_mode: isAdmin ? networkMode : 'bridge',
+        network_mode: isAdmin ? networkMode : 'host',
       });
 
       onSuccess();
@@ -717,8 +717,8 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                             onChange={(e) => setNetworkMode(e.target.value)}
                             className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-xs focus:border-emerald-500"
                           >
-                            <option value="bridge">bridge (Default - Virtual Bridge & Port Mapping)</option>
-                            <option value="host">host (Direct Host Network - Direct UDP Port Binding)</option>
+                            <option value="host">host (Default - Direct Host Network & Direct UDP Port Binding)</option>
+                            <option value="bridge">bridge (Virtual Bridge & Port Mapping)</option>
                             {availableNetworks
                               .filter((n) => n !== 'bridge' && n !== 'host')
                               .map((net) => (
@@ -1214,8 +1214,8 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                       onChange={(e) => setNetworkMode(e.target.value)}
                       className="w-full px-2.5 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 font-mono text-xs focus:border-emerald-500"
                     >
-                      <option value="bridge">bridge (Default - Virtual Bridge & Port Mapping)</option>
-                      <option value="host">host (Direct Host Network - Direct UDP Port Binding)</option>
+                      <option value="host">host (Default - Direct Host Network & Direct UDP Port Binding)</option>
+                      <option value="bridge">bridge (Virtual Bridge & Port Mapping)</option>
                       {availableNetworks
                         .filter((n) => n !== 'bridge' && n !== 'host')
                         .map((net) => (

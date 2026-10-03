@@ -93,7 +93,7 @@ type Server struct {
 	ContainerID     string    `json:"container_id"`
 	Seed              string    `json:"seed"`
 	GameServerAddress string    `json:"game_server_address"`
-	NetworkMode       string    `json:"network_mode"` // "bridge" (default), "host", or custom network
+	NetworkMode       string    `json:"network_mode"` // "host" (default), "bridge", or custom network
 	OwnerUserID     *int64    `json:"owner_user_id,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`

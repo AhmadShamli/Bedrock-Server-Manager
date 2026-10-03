@@ -91,7 +91,7 @@ func (db *ManagerDB) Migrate(ctx context.Context) error {
 	}
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN seed TEXT NOT NULL DEFAULT ''")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN game_server_address TEXT NOT NULL DEFAULT ''")
-	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN network_mode TEXT NOT NULL DEFAULT 'bridge'")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN network_mode TEXT NOT NULL DEFAULT 'host'")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_id INTEGER REFERENCES plans(id) ON DELETE SET NULL")
@@ -445,7 +445,7 @@ func (db *ManagerDB) CreateServer(ctx context.Context, s *models.Server) error {
 	}
 
 	if s.NetworkMode == "" {
-		s.NetworkMode = "bridge"
+		s.NetworkMode = "host"
 	}
 
 	_, err := db.ExecContext(ctx, `
@@ -481,7 +481,7 @@ func (db *ManagerDB) GetServer(ctx context.Context, id string) (*models.Server, 
 		return nil, err
 	}
 	if s.NetworkMode == "" {
-		s.NetworkMode = "bridge"
+		s.NetworkMode = "host"
 	}
 	s.AutostartOnBoot = autostartInt == 1
 	s.PortGateEnabled = portGateInt == 1
@@ -523,7 +523,7 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 			return nil, err
 		}
 		if s.NetworkMode == "" {
-			s.NetworkMode = "bridge"
+			s.NetworkMode = "host"
 		}
 		s.AutostartOnBoot = autostartInt == 1
 		s.PortGateEnabled = portGateInt == 1
@@ -567,7 +567,7 @@ func (db *ManagerDB) ListServersByOwner(ctx context.Context, ownerUserID int64) 
 			return nil, err
 		}
 		if s.NetworkMode == "" {
-			s.NetworkMode = "bridge"
+			s.NetworkMode = "host"
 		}
 		s.AutostartOnBoot = autostartInt == 1
 		s.PortGateEnabled = portGateInt == 1
@@ -613,7 +613,7 @@ func (db *ManagerDB) UpdateServer(ctx context.Context, s *models.Server) error {
 		portGateInt = 1
 	}
 	if s.NetworkMode == "" {
-		s.NetworkMode = "bridge"
+		s.NetworkMode = "host"
 	}
 
 	_, err := db.ExecContext(ctx, `

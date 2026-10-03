@@ -293,15 +293,15 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 			s.Seed = ""
 		}
 
-		// 7. Enforce Network Mode (Normal users restricted to standard bridge mode)
-		s.NetworkMode = "bridge"
+		// 7. Enforce Network Mode (Normal users deploy with host mode by default)
+		s.NetworkMode = "host"
 
 		s.OwnerUserID = &claims.UserID
 	} else if claims.Role == models.RoleAdmin {
 		if s.NetworkMode != "" {
 			s.NetworkMode = strings.TrimSpace(s.NetworkMode)
 		} else {
-			s.NetworkMode = "bridge"
+			s.NetworkMode = "host"
 		}
 		if s.OwnerUserID != nil {
 			if _, err := h.db.GetUserByID(r.Context(), *s.OwnerUserID); err != nil {

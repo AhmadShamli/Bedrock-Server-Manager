@@ -675,7 +675,7 @@ func TestServerNetworkModePersistence(t *testing.T) {
 		t.Errorf("expected NetworkMode host, got %s", got.NetworkMode)
 	}
 
-	// 2. Create server with empty network mode (should default to bridge)
+	// 2. Create server with empty network mode (should default to host)
 	srvDefault := &models.Server{
 		ID:     "srv-default",
 		Name:   "Default Net Server",
@@ -690,12 +690,12 @@ func TestServerNetworkModePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetServer failed: %v", err)
 	}
-	if gotDefault.NetworkMode != "bridge" {
-		t.Errorf("expected default NetworkMode bridge, got %s", gotDefault.NetworkMode)
+	if gotDefault.NetworkMode != "host" {
+		t.Errorf("expected default NetworkMode host, got %s", gotDefault.NetworkMode)
 	}
 
-	// 3. Update network mode
-	gotDefault.NetworkMode = "host"
+	// 3. Update network mode to bridge
+	gotDefault.NetworkMode = "bridge"
 	if err := db.UpdateServer(ctx, gotDefault); err != nil {
 		t.Fatalf("UpdateServer failed: %v", err)
 	}
@@ -704,8 +704,8 @@ func TestServerNetworkModePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetServer failed: %v", err)
 	}
-	if updated.NetworkMode != "host" {
-		t.Errorf("expected updated NetworkMode host, got %s", updated.NetworkMode)
+	if updated.NetworkMode != "bridge" {
+		t.Errorf("expected updated NetworkMode bridge, got %s", updated.NetworkMode)
 	}
 }
 

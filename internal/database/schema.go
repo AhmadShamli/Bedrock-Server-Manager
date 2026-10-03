@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS servers (
     container_id TEXT NOT NULL DEFAULT '',
     seed TEXT NOT NULL DEFAULT '',
     game_server_address TEXT NOT NULL DEFAULT '',
-    network_mode TEXT NOT NULL DEFAULT 'bridge',
+    network_mode TEXT NOT NULL DEFAULT 'host',
     owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

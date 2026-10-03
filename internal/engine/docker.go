@@ -118,7 +118,7 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 
 	networkMode := strings.TrimSpace(server.NetworkMode)
 	if networkMode == "" {
-		networkMode = "bridge"
+		networkMode = "host"
 	}
 	isHostNet := networkMode == "host"
 

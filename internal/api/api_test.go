@@ -2241,13 +2241,12 @@ func TestAPIServerDeploymentNetworkMode(t *testing.T) {
 		t.Errorf("expected server network_mode to be 'host', got '%s'", srv.NetworkMode)
 	}
 
-	// 3. Normal user tries to set network_mode = "host" -> must be forced to "bridge"
+	// 3. Normal user server deployment defaults to "host"
 	normalPayload := `{
 		"id": "normal-net-srv",
 		"name": "Normal User Server",
 		"port": 19134,
-		"portv6": 19135,
-		"network_mode": "host"
+		"portv6": 19135
 	}`
 	req = httptest.NewRequest("POST", "/api/servers", strings.NewReader(normalPayload))
 	req.Header.Set("Authorization", "Bearer "+normalToken)
@@ -2262,8 +2261,8 @@ func TestAPIServerDeploymentNetworkMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetServer failed: %v", err)
 	}
-	if userSrv.NetworkMode != "bridge" {
-		t.Errorf("expected normal user server network_mode to be forced to 'bridge', got '%s'", userSrv.NetworkMode)
+	if userSrv.NetworkMode != "host" {
+		t.Errorf("expected normal user server network_mode to be 'host', got '%s'", userSrv.NetworkMode)
 	}
 
 	// 4. Admin updates network_mode from "host" to "bridge"

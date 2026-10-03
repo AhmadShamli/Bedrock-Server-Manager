@@ -69,7 +69,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [editServerPortGateMode, setEditServerPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
   const [editServerPortGateTimeout, setEditServerPortGateTimeout] = useState(7200);
   const [editGameServerAddress, setEditGameServerAddress] = useState('');
-  const [editServerNetworkMode, setEditServerNetworkMode] = useState('bridge');
+  const [editServerNetworkMode, setEditServerNetworkMode] = useState('host');
   const [availableNetworks, setAvailableNetworks] = useState<string[]>(['bridge', 'host']);
   const [serverUpdating, setServerUpdating] = useState(false);
   const [serverUpdatedMsg, setServerUpdatedMsg] = useState<string | null>(null);
@@ -389,7 +389,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setEditServerPortGateMode(server.port_gate_mode);
       setEditServerPortGateTimeout(server.port_gate_timeout);
       setEditGameServerAddress(server.game_server_address || '');
-      setEditServerNetworkMode(server.network_mode || 'bridge');
+      setEditServerNetworkMode(server.network_mode || 'host');
     }
   }, [server]);
 
@@ -1120,7 +1120,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               <span>•</span>
               <span>UDP: {server.port}</span>
               <span>•</span>
-              <span className="text-cyan-400 font-medium">net: {server.network_mode || 'bridge'}</span>
+              <span className="text-cyan-400 font-medium">net: {server.network_mode || 'host'}</span>
               <span>•</span>
               <span>v{server.version}</span>
               {server.seed && (
@@ -2759,8 +2759,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     onChange={(e) => setEditServerNetworkMode(e.target.value)}
                     className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500 font-mono"
                   >
-                    <option value="bridge">bridge (Default - Isolated Virtual Bridge & Port Mapping)</option>
-                    <option value="host">host (Direct Host Network - Direct UDP Port Binding)</option>
+                    <option value="host">host (Default - Direct Host Network & Direct UDP Port Binding)</option>
+                    <option value="bridge">bridge (Isolated Virtual Bridge & Port Mapping)</option>
                     {availableNetworks
                       .filter((n) => n !== 'bridge' && n !== 'host')
                       .map((net) => (
