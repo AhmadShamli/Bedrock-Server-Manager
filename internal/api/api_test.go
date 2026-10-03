@@ -1446,8 +1446,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.8.1" {
-		t.Errorf("expected version 1.8.1 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.8.2" {
+		t.Errorf("expected version 1.8.2 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1461,8 +1461,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.8.1" {
-		t.Errorf("expected version 1.8.1 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.8.2" {
+		t.Errorf("expected version 1.8.2 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])
@@ -1646,6 +1646,39 @@ func TestOnlinePlayersAndOpDeop(t *testing.T) {
 	playerObj = playersList[0].(map[string]interface{})
 	if playerObj["is_op"] == true || playerObj["permission"] == "operator" {
 		t.Fatalf("expected Steve is_op=false after deop, got %+v", playerObj)
+	}
+
+	// Verify all_players contains Steve and is_online is true
+	allPlayers, ok := plRes["all_players"].([]interface{})
+	if !ok || len(allPlayers) != 1 {
+		t.Fatalf("expected 1 in all_players, got %+v", plRes["all_players"])
+	}
+	allObj := allPlayers[0].(map[string]interface{})
+	if allObj["gamertag"] != "Steve" || allObj["is_online"] != true {
+		t.Fatalf("expected Steve in all_players with is_online=true, got %+v", allObj)
+	}
+
+	// 9. Simulate disconnect: Steve disconnects
+	pm.ProcessLine("srv-players-1", "Player disconnected: Steve, xuid: 2535412345678901")
+	_ = db.UpdatePlayerLastSeen(context.Background(), "srv-players-1", "Steve")
+
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/servers/srv-players-1/players", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	plRes = nil
+	_ = json.Unmarshal(w.Body.Bytes(), &plRes)
+	if count, ok := plRes["online_count"].(float64); !ok || int(count) != 0 {
+		t.Fatalf("expected 0 online_count, got %v", plRes["online_count"])
+	}
+	// Steve must STILL appear in all_players history list as is_online=false!
+	allPlayers = plRes["all_players"].([]interface{})
+	if len(allPlayers) != 1 {
+		t.Fatalf("expected Steve to still be retained in all_players after disconnect, got %d", len(allPlayers))
+	}
+	allObj = allPlayers[0].(map[string]interface{})
+	if allObj["gamertag"] != "Steve" || allObj["is_online"] != false {
+		t.Fatalf("expected Steve in all_players history with is_online=false, got %+v", allObj)
 	}
 }
 

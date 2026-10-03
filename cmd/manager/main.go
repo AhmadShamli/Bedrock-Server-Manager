@@ -146,6 +146,11 @@ func main() {
 		func(serverID, gamertag, xuid string) {
 			log.Printf("[PlayerHub] Player '%s' (XUID: %s) joined %s", gamertag, xuid, serverID)
 
+			// Record player connection in persistent history
+			if err := mgrDB.RecordPlayerConnection(context.Background(), serverID, gamertag, xuid); err != nil {
+				log.Printf("[PlayerHub] Failed to record player connection: %v", err)
+			}
+
 			// Enforce automated ban if player is banned on instance or globally
 			if banned, reason, _ := mgrDB.IsPlayerBanned(context.Background(), serverID, gamertag, xuid); banned {
 				log.Printf("[PlayerHub] Enforcing ban on '%s' (XUID: %s) on server %s (Reason: %s)", gamertag, xuid, serverID, reason)
@@ -162,6 +167,10 @@ func main() {
 		},
 		func(serverID, gamertag, xuid string) {
 			log.Printf("[PlayerHub] Player '%s' (XUID: %s) left %s", gamertag, xuid, serverID)
+
+			// Update player last seen timestamp
+			_ = mgrDB.UpdatePlayerLastSeen(context.Background(), serverID, gamertag)
+
 			webhookURL, _ := mgrDB.GetSetting(context.Background(), "discord_webhook_url")
 			if webhookURL != "" {
 				_ = webhookDispatcher.NotifyPlayerLeft(context.Background(), webhookURL, serverID, gamertag, 0)

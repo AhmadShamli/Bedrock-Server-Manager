@@ -254,6 +254,19 @@ export interface ActivePlayerInfo {
   is_op?: boolean;
 }
 
+export interface ServerPlayer {
+  id?: number;
+  server_id: string;
+  gamertag: string;
+  xuid: string;
+  first_seen: string;
+  last_seen: string;
+  total_connections: number;
+  is_online: boolean;
+  permission?: string;
+  is_op?: boolean;
+}
+
 export interface ServerSummary {
   id: string;
   name: string;

@@ -6,13 +6,30 @@ import {
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
   ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles,
-  Network
+  Network, Search, Clock, History
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer } from '../types';
+import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
+
+const formatFriendlyDate = (dateStr?: string) => {
+  if (!dateStr) return 'N/A';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    const now = Date.now();
+    const diffSec = Math.floor((now - d.getTime()) / 1000);
+    if (diffSec < 60) return 'Just now';
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+    if (diffSec < 86400 * 7) return `${Math.floor(diffSec / 86400)}d ago`;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return dateStr;
+  }
+};
 
 interface ServerHubProps {
   user: User;
@@ -250,6 +267,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   // Player Hub & Chat state
   const [onlinePlayers, setOnlinePlayers] = useState<Array<{ gamertag: string; xuid: string; joined_at: string; is_op?: boolean; permission?: string }>>([]);
+  const [allPlayers, setAllPlayers] = useState<ServerPlayer[]>([]);
+  const [playerFilterTab, setPlayerFilterTab] = useState<'all' | 'online' | 'offline'>('all');
+  const [playerSearchQuery, setPlayerSearchQuery] = useState('');
   const [chatFeed, setChatFeed] = useState<Array<{ gamertag: string; message: string; timestamp: string }>>([]);
   const [broadcastMsg, setBroadcastMsg] = useState('');
   const [broadcastTarget, setBroadcastTarget] = useState('');
@@ -472,7 +492,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         const chat = await api.getChat(id);
         setChatFeed(Array.isArray(chat) ? chat : []);
         const pl = await api.getPlayers(id);
-        setOnlinePlayers(Array.isArray(pl?.online_players) ? pl.online_players : []);
+        if (Array.isArray(pl?.online_players)) setOnlinePlayers(pl.online_players);
+        if (Array.isArray(pl?.all_players)) setAllPlayers(pl.all_players);
       } catch {}
     }, 3000);
     return () => clearInterval(interval);
@@ -483,10 +504,16 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     if (!id) return;
     if (activeTab === 'overview') {
       if (server?.status === 'running') {
-        api.getPlayers(id).then((res) => setOnlinePlayers(Array.isArray(res?.online_players) ? res.online_players : [])).catch(() => {});
+        api.getPlayers(id).then((res) => {
+          if (Array.isArray(res?.online_players)) setOnlinePlayers(res.online_players);
+          if (Array.isArray(res?.all_players)) setAllPlayers(res.all_players);
+        }).catch(() => {});
       }
     } else if (activeTab === 'players') {
-      api.getPlayers(id).then((res) => setOnlinePlayers(Array.isArray(res?.online_players) ? res.online_players : [])).catch(() => {});
+      api.getPlayers(id).then((res) => {
+        if (Array.isArray(res?.online_players)) setOnlinePlayers(res.online_players);
+        if (Array.isArray(res?.all_players)) setAllPlayers(res.all_players);
+      }).catch(() => {});
       api.getPermissions(id).then((res) => setPermissions(Array.isArray(res) ? res : [])).catch(() => {});
       api.getChat(id).then((res) => setChatFeed(Array.isArray(res) ? res : [])).catch(() => {});
       api.listPlayerBans(id).then((res) => setServerBans(Array.isArray(res) ? res : [])).catch(() => {});
@@ -747,7 +774,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     try {
       await api.kickPlayer(id, gt);
       const res = await api.getPlayers(id);
-      setOnlinePlayers(Array.isArray(res?.online_players) ? res.online_players : []);
+      if (Array.isArray(res?.online_players)) setOnlinePlayers(res.online_players);
+      if (Array.isArray(res?.all_players)) setAllPlayers(res.all_players);
     } catch (err: any) {
       alert(err.message || 'Failed to kick player');
     }
@@ -759,13 +787,17 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setOnlinePlayers((prev) =>
         prev.map((p) => (p.gamertag === gt ? { ...p, is_op: true, permission: 'operator' } : p))
       );
+      setAllPlayers((prev) =>
+        prev.map((p) => (p.gamertag.toLowerCase() === gt.toLowerCase() ? { ...p, is_op: true, permission: 'operator' } : p))
+      );
       await api.opPlayer(id, gt);
       const [resPl, resPerm] = await Promise.allSettled([
         api.getPlayers(id),
         api.getPermissions(id),
       ]);
-      if (resPl.status === 'fulfilled' && Array.isArray(resPl.value?.online_players)) {
-        setOnlinePlayers(resPl.value.online_players);
+      if (resPl.status === 'fulfilled') {
+        if (Array.isArray(resPl.value?.online_players)) setOnlinePlayers(resPl.value.online_players);
+        if (Array.isArray(resPl.value?.all_players)) setAllPlayers(resPl.value.all_players);
       }
       if (resPerm.status === 'fulfilled' && Array.isArray(resPerm.value)) {
         setPermissions(resPerm.value);
@@ -773,6 +805,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     } catch (err: any) {
       const res = await api.getPlayers(id).catch(() => null);
       if (res?.online_players) setOnlinePlayers(res.online_players);
+      if (res?.all_players) setAllPlayers(res.all_players);
       alert(err.message || 'Failed to op player');
     }
   };
@@ -784,13 +817,17 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setOnlinePlayers((prev) =>
         prev.map((p) => (p.gamertag === gt ? { ...p, is_op: false, permission: 'member' } : p))
       );
+      setAllPlayers((prev) =>
+        prev.map((p) => (p.gamertag.toLowerCase() === gt.toLowerCase() ? { ...p, is_op: false, permission: 'member' } : p))
+      );
       await api.deopPlayer(id, gt);
       const [resPl, resPerm] = await Promise.allSettled([
         api.getPlayers(id),
         api.getPermissions(id),
       ]);
-      if (resPl.status === 'fulfilled' && Array.isArray(resPl.value?.online_players)) {
-        setOnlinePlayers(resPl.value.online_players);
+      if (resPl.status === 'fulfilled') {
+        if (Array.isArray(resPl.value?.online_players)) setOnlinePlayers(resPl.value.online_players);
+        if (Array.isArray(resPl.value?.all_players)) setAllPlayers(resPl.value.all_players);
       }
       if (resPerm.status === 'fulfilled' && Array.isArray(resPerm.value)) {
         setPermissions(resPerm.value);
@@ -798,6 +835,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     } catch (err: any) {
       const res = await api.getPlayers(id).catch(() => null);
       if (res?.online_players) setOnlinePlayers(res.online_players);
+      if (res?.all_players) setAllPlayers(res.all_players);
       alert(err.message || 'Failed to deop player');
     }
   };
@@ -865,8 +903,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         api.listLeases(id),
         api.listPlayerBans(id),
       ]);
-      if (resPl.status === 'fulfilled' && Array.isArray(resPl.value?.online_players)) {
-        setOnlinePlayers(resPl.value.online_players);
+      if (resPl.status === 'fulfilled') {
+        if (Array.isArray(resPl.value?.online_players)) setOnlinePlayers(resPl.value.online_players);
+        if (Array.isArray(resPl.value?.all_players)) setAllPlayers(resPl.value.all_players);
       }
       if (resAl.status === 'fulfilled' && Array.isArray(resAl.value)) {
         setAllowlist(resAl.value);
@@ -1620,80 +1659,219 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       {activeTab === 'players' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Online Players */}
+          {/* Player History & Online Players */}
           <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-5 flex flex-col h-[520px]">
-            <h3 className="font-mono text-sm font-bold text-slate-200 mb-3 flex items-center justify-between">
-              <span className="flex items-center gap-2">
-                <Users className="w-4 h-4 text-emerald-400" />
-                <span>Online Players ({(onlinePlayers || []).length})</span>
-              </span>
-            </h3>
+            {(() => {
+              const effectiveAllPlayers: ServerPlayer[] = (allPlayers && allPlayers.length > 0)
+                ? allPlayers
+                : (onlinePlayers || []).map((p) => ({
+                    id: 0,
+                    server_id: id || '',
+                    gamertag: p.gamertag,
+                    xuid: p.xuid || '',
+                    first_seen: p.joined_at || '',
+                    last_seen: p.joined_at || '',
+                    total_connections: 1,
+                    is_online: true,
+                    permission: p.permission || 'member',
+                    is_op: !!p.is_op,
+                  }));
 
-            <div className="flex-1 bg-obsidian-950 rounded-lg p-3 overflow-y-auto border border-obsidian-800 space-y-2 font-mono text-xs">
-              {(onlinePlayers || []).length === 0 ? (
-                <p className="text-slate-600 italic">No players online right now.</p>
-              ) : (
-                (onlinePlayers || []).map((p) => {
-                  const isOp = !!p.is_op || (permissions || []).some(
-                    (perm) => (perm.xuid === p.xuid || (p.gamertag && perm.xuid?.toLowerCase() === p.gamertag.toLowerCase())) && perm.permission === 'operator'
-                  );
+              const onlineCount = effectiveAllPlayers.filter((p) => p.is_online).length;
+              const offlineCount = effectiveAllPlayers.length - onlineCount;
 
-                  return (
-                    <div key={p.gamertag} className="p-2.5 bg-obsidian-900 border border-obsidian-700/80 rounded-lg flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-slate-100">{p.gamertag}</span>
-                          {isOp && (
-                            <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold">
-                              OP
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-slate-500">XUID: {p.xuid || 'N/A'}</div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        {isOp ? (
-                          <button
-                            type="button"
-                            onClick={() => handleDeop(p.gamertag)}
-                            title="Demote from Operator (DeOP)"
-                            className="px-2.5 py-1 bg-amber-950/50 hover:bg-amber-900/80 text-amber-300 hover:text-amber-100 border border-amber-600/50 rounded text-[11px] font-semibold transition-colors"
-                          >
-                            DeOP
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => handleOp(p.gamertag)}
-                            title="Promote to Operator (OP)"
-                            className="px-2.5 py-1 bg-obsidian-800 hover:bg-emerald-950 hover:text-emerald-400 text-slate-300 rounded text-[11px] font-semibold transition-colors"
-                          >
-                            OP
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleKick(p.gamertag)}
-                          title="Kick Player"
-                          className="px-2.5 py-1 bg-obsidian-800 hover:bg-rose-950 hover:text-rose-400 text-slate-300 rounded text-[11px] font-semibold transition-colors"
-                        >
-                          Kick
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenPlayerModal(p)}
-                          title="Player Moderation & Actions"
-                          className="px-2.5 py-1 bg-obsidian-800 hover:bg-cyan-950/80 hover:text-cyan-300 text-slate-300 border border-obsidian-700/80 hover:border-cyan-500/40 rounded text-[11px] font-semibold transition-colors flex items-center space-x-1"
-                        >
-                          <UserCog className="w-3.5 h-3.5" />
-                          <span>Manage</span>
-                        </button>
-                      </div>
+              const filteredPlayers = effectiveAllPlayers.filter((p) => {
+                if (playerFilterTab === 'online' && !p.is_online) return false;
+                if (playerFilterTab === 'offline' && p.is_online) return false;
+                if (playerSearchQuery.trim()) {
+                  const q = playerSearchQuery.toLowerCase().trim();
+                  const matchName = p.gamertag.toLowerCase().includes(q);
+                  const matchXuid = p.xuid ? p.xuid.toLowerCase().includes(q) : false;
+                  return matchName || matchXuid;
+                }
+                return true;
+              });
+
+              return (
+                <>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                    <span className="flex items-center gap-2">
+                      <History className="w-4 h-4 text-emerald-400" />
+                      <span className="font-mono text-sm font-bold text-slate-200">
+                        Player History
+                      </span>
+                      <span className="text-[11px] font-mono text-slate-400">
+                        ({onlineCount} online / {effectiveAllPlayers.length} total)
+                      </span>
+                    </span>
+                    <div className="flex items-center gap-1 bg-obsidian-950 p-1 rounded-lg border border-obsidian-800 text-[11px] font-mono self-start sm:self-auto">
+                      <button
+                        type="button"
+                        onClick={() => setPlayerFilterTab('all')}
+                        className={`px-2 py-0.5 rounded transition-colors ${
+                          playerFilterTab === 'all'
+                            ? 'bg-emerald-600 text-slate-950 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        All ({effectiveAllPlayers.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlayerFilterTab('online')}
+                        className={`px-2 py-0.5 rounded transition-colors ${
+                          playerFilterTab === 'online'
+                            ? 'bg-emerald-600 text-slate-950 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Online ({onlineCount})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPlayerFilterTab('offline')}
+                        className={`px-2 py-0.5 rounded transition-colors ${
+                          playerFilterTab === 'offline'
+                            ? 'bg-emerald-600 text-slate-950 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        Offline ({offlineCount})
+                      </button>
                     </div>
-                  );
-                })
-              )}
-            </div>
+                  </div>
+
+                  {/* Search filter input */}
+                  <div className="relative mb-3">
+                    <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                    <input
+                      type="text"
+                      value={playerSearchQuery}
+                      onChange={(e) => setPlayerSearchQuery(e.target.value)}
+                      placeholder="Search players by gamertag or XUID..."
+                      className="w-full pl-8 pr-7 py-1.5 bg-obsidian-950 border border-obsidian-800 rounded-lg text-slate-100 font-mono text-xs focus:border-emerald-500 outline-none"
+                    />
+                    {playerSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setPlayerSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-300"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex-1 bg-obsidian-950 rounded-lg p-3 overflow-y-auto border border-obsidian-800 space-y-2 font-mono text-xs">
+                    {filteredPlayers.length === 0 ? (
+                      <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-1 py-8">
+                        <Users className="w-8 h-8 stroke-1 text-slate-700" />
+                        <p className="italic text-center">
+                          {playerSearchQuery
+                            ? 'No players match your search filter.'
+                            : playerFilterTab === 'online'
+                            ? 'No players are currently online.'
+                            : playerFilterTab === 'offline'
+                            ? 'No offline players recorded yet.'
+                            : 'No players have connected yet.'}
+                        </p>
+                      </div>
+                    ) : (
+                      filteredPlayers.map((p) => {
+                        const isOp = !!p.is_op || (permissions || []).some(
+                          (perm) => (perm.xuid === p.xuid || (p.gamertag && perm.xuid?.toLowerCase() === p.gamertag.toLowerCase())) && perm.permission === 'operator'
+                        );
+
+                        return (
+                          <div
+                            key={p.gamertag}
+                            className={`p-2.5 bg-obsidian-900 border rounded-lg flex items-center justify-between gap-2 transition-colors ${
+                              p.is_online ? 'border-emerald-500/30 bg-obsidian-900/90' : 'border-obsidian-800/80'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                                <span className="font-bold text-slate-100 truncate">{p.gamertag}</span>
+                                {p.is_online ? (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                    ONLINE
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-slate-800/80 text-slate-400 border border-slate-700 text-[10px] font-medium">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                                    OFFLINE
+                                  </span>
+                                )}
+                                {isOp && (
+                                  <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-bold">
+                                    OP
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 text-[10px] text-slate-500 mt-1 flex-wrap">
+                                <span>XUID: {p.xuid || 'N/A'}</span>
+                                <span>•</span>
+                                <span title={p.last_seen || p.first_seen} className="inline-flex items-center gap-1">
+                                  <Clock className="w-2.5 h-2.5 text-slate-500" />
+                                  <span>{p.is_online ? 'Joined' : 'Last seen'}: {formatFriendlyDate(p.last_seen || p.first_seen)}</span>
+                                </span>
+                                {(p.total_connections || 0) > 0 && (
+                                  <>
+                                    <span>•</span>
+                                    <span>{p.total_connections} session{p.total_connections === 1 ? '' : 's'}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center space-x-1.5 shrink-0">
+                              {isOp ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeop(p.gamertag)}
+                                  title="Demote from Operator (DeOP)"
+                                  className="px-2.5 py-1 bg-amber-950/50 hover:bg-amber-900/80 text-amber-300 hover:text-amber-100 border border-amber-600/50 rounded text-[11px] font-semibold transition-colors"
+                                >
+                                  DeOP
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOp(p.gamertag)}
+                                  title="Promote to Operator (OP)"
+                                  className="px-2.5 py-1 bg-obsidian-800 hover:bg-emerald-950 hover:text-emerald-400 text-slate-300 rounded text-[11px] font-semibold transition-colors"
+                                >
+                                  OP
+                                </button>
+                              )}
+                              {p.is_online && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleKick(p.gamertag)}
+                                  title="Kick Player"
+                                  className="px-2.5 py-1 bg-obsidian-800 hover:bg-rose-950 hover:text-rose-400 text-slate-300 rounded text-[11px] font-semibold transition-colors"
+                                >
+                                  Kick
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenPlayerModal({ gamertag: p.gamertag, xuid: p.xuid || '', is_op: isOp })}
+                                title="Player Moderation & Actions"
+                                className="px-2.5 py-1 bg-obsidian-800 hover:bg-cyan-950/80 hover:text-cyan-300 text-slate-300 border border-obsidian-700/80 hover:border-cyan-500/40 rounded text-[11px] font-semibold transition-colors flex items-center space-x-1"
+                              >
+                                <UserCog className="w-3.5 h-3.5" />
+                                <span>Manage</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Broadcast Box */}
             <form onSubmit={handleBroadcast} className="mt-4 pt-3 border-t border-obsidian-800 space-y-2">

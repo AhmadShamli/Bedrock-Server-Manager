@@ -1,4 +1,4 @@
-import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, DashboardSummary } from '../types';
+import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -239,11 +239,15 @@ class APIClient {
       permission?: string;
     }>;
     online_count: number;
+    all_players: ServerPlayer[];
+    total_count: number;
   }> {
     const res = await this.request(`/api/servers/${id}/players`);
     return {
       online_players: Array.isArray(res?.online_players) ? res.online_players : [],
       online_count: typeof res?.online_count === 'number' ? res.online_count : 0,
+      all_players: Array.isArray(res?.all_players) ? res.all_players : [],
+      total_count: typeof res?.total_count === 'number' ? res.total_count : 0,
     };
   }
 

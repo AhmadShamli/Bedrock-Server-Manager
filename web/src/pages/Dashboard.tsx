@@ -120,7 +120,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
             <h1 className="text-2xl font-bold tracking-tight text-slate-100 flex items-center gap-2">
               <span>Overview Dashboard</span>
               <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono font-normal">
-                v{summary?.host_system?.version || '1.8.1'}
+                v{summary?.host_system?.version || '1.8.2'}
               </span>
             </h1>
           </div>

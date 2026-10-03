@@ -235,3 +235,17 @@ type GlobalPlayer struct {
 	CreatedAt          time.Time `json:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at"`
 }
+
+// ServerPlayer represents a player that has connected to or is known on a server instance.
+type ServerPlayer struct {
+	ID               int64     `json:"id"`
+	ServerID         string    `json:"server_id"`
+	Gamertag         string    `json:"gamertag"`
+	XUID             string    `json:"xuid"`
+	FirstSeen        time.Time `json:"first_seen"`
+	LastSeen         time.Time `json:"last_seen"`
+	TotalConnections int       `json:"total_connections"`
+	IsOnline         bool      `json:"is_online"`
+	Permission       string    `json:"permission,omitempty"`
+	IsOp             bool      `json:"is_op"`
+}

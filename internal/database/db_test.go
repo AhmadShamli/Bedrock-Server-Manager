@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -706,6 +707,76 @@ func TestServerNetworkModePersistence(t *testing.T) {
 	}
 	if updated.NetworkMode != "bridge" {
 		t.Errorf("expected updated NetworkMode bridge, got %s", updated.NetworkMode)
+	}
+}
+
+func TestServerPlayerHistory(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenManagerDB(":memory:")
+	if err != nil {
+		t.Fatalf("failed to open in-memory db: %v", err)
+	}
+	defer db.Close()
+
+	// 1. Initial connection
+	if err := db.RecordPlayerConnection(ctx, "srv-test", "Alex", "111222333"); err != nil {
+		t.Fatalf("RecordPlayerConnection failed: %v", err)
+	}
+
+	players, err := db.ListServerPlayers(ctx, "srv-test")
+	if err != nil {
+		t.Fatalf("ListServerPlayers failed: %v", err)
+	}
+	if len(players) != 1 {
+		t.Fatalf("expected 1 player, got %d", len(players))
+	}
+	if players[0].Gamertag != "Alex" || players[0].XUID != "111222333" || players[0].TotalConnections != 1 {
+		t.Errorf("unexpected player record: %+v", players[0])
+	}
+
+	// 2. Second connection (reconnect)
+	time.Sleep(10 * time.Millisecond)
+	if err := db.RecordPlayerConnection(ctx, "srv-test", "alex", "111222333"); err != nil {
+		t.Fatalf("second RecordPlayerConnection failed: %v", err)
+	}
+
+	// 3. Connect another player
+	if err := db.RecordPlayerConnection(ctx, "srv-test", "Steve", "444555666"); err != nil {
+		t.Fatalf("RecordPlayerConnection for Steve failed: %v", err)
+	}
+
+	players, err = db.ListServerPlayers(ctx, "srv-test")
+	if err != nil {
+		t.Fatalf("ListServerPlayers failed: %v", err)
+	}
+	if len(players) != 2 {
+		t.Fatalf("expected 2 players, got %d", len(players))
+	}
+
+	// Alex should have total_connections = 2
+	var alex *models.ServerPlayer
+	for _, p := range players {
+		if strings.EqualFold(p.Gamertag, "Alex") {
+			alex = p
+			break
+		}
+	}
+	if alex == nil || alex.TotalConnections != 2 {
+		t.Errorf("expected Alex total_connections = 2, got %+v", alex)
+	}
+
+	// 4. Update last seen on leave
+	if err := db.UpdatePlayerLastSeen(ctx, "srv-test", "Steve"); err != nil {
+		t.Fatalf("UpdatePlayerLastSeen failed: %v", err)
+	}
+
+	// 5. Delete player
+	if err := db.DeleteServerPlayer(ctx, "srv-test", "Alex"); err != nil {
+		t.Fatalf("DeleteServerPlayer failed: %v", err)
+	}
+	players, _ = db.ListServerPlayers(ctx, "srv-test")
+	if len(players) != 1 {
+		t.Errorf("expected 1 player after delete, got %d", len(players))
 	}
 }
 

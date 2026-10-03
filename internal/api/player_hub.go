@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,7 @@ func NewPlayerHubHandler(sh *ServerHandler, pm *player.Manager) *PlayerHubHandle
 	}
 }
 
-// GetPlayers returns the online players for a server.
+// GetPlayers returns the online players as well as all historically connected players for a server.
 func (h *PlayerHubHandler) GetPlayers(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	online := h.playerManager.GetOnlinePlayers(serverID)
@@ -51,6 +52,7 @@ func (h *PlayerHubHandler) GetPlayers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	onlineMap := make(map[string]bool)
 	for i := range online {
 		perm := permsMap[online[i].XUID]
 		if perm == "" {
@@ -63,12 +65,88 @@ func (h *PlayerHubHandler) GetPlayers(w http.ResponseWriter, r *http.Request) {
 			online[i].Permission = "member"
 			online[i].IsOp = false
 		}
+		onlineMap[strings.ToLower(online[i].Gamertag)] = true
+		if online[i].XUID != "" {
+			onlineMap[online[i].XUID] = true
+		}
+
+		// Ensure active players are recorded in database history
+		if h.serverHandler != nil && h.serverHandler.db != nil {
+			_ = h.serverHandler.db.RecordPlayerConnection(r.Context(), serverID, online[i].Gamertag, online[i].XUID)
+		}
 	}
+
+	// Fetch all recorded players (player history) from database
+	var history []*models.ServerPlayer
+	if h.serverHandler != nil && h.serverHandler.db != nil {
+		history, _ = h.serverHandler.db.ListServerPlayers(r.Context(), serverID)
+	}
+	if history == nil {
+		history = []*models.ServerPlayer{}
+	}
+
+	// Check allowlist.json to also include any configured players who haven't yet joined
+	seenMap := make(map[string]bool)
+	for _, hp := range history {
+		seenMap[strings.ToLower(hp.Gamertag)] = true
+		if hp.XUID != "" {
+			seenMap[hp.XUID] = true
+		}
+	}
+
+	if h.serverHandler != nil && h.serverHandler.dataDir != "" {
+		if alPath, err := configfile.SafePath(h.serverHandler.dataDir, serverID, "allowlist.json"); err == nil {
+			if al, err := configfile.ReadAllowlist(alPath); err == nil {
+				addedAny := false
+				for _, entry := range al {
+					if entry.Name != "" && !seenMap[strings.ToLower(entry.Name)] {
+						if h.serverHandler.db != nil {
+							_ = h.serverHandler.db.RecordPlayerConnection(r.Context(), serverID, entry.Name, entry.XUID)
+							addedAny = true
+						}
+						seenMap[strings.ToLower(entry.Name)] = true
+					}
+				}
+				if addedAny && h.serverHandler.db != nil {
+					if updated, err := h.serverHandler.db.ListServerPlayers(r.Context(), serverID); err == nil {
+						history = updated
+					}
+				}
+			}
+		}
+	}
+
+	// Populate online state and permissions for all players
+	for i := range history {
+		gtLower := strings.ToLower(history[i].Gamertag)
+		history[i].IsOnline = onlineMap[gtLower] || (history[i].XUID != "" && onlineMap[history[i].XUID])
+		perm := permsMap[history[i].XUID]
+		if perm == "" {
+			perm = permsMap[gtLower]
+		}
+		if perm != "" {
+			history[i].Permission = perm
+			history[i].IsOp = (perm == "operator")
+		} else {
+			history[i].Permission = "member"
+			history[i].IsOp = false
+		}
+	}
+
+	// Sort history: Online players first, then by LastSeen descending
+	sort.SliceStable(history, func(i, j int) bool {
+		if history[i].IsOnline != history[j].IsOnline {
+			return history[i].IsOnline
+		}
+		return history[i].LastSeen.After(history[j].LastSeen)
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"online_players": online,
 		"online_count":   len(online),
+		"all_players":    history,
+		"total_count":    len(history),
 	})
 }
 

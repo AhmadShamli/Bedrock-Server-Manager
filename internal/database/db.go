@@ -2235,6 +2235,87 @@ func (db *ManagerDB) IsPlayerBanned(ctx context.Context, serverID, gamertag, xui
 	return false, "", nil
 }
 
+// RecordPlayerConnection records or updates a player's connection history on a server.
+func (db *ManagerDB) RecordPlayerConnection(ctx context.Context, serverID, gamertag, xuid string) error {
+	cleanGT := strings.TrimSpace(gamertag)
+	if cleanGT == "" {
+		return nil
+	}
+	cleanXUID := strings.TrimSpace(xuid)
+	now := FormatTime(time.Now().UTC())
+
+	query := `
+		INSERT INTO server_players (server_id, gamertag, xuid, first_seen, last_seen, total_connections)
+		VALUES (?, ?, ?, ?, ?, 1)
+		ON CONFLICT(server_id, gamertag COLLATE NOCASE) DO UPDATE SET
+			last_seen = excluded.last_seen,
+			total_connections = server_players.total_connections + 1,
+			xuid = CASE WHEN excluded.xuid != '' THEN excluded.xuid ELSE server_players.xuid END
+	`
+	_, err := db.ExecContext(ctx, query, serverID, cleanGT, cleanXUID, now, now)
+	return err
+}
+
+// UpdatePlayerLastSeen updates the last_seen timestamp for a player on a server.
+func (db *ManagerDB) UpdatePlayerLastSeen(ctx context.Context, serverID, gamertag string) error {
+	cleanGT := strings.TrimSpace(gamertag)
+	if cleanGT == "" {
+		return nil
+	}
+	now := FormatTime(time.Now().UTC())
+	query := `
+		UPDATE server_players
+		SET last_seen = ?
+		WHERE server_id = ? AND LOWER(gamertag) = LOWER(?)
+	`
+	_, err := db.ExecContext(ctx, query, now, serverID, cleanGT)
+	return err
+}
+
+// ListServerPlayers retrieves all players who have ever connected to or are recorded on a server instance.
+func (db *ManagerDB) ListServerPlayers(ctx context.Context, serverID string) ([]*models.ServerPlayer, error) {
+	query := `
+		SELECT id, server_id, gamertag, xuid, first_seen, last_seen, total_connections
+		FROM server_players
+		WHERE server_id = ?
+		ORDER BY last_seen DESC
+	`
+	rows, err := db.QueryContext(ctx, query, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var players []*models.ServerPlayer
+	for rows.Next() {
+		var p models.ServerPlayer
+		var firstSeenStr, lastSeenStr string
+		if err := rows.Scan(&p.ID, &p.ServerID, &p.Gamertag, &p.XUID, &firstSeenStr, &lastSeenStr, &p.TotalConnections); err != nil {
+			return nil, err
+		}
+		if t, err := ParseTime(firstSeenStr); err == nil {
+			p.FirstSeen = t
+		}
+		if t, err := ParseTime(lastSeenStr); err == nil {
+			p.LastSeen = t
+		}
+		players = append(players, &p)
+	}
+	return players, rows.Err()
+}
+
+// DeleteServerPlayer removes a player from a server's connection history.
+func (db *ManagerDB) DeleteServerPlayer(ctx context.Context, serverID, gamertag string) error {
+	cleanGT := strings.TrimSpace(gamertag)
+	query := `
+		DELETE FROM server_players
+		WHERE server_id = ? AND (LOWER(gamertag) = LOWER(?) OR (xuid != '' AND xuid = ?))
+	`
+	_, err := db.ExecContext(ctx, query, serverID, cleanGT, cleanGT)
+	return err
+}
+
+
 // DashboardDBStats aggregates high-level database metrics.
 type DashboardDBStats struct {
 	TotalBackupsCount  int64 `json:"total_backups_count"`
