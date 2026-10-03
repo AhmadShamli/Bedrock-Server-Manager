@@ -593,6 +593,25 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     }
   }, [user.role]);
 
+  useEffect(() => {
+    if (activeTab === 'addons' && addonSubTab === 'marketplace' && marketplaceItems.length === 0 && !marketplaceLoading) {
+      setMarketplaceLoading(true);
+      api.searchMarketplace({
+        query: marketplaceQuery.trim(),
+        provider: marketplaceProvider,
+        category: marketplaceCategory,
+      })
+        .then((res) => {
+          setMarketplaceItems(res.items || []);
+          setCurseForgeConfigured(!!res.curseforge_configured);
+        })
+        .catch(() => {})
+        .finally(() => {
+          setMarketplaceLoading(false);
+        });
+    }
+  }, [activeTab, addonSubTab]);
+
   const handleCreateAccessKey = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id) return;
@@ -1362,12 +1381,6 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setSavingCfKey(false);
     }
   };
-
-  useEffect(() => {
-    if (activeTab === 'addons' && addonSubTab === 'marketplace' && marketplaceItems.length === 0 && !marketplaceLoading) {
-      handleSearchMarketplace();
-    }
-  }, [activeTab, addonSubTab]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
