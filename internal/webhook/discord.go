@@ -144,3 +144,29 @@ func (d *Dispatcher) NotifyPlayerLeft(ctx context.Context, webhookURL, serverNam
 		},
 	})
 }
+
+func formatBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.2f %cB", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+func (d *Dispatcher) NotifyResourceAlert(ctx context.Context, webhookURL, serverName, serverID string, ramUsed, ramLimit int64, ramPct float64, cpuUsed, cpuLimitCores, cpuPct float64) error {
+	return d.Send(ctx, webhookURL, Embed{
+		Title:       fmt.Sprintf("⚠️ Resource Alert: %s", serverName),
+		Description: fmt.Sprintf("Server **%s** allocated resources are nearly full!", serverID),
+		Color:       ColorAmber,
+		Fields: []EmbedField{
+			{Name: "RAM Usage vs Allocated", Value: fmt.Sprintf("%s / %s (%.1f%%)", formatBytes(ramUsed), formatBytes(ramLimit), ramPct), Inline: true},
+			{Name: "CPU Usage vs Allocated", Value: fmt.Sprintf("%.1f%% / %.1f%% (%.1f%%)", cpuUsed, cpuLimitCores*100.0, cpuPct), Inline: true},
+		},
+	})
+}
+

@@ -26,5 +26,9 @@ func TestDiscordDispatcher(t *testing.T) {
 		t.Fatalf("NotifyPlayerJoined failed: %v", err)
 	}
 
+	if err := d.NotifyResourceAlert(ctx, server.URL, "Test Server", "srv-1", 1932735283, 2147483648, 90.0, 185.0, 2.0, 92.5); err != nil {
+		t.Fatalf("NotifyResourceAlert failed: %v", err)
+	}
+
 	_ = receivedPayload
 }

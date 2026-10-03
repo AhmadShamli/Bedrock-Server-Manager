@@ -24,6 +24,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/raknet"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/resourcemonitor"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/scheduler"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
@@ -206,6 +207,9 @@ func main() {
 	telemetryCollector.Start(30*time.Second, 5*time.Minute, 1*time.Hour)
 	defer telemetryCollector.Stop()
 
+	// Initialize Resource Alert Monitor (monitors usage vs allocated, broadcasts alert every 1m if nearly full)
+	resourceMonitor := resourcemonitor.NewResourceMonitor(serverEngine, playerMgr, mgrDB, webhookDispatcher)
+
 	// Background metrics sampler (every 2s default)
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
@@ -229,6 +233,9 @@ func main() {
 							}
 						}
 						telemetryCollector.Ingest(s.ID, stats.CPUPercent, stats.RAMBytes, playerCount)
+
+						// Check resource usage vs allocated and automatically broadcast every 1m if nearly full
+						_, _, _ = resourceMonitor.CheckServer(context.Background(), &s, stats.CPUPercent, stats.RAMBytes)
 					}
 				}
 			}
@@ -315,6 +322,7 @@ func main() {
 		WebFS:              web.DistFS(),
 		TelemetryCollector: telemetryCollector,
 		MetricsDB:          metricsDB,
+		ResourceMonitor:    resourceMonitor,
 	})
 
 	// 13. Start HTTP Server

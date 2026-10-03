@@ -2433,5 +2433,55 @@ func TestAddonURLAndMarketplaceAPIs(t *testing.T) {
 	}
 }
 
+func TestResourceStatusAPI(t *testing.T) {
+	router, db, mockEngine, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	ctx := context.Background()
+
+	adminUser, err := db.CreateUser(ctx, "resadmin", "hash", models.RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	adminToken, _ := auth.GenerateJWT(jwtSecret, adminUser.ID, adminUser.Username, adminUser.Role, time.Hour)
+
+	server := &models.Server{
+		ID:          "srv-res-test",
+		Name:        "Resource Test Server",
+		Port:        19145,
+		Status:      models.ServerStatusRunning,
+		MemoryLimit: "2G",
+		CPULimit:    2.0,
+	}
+	if err := db.CreateServer(ctx, server); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+	_ = mockEngine.StartServer(ctx, server)
+
+	// Query GET /api/servers/srv-res-test/resource-status
+	req := httptest.NewRequest("GET", "/api/servers/srv-res-test/resource-status", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from GET resource-status, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse JSON response: %v", err)
+	}
+
+	if resp["server_id"] != "srv-res-test" {
+		t.Errorf("expected server_id 'srv-res-test', got %v", resp["server_id"])
+	}
+	if resp["cpu_allocated_cores"] != 2.0 {
+		t.Errorf("expected cpu_allocated_cores 2.0, got %v", resp["cpu_allocated_cores"])
+	}
+	if resp["threshold_percent"] != 85.0 {
+		t.Errorf("expected threshold_percent 85.0, got %v", resp["threshold_percent"])
+	}
+}
+
 
 

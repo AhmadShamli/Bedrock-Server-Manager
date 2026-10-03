@@ -436,3 +436,112 @@ func TestAddonConfigFlow(t *testing.T) {
 		t.Errorf("expected TexturePackRequired to be true")
 	}
 }
+
+func TestAddonInstallMultiFolderMCAddonAndActivation(t *testing.T) {
+	serverDir := t.TempDir()
+
+	rpUUID := "33333333-4444-5555-6666-777777777777"
+	bpUUID := "11111111-2222-3333-4444-555555555555"
+
+	// Create a .mcaddon archive with separate BP and RP folders
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	// 1. Behavior Pack with dependency on RP
+	bpManifest := `{
+		"format_version": 2,
+		"header": {
+			"name": "Super Dragon BP",
+			"description": "Dragon behaviors",
+			"uuid": "` + bpUUID + `",
+			"version": [1, 0, 0]
+		},
+		"modules": [
+			{
+				"type": "data",
+				"uuid": "66666666-7777-8888-9999-000000000000"
+			}
+		],
+		"dependencies": [
+			{
+				"uuid": "` + rpUUID + `",
+				"version": [1, 0, 0]
+			}
+		]
+	}`
+	wBP, _ := zw.Create("dragon_bp/manifest.json")
+	_, _ = wBP.Write([]byte(bpManifest))
+	wBPEntity, _ := zw.Create("dragon_bp/entities/dragon.json")
+	_, _ = wBPEntity.Write([]byte(`{"entity": "dragon"}`))
+
+	// 2. Resource Pack
+	rpManifest := `{
+		"format_version": 2,
+		"header": {
+			"name": "Super Dragon RP",
+			"description": "Dragon textures",
+			"uuid": "` + rpUUID + `",
+			"version": [1, 0, 0]
+		},
+		"modules": [
+			{
+				"type": "resources",
+				"uuid": "77777777-8888-9999-0000-111111111111"
+			}
+		]
+	}`
+	wRP, _ := zw.Create("dragon_rp/manifest.json")
+	_, _ = wRP.Write([]byte(rpManifest))
+	wRPTexture, _ := zw.Create("dragon_rp/textures/dragon.png")
+	_, _ = wRPTexture.Write([]byte(`fake-image-bytes`))
+
+	_ = zw.Close()
+
+	// Install archive
+	packs, err := InstallAllPacks(serverDir, bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("InstallAllPacks failed: %v", err)
+	}
+	if len(packs) != 2 {
+		t.Fatalf("expected 2 packs installed, got %d", len(packs))
+	}
+
+	// Verify both packs are listed
+	installed, err := ListInstalledPacks(serverDir)
+	if err != nil || len(installed) != 2 {
+		t.Fatalf("expected 2 installed packs, got %d", len(installed))
+	}
+
+	// Verify folders on disk
+	bpFile := filepath.Join(serverDir, "behavior_packs", "Super_Dragon_BP", "entities", "dragon.json")
+	if _, err := os.Stat(bpFile); err != nil {
+		t.Fatalf("expected behavior pack file on disk: %v", err)
+	}
+	rpFile := filepath.Join(serverDir, "resource_packs", "Super_Dragon_RP", "textures", "dragon.png")
+	if _, err := os.Stat(rpFile); err != nil {
+		t.Fatalf("expected resource pack file on disk: %v", err)
+	}
+
+	// Now activate the behavior pack
+	_, err = SetPackActive(serverDir, "behavior", "Super_Dragon_BP", true)
+	if err != nil {
+		t.Fatalf("SetPackActive on BP failed: %v", err)
+	}
+
+	// Verify that companion RP was auto-activated!
+	levelName := GetActiveLevelName(serverDir)
+	rpRefs, err := GetWorldPackRefs(serverDir, levelName, "resource")
+	if err != nil || len(rpRefs) != 1 {
+		t.Fatalf("expected companion RP to be auto-activated, got refs: %+v", rpRefs)
+	}
+	if rpRefs[0].PackID != rpUUID {
+		t.Errorf("expected companion RP UUID %s, got %s", rpUUID, rpRefs[0].PackID)
+	}
+
+	// Verify that texturepack-required was auto-enabled for Android clients
+	cfg := GetAddonConfig(serverDir)
+	if !cfg.TexturePackRequired {
+		t.Errorf("expected texturepack-required to be automatically enabled")
+	}
+}
+

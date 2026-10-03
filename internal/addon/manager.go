@@ -36,6 +36,10 @@ type PackManifest struct {
 		Type string `json:"type"`
 		UUID string `json:"uuid"`
 	} `json:"modules"`
+	Dependencies []struct {
+		UUID    string      `json:"uuid"`
+		Version interface{} `json:"version,omitempty"`
+	} `json:"dependencies,omitempty"`
 }
 
 // WorldPackRef represents an entry in world_behavior_packs.json or world_resource_packs.json.
@@ -202,34 +206,45 @@ func ListInstalledPacks(serverDir string) ([]InstalledPack, error) {
 	return packs, nil
 }
 
-// InstallPack unzips a .mcpack or .zip into the appropriate pack directory.
-func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, error) {
+// InstallAllPacks unzips an archive and extracts all behavior and resource packs found within it.
+func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPack, error) {
 	zipReader, err := zip.NewReader(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("invalid archive: %w", err)
 	}
 
-	// 1. Find and parse manifest.json to identify pack type and identity
-	var manifestData []byte
-	var manifestPrefix string
+	type manifestEntry struct {
+		data   []byte
+		prefix string
+	}
+
+	var manifests []manifestEntry
 	for _, f := range zipReader.File {
 		if strings.EqualFold(filepath.Base(f.Name), "manifest.json") {
 			rc, err := f.Open()
 			if err == nil {
-				manifestData, _ = io.ReadAll(rc)
+				data, _ := io.ReadAll(rc)
 				rc.Close()
-				cleaned := filepath.Clean(f.Name)
-				dir := filepath.Dir(cleaned)
-				if dir != "." && dir != "/" && dir != "" {
-					manifestPrefix = dir + "/"
+				if len(data) > 0 {
+					cleaned := filepath.Clean(f.Name)
+					dir := filepath.Dir(cleaned)
+					prefix := ""
+					if dir != "." && dir != "/" && dir != "" {
+						prefix = dir + "/"
+					}
+					manifests = append(manifests, manifestEntry{
+						data:   data,
+						prefix: prefix,
+					})
 				}
-				break
 			}
 		}
 	}
 
-	if len(manifestData) == 0 {
-		var firstInstalled *InstalledPack
+	var installedPacks []InstalledPack
+
+	// If no manifest.json found at all, search for nested .mcpack or .zip files
+	if len(manifests) == 0 {
 		for _, f := range zipReader.File {
 			lowerName := strings.ToLower(f.Name)
 			if strings.HasSuffix(lowerName, ".mcpack") || strings.HasSuffix(lowerName, ".zip") {
@@ -242,116 +257,135 @@ func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, e
 				if err != nil || len(packBytes) == 0 {
 					continue
 				}
-				p, err := InstallPack(serverDir, bytes.NewReader(packBytes), int64(len(packBytes)))
-				if err == nil && firstInstalled == nil {
-					firstInstalled = p
+				subPacks, err := InstallAllPacks(serverDir, bytes.NewReader(packBytes), int64(len(packBytes)))
+				if err == nil && len(subPacks) > 0 {
+					installedPacks = append(installedPacks, subPacks...)
 				}
 			}
 		}
-		if firstInstalled != nil {
-			return firstInstalled, nil
+		if len(installedPacks) > 0 {
+			return installedPacks, nil
 		}
 		return nil, fmt.Errorf("archive does not contain a valid manifest.json or .mcpack files")
 	}
 
-	var mf PackManifest
-	if err := json.Unmarshal(manifestData, &mf); err != nil {
-		return nil, fmt.Errorf("malformed manifest.json: %w", err)
-	}
-
-	packType := "resource"
-	for _, m := range mf.Modules {
-		if m.Type == "data" {
-			packType = "behavior"
-			break
-		}
-	}
-
-	folderName := mf.Header.Name
-	if folderName == "" {
-		folderName = mf.Header.UUID
-	}
-	// Sanitize folder name
-	folderName = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			return r
-		}
-		return '_'
-	}, folderName)
-
-	var targetDir string
-	if packType == "behavior" {
-		targetDir = filepath.Join(serverDir, "behavior_packs", folderName)
-	} else {
-		targetDir = filepath.Join(serverDir, "resource_packs", folderName)
-	}
-
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		return nil, err
-	}
-
-	// 2. Extract contents
-	for _, f := range zipReader.File {
-		cleaned := filepath.Clean(f.Name)
-		if strings.HasPrefix(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
-			continue
+	// Process each manifest found in the archive
+	for _, m := range manifests {
+		var mf PackManifest
+		if err := json.Unmarshal(m.data, &mf); err != nil {
+			continue // Skip malformed manifest
 		}
 
-		// Strip enclosing subfolder prefix if present so manifest.json is at targetDir root
-		if manifestPrefix != "" {
-			if strings.HasPrefix(f.Name, manifestPrefix) {
-				cleaned = filepath.Clean(strings.TrimPrefix(f.Name, manifestPrefix))
-			} else {
-				continue
+		packType := "resource"
+		for _, mod := range mf.Modules {
+			if mod.Type == "data" {
+				packType = "behavior"
+				break
 			}
 		}
-		if cleaned == "" || cleaned == "." {
+
+		folderName := mf.Header.Name
+		if folderName == "" {
+			folderName = mf.Header.UUID
+		}
+		// Sanitize folder name
+		folderName = strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+				return r
+			}
+			return '_'
+		}, folderName)
+
+		var targetDir string
+		if packType == "behavior" {
+			targetDir = filepath.Join(serverDir, "behavior_packs", folderName)
+		} else {
+			targetDir = filepath.Join(serverDir, "resource_packs", folderName)
+		}
+
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
 			continue
 		}
 
-		destPath := filepath.Join(targetDir, cleaned)
-		targetDirClean := filepath.Clean(targetDir) + string(filepath.Separator)
-		if !strings.HasPrefix(filepath.Clean(destPath), targetDirClean) {
-			continue // Zip Slip path traversal attempt blocked
-		}
+		for _, f := range zipReader.File {
+			cleaned := filepath.Clean(f.Name)
+			if strings.HasPrefix(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
+				continue
+			}
 
-		if f.FileInfo().IsDir() {
-			_ = os.MkdirAll(destPath, f.Mode())
-			continue
-		}
+			if m.prefix != "" {
+				if strings.HasPrefix(f.Name, m.prefix) {
+					cleaned = filepath.Clean(strings.TrimPrefix(f.Name, m.prefix))
+				} else {
+					continue
+				}
+			}
+			if cleaned == "" || cleaned == "." {
+				continue
+			}
 
-		_ = os.MkdirAll(filepath.Dir(destPath), 0755)
-		outFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			continue
-		}
+			destPath := filepath.Join(targetDir, cleaned)
+			targetDirClean := filepath.Clean(targetDir) + string(filepath.Separator)
+			if !strings.HasPrefix(filepath.Clean(destPath), targetDirClean) {
+				continue
+			}
 
-		rc, err := f.Open()
-		if err != nil {
+			if f.FileInfo().IsDir() {
+				_ = os.MkdirAll(destPath, f.Mode())
+				continue
+			}
+
+			_ = os.MkdirAll(filepath.Dir(destPath), 0755)
+			outFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			if err != nil {
+				continue
+			}
+
+			rc, err := f.Open()
+			if err != nil {
+				outFile.Close()
+				continue
+			}
+			_, _ = io.Copy(outFile, rc)
+			rc.Close()
 			outFile.Close()
-			continue
 		}
-		_, _ = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
+
+		_ = os.WriteFile(filepath.Join(targetDir, bsmInstalledMarker), []byte("installed-by-bsm\n"), 0644)
+
+		verStr := "1.0.0"
+		if len(mf.Header.Version) >= 3 {
+			verStr = fmt.Sprintf("%d.%d.%d", mf.Header.Version[0], mf.Header.Version[1], mf.Header.Version[2])
+		}
+
+		installedPacks = append(installedPacks, InstalledPack{
+			Type:        packType,
+			Folder:      folderName,
+			Name:        mf.Header.Name,
+			Description: mf.Header.Description,
+			UUID:        mf.Header.UUID,
+			Version:     verStr,
+			VersionInts: mf.Header.Version,
+		})
 	}
 
-	// Write marker file so ListInstalledPacks knows this is a user-installed pack
-	_ = os.WriteFile(filepath.Join(targetDir, bsmInstalledMarker), []byte("installed-by-bsm\n"), 0644)
-
-	verStr := "1.0.0"
-	if len(mf.Header.Version) >= 3 {
-		verStr = fmt.Sprintf("%d.%d.%d", mf.Header.Version[0], mf.Header.Version[1], mf.Header.Version[2])
+	if len(installedPacks) == 0 {
+		return nil, fmt.Errorf("failed to extract any valid packs from archive")
 	}
 
-	return &InstalledPack{
-		Type:        packType,
-		Folder:      folderName,
-		Name:        mf.Header.Name,
-		Description: mf.Header.Description,
-		UUID:        mf.Header.UUID,
-		Version:     verStr,
-	}, nil
+	return installedPacks, nil
+}
+
+// InstallPack unzips a .mcpack, .mcaddon, or .zip into the appropriate pack directory.
+func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, error) {
+	packs, err := InstallAllPacks(serverDir, r, size)
+	if err != nil {
+		return nil, err
+	}
+	if len(packs) == 0 {
+		return nil, fmt.Errorf("no packs found in archive")
+	}
+	return &packs[0], nil
 }
 
 // DeletePack removes an installed pack folder and deactivates it from world pack files.
@@ -447,6 +481,33 @@ func SetPackActive(serverDir, packType, folder string, active bool) (*InstalledP
 
 	if err := SaveWorldPackRefs(serverDir, levelName, packType, newRefs); err != nil {
 		return nil, err
+	}
+
+	if active {
+		if packType == "resource" {
+			_ = UpdateAddonConfig(serverDir, true)
+		} else if packType == "behavior" && len(mf.Dependencies) > 0 {
+			// Auto-activate companion resource pack if referenced in dependencies
+			if rpEntries, err := os.ReadDir(filepath.Join(serverDir, "resource_packs")); err == nil {
+				for _, entry := range rpEntries {
+					if !entry.IsDir() {
+						continue
+					}
+					rpManifestPath := filepath.Join(serverDir, "resource_packs", entry.Name(), "manifest.json")
+					if rpData, err := os.ReadFile(rpManifestPath); err == nil {
+						var rpMf PackManifest
+						if err := json.Unmarshal(rpData, &rpMf); err == nil {
+							for _, dep := range mf.Dependencies {
+								if strings.EqualFold(dep.UUID, rpMf.Header.UUID) {
+									_, _ = SetPackActive(serverDir, "resource", entry.Name(), true)
+									break
+								}
+							}
+						}
+					}
+				}
+			}
+		}
 	}
 
 	verStr := fmt.Sprintf("%d.%d.%d", verInts[0], verInts[1], verInts[2])

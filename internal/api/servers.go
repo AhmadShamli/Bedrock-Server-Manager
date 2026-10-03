@@ -19,18 +19,20 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/raknet"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/resourcemonitor"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/go-chi/chi/v5"
 )
 
 type ServerHandler struct {
-	db            *database.ManagerDB
-	engine        engine.ServerEngine
-	allocator     *allocator.PortAllocator
-	dataDir       string
-	telemetry     *telemetry.TelemetryCollector
-	metricsDB     *database.MetricsDB
-	playerManager *player.Manager
+	db              *database.ManagerDB
+	engine          engine.ServerEngine
+	allocator       *allocator.PortAllocator
+	dataDir         string
+	telemetry       *telemetry.TelemetryCollector
+	metricsDB       *database.MetricsDB
+	playerManager   *player.Manager
+	resourceMonitor *resourcemonitor.ResourceMonitor
 }
 
 func NewServerHandler(
@@ -51,6 +53,11 @@ func NewServerHandler(
 		metricsDB:     mdb,
 		playerManager: pm,
 	}
+}
+
+// SetResourceMonitor injects the automated resource warning monitor.
+func (h *ServerHandler) SetResourceMonitor(rm *resourcemonitor.ResourceMonitor) {
+	h.resourceMonitor = rm
 }
 
 // List returns all servers accessible to the caller.
@@ -623,6 +630,72 @@ func (h *ServerHandler) Stats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(stats)
+}
+
+// ResourceStatus returns evaluated capacity utilization vs allocated limits for this server.
+func (h *ServerHandler) ResourceStatus(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	server, err := h.db.GetServer(r.Context(), id)
+	if err != nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	if h.resourceMonitor != nil {
+		status := h.resourceMonitor.GetServerResourceStatus(server.ID)
+		if status == nil {
+			var cpuPercent float64
+			var ramBytes int64
+			if server.Status == models.ServerStatusRunning {
+				if stats, err := h.engine.GetContainerStats(r.Context(), server); err == nil && stats != nil {
+					cpuPercent = stats.CPUPercent
+					ramBytes = stats.RAMBytes
+				}
+			}
+			status, _, _ = h.resourceMonitor.CheckServer(r.Context(), server, cpuPercent, ramBytes)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(status)
+		return
+	}
+
+	// Fallback calculation if resourceMonitor is not explicitly injected
+	allocatedRAM, err := engine.ParseMemoryBytes(server.MemoryLimit)
+	if err != nil || allocatedRAM <= 0 {
+		allocatedRAM = 2 * 1024 * 1024 * 1024
+	}
+	allocatedCPUCores := server.CPULimit
+	if allocatedCPUCores <= 0 {
+		allocatedCPUCores = 2.0
+	}
+
+	var cpuPercent float64
+	var ramBytes int64
+	if server.Status == models.ServerStatusRunning {
+		if stats, err := h.engine.GetContainerStats(r.Context(), server); err == nil && stats != nil {
+			cpuPercent = stats.CPUPercent
+			ramBytes = stats.RAMBytes
+		}
+	}
+
+	ramPercent := (float64(ramBytes) / float64(allocatedRAM)) * 100.0
+	cpuPercentRatio := (cpuPercent / (allocatedCPUCores * 100.0)) * 100.0
+
+	res := map[string]interface{}{
+		"server_id":           server.ID,
+		"server_name":         server.Name,
+		"ram_used_bytes":      ramBytes,
+		"ram_allocated_bytes": allocatedRAM,
+		"ram_percent":         ramPercent,
+		"cpu_used_percent":    cpuPercent,
+		"cpu_allocated_cores": allocatedCPUCores,
+		"cpu_percent":         cpuPercentRatio,
+		"is_nearly_full":      ramPercent >= 85.0 || cpuPercentRatio >= 85.0,
+		"threshold_percent":   85.0,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
 }
 
 // MetricsResponse represents the telemetry payload for charts in instance view.
