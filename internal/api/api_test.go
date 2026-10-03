@@ -1446,8 +1446,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if healthRes["status"] != "healthy" {
 		t.Errorf("expected status healthy, got %v", healthRes["status"])
 	}
-	if healthRes["version"] != "1.8.0" {
-		t.Errorf("expected version 1.8.0 in /api/health, got %v", healthRes["version"])
+	if healthRes["version"] != "1.8.1" {
+		t.Errorf("expected version 1.8.1 in /api/health, got %v", healthRes["version"])
 	}
 
 	// Test /api/version
@@ -1461,8 +1461,8 @@ func TestVersionAndHealthEndpoints(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &verRes); err != nil {
 		t.Fatalf("failed to decode version response: %v", err)
 	}
-	if verRes["version"] != "1.8.0" {
-		t.Errorf("expected version 1.8.0 in /api/version, got %v", verRes["version"])
+	if verRes["version"] != "1.8.1" {
+		t.Errorf("expected version 1.8.1 in /api/version, got %v", verRes["version"])
 	}
 	if verRes["app_name"] != "Bedrock Server Manager (BSM)" {
 		t.Errorf("expected app_name Bedrock Server Manager (BSM), got %v", verRes["app_name"])

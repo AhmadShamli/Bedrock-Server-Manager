@@ -18,6 +18,150 @@ interface ServerHubProps {
   user: User;
 }
 
+// Known Bedrock server.properties with limited discrete options
+const KNOWN_PROPERTY_OPTIONS: Record<string, string[]> = {
+  'gamemode': ['survival', 'creative', 'adventure'],
+  'difficulty': ['peaceful', 'easy', 'normal', 'hard'],
+  'default-player-permission-level': ['visitor', 'member', 'operator'],
+  'server-authoritative-movement': ['client-auth', 'server-auth', 'server-auth-with-rewind'],
+  'compression-algorithm': ['zlib', 'snappy'],
+  'chat-restriction': ['None', 'Dropped', 'Disabled'],
+  'content-log-level': ['verbose', 'info', 'warn', 'error'],
+  'script-debugger-auto-attach': ['disabled', 'connect', 'listen'],
+  'transport': ['raknet', 'nethernet'],
+};
+
+// Known boolean properties in Bedrock Dedicated Server (accepting true/false)
+const KNOWN_BOOLEAN_PROPERTY_KEYS = new Set([
+  'force-gamemode',
+  'allow-cheats',
+  'online-mode',
+  'allow-list',
+  'white-list',
+  'enable-lan-visibility',
+  'texturepack-required',
+  'content-log-file-enabled',
+  'content-log-console-output-enabled',
+  'server-authoritative-movement-strict',
+  'server-authoritative-dismount-strict',
+  'server-authoritative-entity-interactions-strict',
+  'disable-player-interaction',
+  'client-side-chunk-generation-enabled',
+  'block-network-ids-are-hashes',
+  'disable-persona',
+  'disable-custom-skins',
+  'allow-outbound-script-debugging',
+  'allow-inbound-script-debugging',
+  'correct-player-movement',
+  'emit-server-telemetry',
+  'emit-server-telemetry-strict',
+  'websocket-encryption',
+  'server-authoritative-block-breaking',
+  'server-authoritative-sound',
+  'pvp',
+]);
+
+// Known Bedrock server.properties default values
+const KNOWN_DEFAULT_PROPERTIES: Record<string, string> = {
+  'server-name': 'Dedicated Server',
+  'gamemode': 'survival',
+  'force-gamemode': 'false',
+  'difficulty': 'easy',
+  'allow-cheats': 'false',
+  'max-players': '10',
+  'online-mode': 'true',
+  'allow-list': 'false',
+  'white-list': 'false',
+  'server-port': '19132',
+  'server-portv6': '19133',
+  'transport': 'raknet',
+  'enable-lan-visibility': 'true',
+  'view-distance': '32',
+  'tick-distance': '4',
+  'player-idle-timeout': '30',
+  'max-threads': '8',
+  'level-name': 'Bedrock level',
+  'level-seed': '',
+  'default-player-permission-level': 'member',
+  'texturepack-required': 'false',
+  'content-log-file-enabled': 'false',
+  'content-log-console-output-enabled': 'false',
+  'content-log-level': 'info',
+  'compression-threshold': '1',
+  'compression-algorithm': 'zlib',
+  'server-authoritative-movement': 'server-auth',
+  'server-authoritative-movement-strict': 'false',
+  'server-authoritative-dismount-strict': 'false',
+  'server-authoritative-entity-interactions-strict': 'false',
+  'player-position-acceptance-threshold': '0.5',
+  'player-movement-action-direction-threshold': '0.85',
+  'server-authoritative-block-breaking-pick-range-scalar': '1.5',
+  'chat-restriction': 'None',
+  'disable-player-interaction': 'false',
+  'client-side-chunk-generation-enabled': 'true',
+  'block-network-ids-are-hashes': 'true',
+  'disable-persona': 'false',
+  'disable-custom-skins': 'false',
+  'server-build-radius-ratio': 'Disabled',
+  'allow-outbound-script-debugging': 'false',
+  'allow-inbound-script-debugging': 'false',
+  'script-debugger-auto-attach': 'disabled',
+  'correct-player-movement': 'false',
+  'emit-server-telemetry': 'false',
+  'emit-server-telemetry-strict': 'false',
+  'websocket-encryption': 'true',
+  'pvp': 'true',
+};
+
+const getPropertyDefaultValue = (key: string): string | undefined => {
+  const normalizedKey = key.trim().toLowerCase();
+  if (KNOWN_DEFAULT_PROPERTIES[normalizedKey] !== undefined) {
+    return KNOWN_DEFAULT_PROPERTIES[normalizedKey];
+  }
+  if (
+    KNOWN_BOOLEAN_PROPERTY_KEYS.has(normalizedKey) ||
+    normalizedKey.startsWith('enable-') ||
+    normalizedKey.startsWith('disable-') ||
+    normalizedKey.endsWith('-enabled') ||
+    normalizedKey.endsWith('-strict')
+  ) {
+    return 'false';
+  }
+  return undefined;
+};
+
+const getPropertyDropdownOptions = (key: string, value: string): string[] | null => {
+  const normalizedKey = key.trim().toLowerCase();
+
+  // 1. Check known multi-option properties
+  if (KNOWN_PROPERTY_OPTIONS[normalizedKey]) {
+    return KNOWN_PROPERTY_OPTIONS[normalizedKey];
+  }
+
+  // 2. Check known boolean properties
+  if (KNOWN_BOOLEAN_PROPERTY_KEYS.has(normalizedKey)) {
+    return ['true', 'false'];
+  }
+
+  // 3. Check if current value matches true/false
+  const trimmedVal = (value || '').trim().toLowerCase();
+  if (trimmedVal === 'true' || trimmedVal === 'false') {
+    return ['true', 'false'];
+  }
+
+  // 4. Any boolean naming patterns
+  if (
+    normalizedKey.startsWith('enable-') ||
+    normalizedKey.startsWith('disable-') ||
+    normalizedKey.endsWith('-enabled') ||
+    normalizedKey.endsWith('-strict')
+  ) {
+    return ['true', 'false'];
+  }
+
+  return null;
+};
+
 export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -2641,7 +2785,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     onChange={(e) => setEditServerMode(e.target.value)}
                     className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
                   >
-                    <option value="survival">Survival</option>
+                    <option value="survival">Survival (Default)</option>
                     <option value="creative">Creative</option>
                     <option value="adventure">Adventure</option>
                   </select>
@@ -2655,7 +2799,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
                   >
                     <option value="peaceful">Peaceful</option>
-                    <option value="easy">Easy</option>
+                    <option value="easy">Easy (Default)</option>
                     <option value="normal">Normal</option>
                     <option value="hard">Hard</option>
                   </select>
@@ -2850,17 +2994,77 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs bg-obsidian-950 p-4 rounded-xl border border-obsidian-800 max-h-[520px] overflow-y-auto">
                   {(propKeys || [])
                     .filter((key) => key && key.toLowerCase().includes(propertyFilter.toLowerCase()))
-                    .map((key) => (
-                      <div key={key}>
-                        <label className="block text-slate-400 mb-1 text-[11px] font-bold">{key}</label>
-                        <input
-                          type="text"
-                          value={(properties && properties[key]) || ''}
-                          onChange={(e) => setProperties({ ...(properties || {}), [key]: e.target.value })}
-                          className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
-                        />
-                      </div>
-                    ))}
+                    .map((key) => {
+                      const val = (properties && properties[key]) ?? '';
+                      const options = getPropertyDropdownOptions(key, val);
+                      const defaultVal = getPropertyDefaultValue(key);
+
+                      if (options) {
+                        const matchingOption = options.find((opt) => opt.toLowerCase() === val.toLowerCase());
+                        const selectedVal = matchingOption || val;
+
+                        return (
+                          <div key={key}>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-slate-400 text-[11px] font-bold">{key}</label>
+                              <div className="flex items-center gap-1.5 font-mono text-[10px]">
+                                {defaultVal !== undefined && defaultVal !== '' && (
+                                  <span className="text-slate-500">
+                                    default: <span className="text-emerald-400/90 font-medium">{defaultVal}</span>
+                                  </span>
+                                )}
+                                <span className="text-slate-600">|</span>
+                                <span className="text-emerald-400/80">
+                                  {options.length === 2 && options.includes('true') && options.includes('false')
+                                    ? 'true / false'
+                                    : 'dropdown'}
+                                </span>
+                              </div>
+                            </div>
+                            <select
+                              value={selectedVal}
+                              onChange={(e) => setProperties({ ...(properties || {}), [key]: e.target.value })}
+                              className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500 font-mono cursor-pointer"
+                            >
+                              {val !== '' && !matchingOption && (
+                                <option value={val}>{val} (custom)</option>
+                              )}
+                              {val === '' && !options.includes('') && (
+                                <option value="">Select option...</option>
+                              )}
+                              {options.map((opt) => {
+                                const isDefault = defaultVal !== undefined && opt.toLowerCase() === defaultVal.toLowerCase();
+                                return (
+                                  <option key={opt} value={opt}>
+                                    {opt}{isDefault ? ' (Default)' : ''}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={key}>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-slate-400 text-[11px] font-bold">{key}</label>
+                            {defaultVal !== undefined && defaultVal !== '' && (
+                              <span className="text-slate-500 font-mono text-[10px]">
+                                default: <span className="text-emerald-400/90 font-medium">{defaultVal}</span>
+                              </span>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            value={val}
+                            placeholder={defaultVal !== undefined && defaultVal !== '' ? `Default: ${defaultVal}` : ''}
+                            onChange={(e) => setProperties({ ...(properties || {}), [key]: e.target.value })}
+                            className="w-full px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500 font-mono placeholder:text-slate-600"
+                          />
+                        </div>
+                      );
+                    })}
                 </div>
               </>
             )}
@@ -3021,7 +3225,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   className="px-3 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs"
                 >
                   <option value="operator">Operator (Op)</option>
-                  <option value="member">Member</option>
+                  <option value="member">Member (Default)</option>
                   <option value="visitor">Visitor</option>
                 </select>
                 <button
