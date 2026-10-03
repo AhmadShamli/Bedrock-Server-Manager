@@ -9,50 +9,65 @@ import (
 )
 
 func TestSearchCurseForge(t *testing.T) {
+	var requestedGameID string
 	// Mock CurseForge server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("x-api-key") != "test-cf-key" {
 			http.Error(w, `{"error": "Unauthorized"}`, http.StatusUnauthorized)
 			return
 		}
-		if !strings.Contains(r.URL.Path, "/mods/search") {
-			http.NotFound(w, r)
+		if strings.Contains(r.URL.Path, "/categories") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{"id": 4559, "gameId": 78022, "name": "Addons", "slug": "addons", "isClass": true},
+					{"id": 12, "gameId": 78022, "name": "Resource Packs", "slug": "texture-packs", "isClass": true}
+				]
+			}`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "/mods/search") {
+			requestedGameID = r.URL.Query().Get("gameId")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"id": 12345,
+						"name": "Super Backpacks",
+						"summary": "Adds backpacks for Bedrock",
+						"links": {"websiteUrl": "https://curseforge.com/mc/12345"},
+						"downloadCount": 9876,
+						"logo": {"thumbnailUrl": "https://img.example.com/icon.png"},
+						"authors": [{"name": "SteveCraft"}],
+						"categories": [{"id": 4559, "name": "Bedrock Addons"}],
+						"latestFiles": [
+							{
+								"id": 999,
+								"displayName": "v1.2.0",
+								"fileName": "backpacks.mcaddon",
+								"downloadUrl": "https://cdn.example.com/backpacks.mcaddon"
+							}
+						]
+					}
+				],
+				"pagination": {
+					"index": 0,
+					"pageSize": 20,
+					"resultCount": 1,
+					"totalCount": 1
+				}
+			}`))
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": [
-				{
-					"id": 12345,
-					"name": "Super Backpacks",
-					"summary": "Adds backpacks for Bedrock",
-					"links": {"websiteUrl": "https://curseforge.com/mc/12345"},
-					"downloadCount": 9876,
-					"logo": {"thumbnailUrl": "https://img.example.com/icon.png"},
-					"authors": [{"name": "SteveCraft"}],
-					"categories": [{"id": 4559, "name": "Bedrock Addons"}],
-					"latestFiles": [
-						{
-							"id": 999,
-							"displayName": "v1.2.0",
-							"fileName": "backpacks.mcaddon",
-							"downloadUrl": "https://cdn.example.com/backpacks.mcaddon"
-						}
-					]
-				}
-			],
-			"pagination": {
-				"index": 0,
-				"pageSize": 20,
-				"resultCount": 1,
-				"totalCount": 1
-			}
-		}`))
+		http.NotFound(w, r)
 	}))
 	defer server.Close()
 
-	// Direct test using client pointing to mock server
+	origCFURL := curseForgeBaseURL
+	curseForgeBaseURL = server.URL
+	defer func() { curseForgeBaseURL = origCFURL }()
+
 	client := server.Client()
 
 	// Test missing API key
@@ -61,16 +76,20 @@ func TestSearchCurseForge(t *testing.T) {
 		t.Fatal("expected error with missing API key")
 	}
 
-	// Test with test server by sending request directly or via helper
-	req, _ := http.NewRequestWithContext(context.Background(), "GET", server.URL+"/mods/search?query=backpacks", nil)
-	req.Header.Set("x-api-key", "test-cf-key")
-	resp, err := client.Do(req)
+	// Test valid search
+	res, err := SearchCurseForge(context.Background(), client, "test-cf-key", "backpacks", "addon", 1, 10)
 	if err != nil {
-		t.Fatalf("request failed: %v", err)
+		t.Fatalf("SearchCurseForge failed: %v", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", resp.StatusCode)
+
+	if requestedGameID != "78022" {
+		t.Fatalf("expected gameId 78022 for Bedrock, got %s", requestedGameID)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(res.Items))
+	}
+	if res.Items[0].Name != "Super Backpacks" {
+		t.Fatalf("expected item name Super Backpacks, got %s", res.Items[0].Name)
 	}
 }
 

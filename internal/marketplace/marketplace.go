@@ -10,18 +10,25 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
 const (
 	CurseForgeBaseURL = "https://api.curseforge.com/v1"
 	ModrinthBaseURL   = "https://api.modrinth.com/v2"
-	MinecraftGameID   = 432
-	// CurseForge Bedrock Addon class ID is 4559; Resource Packs is 12.
-	CurseForgeClassBedrockAddons = 4559
-	CurseForgeClassResourcePacks = 12
+
+	// MinecraftBedrockGameID is CurseForge's official game ID for Minecraft Bedrock Edition.
+	// Minecraft Java Edition is 432.
+	MinecraftBedrockGameID = 78022
 
 	MaxDownloadSize = 100 << 20 // 100 MB
+)
+
+var (
+	curseForgeBaseURL = CurseForgeBaseURL
+	modrinthBaseURL   = ModrinthBaseURL
 )
 
 // SafeHTTPClient returns an http.Client with a timeout and IP safety checks.
@@ -141,6 +148,69 @@ type cfPagination struct {
 	TotalCount int `json:"totalCount"`
 }
 
+// CFCategory represents a category or class returned by CurseForge.
+type CFCategory struct {
+	ID      int    `json:"id"`
+	GameID  int    `json:"gameId"`
+	Name    string `json:"name"`
+	Slug    string `json:"slug"`
+	ClassID int    `json:"classId,omitempty"`
+	IsClass bool   `json:"isClass,omitempty"`
+}
+
+var (
+	cfCategoriesMu    sync.RWMutex
+	cfCategoriesCache []CFCategory
+	cfCategoriesExp   time.Time
+)
+
+// FetchCurseForgeCategories retrieves and caches categories for Minecraft Bedrock (gameId 78022).
+func FetchCurseForgeCategories(ctx context.Context, client *http.Client, apiKey string) ([]CFCategory, error) {
+	cfCategoriesMu.RLock()
+	if len(cfCategoriesCache) > 0 && time.Now().Before(cfCategoriesExp) {
+		cats := cfCategoriesCache
+		cfCategoriesMu.RUnlock()
+		return cats, nil
+	}
+	cfCategoriesMu.RUnlock()
+
+	if client == nil {
+		client = SafeHTTPClient(15*time.Second, false)
+	}
+
+	endpoint := fmt.Sprintf("%s/categories?gameId=%d", curseForgeBaseURL, MinecraftBedrockGameID)
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("curseforge categories status %d", resp.StatusCode)
+	}
+
+	var res struct {
+		Data []CFCategory `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, err
+	}
+
+	cfCategoriesMu.Lock()
+	cfCategoriesCache = res.Data
+	cfCategoriesExp = time.Now().Add(6 * time.Hour)
+	cfCategoriesMu.Unlock()
+
+	return res.Data, nil
+}
+
 // SearchCurseForge queries the CurseForge Eternal API for Minecraft Bedrock addons.
 func SearchCurseForge(ctx context.Context, client *http.Client, apiKey, query, category string, page, pageSize int) (*SearchResult, error) {
 	if apiKey == "" {
@@ -157,26 +227,41 @@ func SearchCurseForge(ctx context.Context, client *http.Client, apiKey, query, c
 	}
 	index := (page - 1) * pageSize
 
-	endpoint := fmt.Sprintf("%s/mods/search", CurseForgeBaseURL)
+	endpoint := fmt.Sprintf("%s/mods/search", curseForgeBaseURL)
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
 	}
 
 	q := u.Query()
-	q.Set("gameId", strconv.Itoa(MinecraftGameID))
+	q.Set("gameId", strconv.Itoa(MinecraftBedrockGameID))
 	q.Set("pageSize", strconv.Itoa(pageSize))
 	q.Set("index", strconv.Itoa(index))
 	q.Set("sortField", "2") // Popularity
 	q.Set("sortOrder", "desc")
 
-	if category == "resource" {
-		q.Set("classId", strconv.Itoa(CurseForgeClassResourcePacks))
-	} else if category == "behavior" || category == "addon" {
-		q.Set("classId", strconv.Itoa(CurseForgeClassBedrockAddons))
-	} else if category == "" {
-		// Default to Bedrock Addons
-		q.Set("classId", strconv.Itoa(CurseForgeClassBedrockAddons))
+	// Dynamic category matching against Bedrock categories
+	if category != "" && category != "all" {
+		cats, _ := FetchCurseForgeCategories(ctx, client, apiKey)
+		for _, c := range cats {
+			lowerSlug := strings.ToLower(c.Slug)
+			lowerName := strings.ToLower(c.Name)
+			if category == "resource" && (strings.Contains(lowerSlug, "resource") || strings.Contains(lowerSlug, "texture") || strings.Contains(lowerName, "texture")) {
+				if c.IsClass {
+					q.Set("classId", strconv.Itoa(c.ID))
+				} else {
+					q.Set("categoryId", strconv.Itoa(c.ID))
+				}
+				break
+			} else if (category == "behavior" || category == "addon") && (strings.Contains(lowerSlug, "addon") || strings.Contains(lowerSlug, "behavior") || strings.Contains(lowerName, "addon")) {
+				if c.IsClass {
+					q.Set("classId", strconv.Itoa(c.ID))
+				} else {
+					q.Set("categoryId", strconv.Itoa(c.ID))
+				}
+				break
+			}
+		}
 	}
 
 	if query != "" {
@@ -269,7 +354,7 @@ func GetCurseForgeDownloadURL(ctx context.Context, client *http.Client, apiKey s
 		client = SafeHTTPClient(15*time.Second, false)
 	}
 
-	endpoint := fmt.Sprintf("%s/mods/%d/files/%d/download-url", CurseForgeBaseURL, modID, fileID)
+	endpoint := fmt.Sprintf("%s/mods/%d/files/%d/download-url", curseForgeBaseURL, modID, fileID)
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return "", err
@@ -347,7 +432,7 @@ func SearchModrinth(ctx context.Context, client *http.Client, query, category st
 	}
 	offset := (page - 1) * pageSize
 
-	endpoint := fmt.Sprintf("%s/search", ModrinthBaseURL)
+	endpoint := fmt.Sprintf("%s/search", modrinthBaseURL)
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err
@@ -398,6 +483,7 @@ func SearchModrinth(ctx context.Context, client *http.Client, query, category st
 
 	items := make([]MarketplaceItem, 0, len(mrResp.Hits))
 	for _, hit := range mrResp.Hits {
+		cats := append([]string{"Java Edition"}, hit.Categories...)
 		items = append(items, MarketplaceItem{
 			ID:         hit.ProjectID,
 			Provider:   "modrinth",
@@ -406,7 +492,7 @@ func SearchModrinth(ctx context.Context, client *http.Client, query, category st
 			Author:     hit.Author,
 			IconURL:    hit.IconURL,
 			Downloads:  hit.Downloads,
-			Categories: hit.Categories,
+			Categories: cats,
 			PageURL:    fmt.Sprintf("https://modrinth.com/%s/%s", hit.ProjectType, hit.Slug),
 		})
 	}
@@ -424,7 +510,7 @@ func GetModrinthDownloadURL(ctx context.Context, client *http.Client, projectID 
 		client = SafeHTTPClient(15*time.Second, false)
 	}
 
-	endpoint := fmt.Sprintf("%s/project/%s/version", ModrinthBaseURL, url.PathEscape(projectID))
+	endpoint := fmt.Sprintf("%s/project/%s/version", modrinthBaseURL, url.PathEscape(projectID))
 	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return "", "", "", err
