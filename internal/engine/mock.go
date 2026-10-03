@@ -168,3 +168,7 @@ func (m *MockEngine) SubscribeLogs(serverID string) (<-chan string, func()) {
 
 	return ch, unsubscribe
 }
+
+func (m *MockEngine) ListNetworks(ctx context.Context) ([]string, error) {
+	return []string{"bridge", "host"}, nil
+}

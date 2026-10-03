@@ -2190,5 +2190,101 @@ func TestPlansAPIAndNormalUserQuotas(t *testing.T) {
 	}
 }
 
+func TestAPIServerDeploymentNetworkMode(t *testing.T) {
+	router, db, _, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+
+	ctx := t.Context()
+	adminUser, _ := db.CreateUser(ctx, "admin_net", "hash", models.RoleAdmin)
+	adminToken, _ := auth.GenerateJWT(jwtSecret, adminUser.ID, adminUser.Username, adminUser.Role, 1*time.Hour)
+
+	normalUser, _ := db.CreateUser(ctx, "normal_net", "hash", models.RoleUser)
+	normalToken, _ := auth.GenerateJWT(jwtSecret, normalUser.ID, normalUser.Username, normalUser.Role, 1*time.Hour)
+
+	// 1. List Networks
+	req := httptest.NewRequest("GET", "/api/servers/networks", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from /api/servers/networks, got %d", w.Code)
+	}
+	var netResp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &netResp)
+	nets, ok := netResp["networks"].([]interface{})
+	if !ok || len(nets) < 2 {
+		t.Fatalf("expected at least bridge and host in networks, got: %v", netResp)
+	}
+
+	// 2. Admin creates server with network_mode = "host"
+	adminPayload := `{
+		"id": "admin-host-srv",
+		"name": "Admin Host Server",
+		"port": 19132,
+		"portv6": 19133,
+		"network_mode": "host"
+	}`
+	req = httptest.NewRequest("POST", "/api/servers", strings.NewReader(adminPayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 from create host server, got %d: %s", w.Code, w.Body.String())
+	}
+
+	srv, err := db.GetServer(ctx, "admin-host-srv")
+	if err != nil {
+		t.Fatalf("GetServer failed: %v", err)
+	}
+	if srv.NetworkMode != "host" {
+		t.Errorf("expected server network_mode to be 'host', got '%s'", srv.NetworkMode)
+	}
+
+	// 3. Normal user tries to set network_mode = "host" -> must be forced to "bridge"
+	normalPayload := `{
+		"id": "normal-net-srv",
+		"name": "Normal User Server",
+		"port": 19134,
+		"portv6": 19135,
+		"network_mode": "host"
+	}`
+	req = httptest.NewRequest("POST", "/api/servers", strings.NewReader(normalPayload))
+	req.Header.Set("Authorization", "Bearer "+normalToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for normal user server, got %d: %s", w.Code, w.Body.String())
+	}
+
+	userSrv, err := db.GetServer(ctx, "normal-net-srv")
+	if err != nil {
+		t.Fatalf("GetServer failed: %v", err)
+	}
+	if userSrv.NetworkMode != "bridge" {
+		t.Errorf("expected normal user server network_mode to be forced to 'bridge', got '%s'", userSrv.NetworkMode)
+	}
+
+	// 4. Admin updates network_mode from "host" to "bridge"
+	updatePayload := `{"network_mode": "bridge"}`
+	req = httptest.NewRequest("PUT", "/api/servers/admin-host-srv", strings.NewReader(updatePayload))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from PUT /api/servers/admin-host-srv, got %d: %s", w.Code, w.Body.String())
+	}
+
+	updatedSrv, err := db.GetServer(ctx, "admin-host-srv")
+	if err != nil {
+		t.Fatalf("GetServer failed: %v", err)
+	}
+	if updatedSrv.NetworkMode != "bridge" {
+		t.Errorf("expected updated server network_mode to be 'bridge', got '%s'", updatedSrv.NetworkMode)
+	}
+}
+
 
 

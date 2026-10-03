@@ -70,6 +70,7 @@ export interface Server {
   container_id?: string;
   seed?: string;
   game_server_address?: string;
+  network_mode?: string;
   owner_user_id?: number;
   created_at: string;
   updated_at: string;

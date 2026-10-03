@@ -150,6 +150,19 @@ func (h *ServerHandler) SuggestPorts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ListNetworks returns available Docker deployment networks on the host.
+func (h *ServerHandler) ListNetworks(w http.ResponseWriter, r *http.Request) {
+	networks, err := h.engine.ListNetworks(r.Context())
+	if err != nil || len(networks) == 0 {
+		networks = []string{"bridge", "host"}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"networks": networks,
+		"default":  "bridge",
+	})
+}
+
 // Create registers and provisions a new server instance.
 func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims := GetUserClaims(r)
@@ -280,8 +293,16 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 			s.Seed = ""
 		}
 
+		// 7. Enforce Network Mode (Normal users restricted to standard bridge mode)
+		s.NetworkMode = "bridge"
+
 		s.OwnerUserID = &claims.UserID
 	} else if claims.Role == models.RoleAdmin {
+		if s.NetworkMode != "" {
+			s.NetworkMode = strings.TrimSpace(s.NetworkMode)
+		} else {
+			s.NetworkMode = "bridge"
+		}
 		if s.OwnerUserID != nil {
 			if _, err := h.db.GetUserByID(r.Context(), *s.OwnerUserID); err != nil {
 				s.OwnerUserID = nil
@@ -783,6 +804,7 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		CPULimit          *float64 `json:"cpu_limit"`
 		Seed              *string  `json:"seed"`
 		GameServerAddress *string  `json:"game_server_address"`
+		NetworkMode       *string  `json:"network_mode"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -866,6 +888,43 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.GameServerAddress != nil {
 		existing.GameServerAddress = strings.TrimSpace(*req.GameServerAddress)
+	}
+
+	networkModeChanged := false
+	if req.NetworkMode != nil {
+		newMode := strings.TrimSpace(*req.NetworkMode)
+		if newMode == "" {
+			newMode = "bridge"
+		}
+		if newMode != existing.NetworkMode {
+			existing.NetworkMode = newMode
+			networkModeChanged = true
+		}
+	}
+
+	if networkModeChanged {
+		status, _ := h.engine.GetServerStatus(r.Context(), existing)
+		wasRunning := status == models.ServerStatusRunning
+
+		// Stop and remove old container
+		_ = h.engine.RemoveServer(r.Context(), existing, false)
+
+		// Recreate container with new network mode
+		cid, err := h.engine.CreateServer(r.Context(), existing, h.dataDir)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Failed to recreate container with new network mode: %s"}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
+		existing.ContainerID = cid
+
+		if wasRunning {
+			if err := h.engine.StartServer(r.Context(), existing); err == nil {
+				existing.Status = models.ServerStatusRunning
+				_ = h.db.UpdateServerStatus(r.Context(), existing.ID, models.ServerStatusRunning, cid)
+			}
+		} else {
+			_ = h.db.UpdateServerStatus(r.Context(), existing.ID, models.ServerStatusStopped, cid)
+		}
 	}
 
 	if err := h.db.UpdateServer(r.Context(), existing); err != nil {

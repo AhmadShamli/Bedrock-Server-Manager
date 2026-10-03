@@ -104,6 +104,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 			authGroup.Get("/servers", serverHandler.List)
 			authGroup.Post("/servers", serverHandler.Create)
 			authGroup.Get("/servers/suggest-ports", serverHandler.SuggestPorts)
+			authGroup.Get("/servers/networks", serverHandler.ListNetworks)
 			authGroup.Get("/active-players", playerHubHandler.GetAllActivePlayers)
 
 			authGroup.Group(func(srvGroup chi.Router) {

@@ -23,6 +23,7 @@ type ServerEngine interface {
 	SubscribeLogs(serverID string) (<-chan string, func())
 	AttachLogCapture(serverID, containerID string)
 	SetLogListener(listener func(serverID, line string))
+	ListNetworks(ctx context.Context) ([]string, error)
 }
 
 // ParseMemoryBytes converts memory strings like "512M", "2G", "4GB" into bytes.

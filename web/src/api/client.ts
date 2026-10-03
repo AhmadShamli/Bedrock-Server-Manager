@@ -114,6 +114,10 @@ class APIClient {
     return this.request('/api/servers/suggest-ports');
   }
 
+  async listNetworks(): Promise<{ networks: string[]; default: string }> {
+    return this.request('/api/servers/networks');
+  }
+
   async startServer(id: string): Promise<{ status: string }> {
     return this.request(`/api/servers/${id}/start`, { method: 'POST' });
   }

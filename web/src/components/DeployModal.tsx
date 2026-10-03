@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
-import { Preset, SeedPreset, UserPlanStatus } from '../types';
+import { Preset, SeedPreset, UserPlanStatus, User } from '../types';
 import { PopularSeedPicker } from './PopularSeedPicker';
 import {
   Plus,
@@ -18,6 +18,7 @@ import {
   Sparkles,
   Loader2,
   AlertTriangle,
+  Network,
 } from 'lucide-react';
 
 interface DeployModalProps {
@@ -25,6 +26,7 @@ interface DeployModalProps {
   onClose: () => void;
   onSuccess: () => void;
   userPlan?: UserPlanStatus | null;
+  user?: User | null;
 }
 
 type DeployMethod = 'quick' | 'wizard';
@@ -41,11 +43,12 @@ const parseMemoryMb = (mem: string | undefined): number => {
   return 8192;
 };
 
-export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuccess, userPlan }) => {
+export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuccess, userPlan, user }) => {
   const [method, setMethod] = useState<DeployMethod>(() => {
     return (localStorage.getItem('bsm_deploy_method') as DeployMethod) || 'wizard';
   });
 
+  const isAdmin = user?.role === 'admin';
   const isQuotaFull = Boolean(userPlan && userPlan.usage.servers_count >= userPlan.usage.servers_max);
   const maxRamMb = userPlan?.plan?.max_memory ? parseMemoryMb(userPlan.plan.max_memory) : 8192;
   const maxCpu = userPlan?.plan?.max_cpu || 8.0;
@@ -84,6 +87,8 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
   const [seed, setSeed] = useState('');
   const [selectedSeedPreset, setSelectedSeedPreset] = useState<SeedPreset | null>(null);
   const [gameServerAddress, setGameServerAddress] = useState('');
+  const [networkMode, setNetworkMode] = useState<string>('bridge');
+  const [availableNetworks, setAvailableNetworks] = useState<string[]>(['bridge', 'host']);
 
   // Auxiliary state
   const [presets, setPresets] = useState<Preset[]>([]);
@@ -108,6 +113,17 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
         if (data && data.length > 0) setPresets(data);
       })
       .catch(() => {});
+
+    if (isAdmin) {
+      api.listNetworks()
+        .then((res) => {
+          if (res && Array.isArray(res.networks) && res.networks.length > 0) {
+            setAvailableNetworks(res.networks);
+            if (res.default) setNetworkMode(res.default);
+          }
+        })
+        .catch(() => {});
+    }
 
     if (userPlan) {
       if (!ramOptions.some((r) => r.value === memLimit)) {
@@ -180,6 +196,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
         port_gate_enabled: portGate,
         port_gate_mode: portGateMode,
         port_gate_timeout: 7200,
+        network_mode: isAdmin ? networkMode : 'bridge',
       });
 
       onSuccess();
@@ -685,6 +702,38 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                           </div>
                         </label>
                       </div>
+
+                      {isAdmin && (
+                        <div className="p-3 rounded-lg bg-obsidian-900 border border-obsidian-800 space-y-1.5">
+                          <label className="block text-xs font-mono text-slate-300 flex items-center justify-between">
+                            <span className="flex items-center gap-1.5 font-bold">
+                              <Network className="w-3.5 h-3.5 text-emerald-400" />
+                              <span>Deployment Network</span>
+                            </span>
+                            <span className="text-[10px] text-emerald-400 font-normal">Admin Option</span>
+                          </label>
+                          <select
+                            value={networkMode}
+                            onChange={(e) => setNetworkMode(e.target.value)}
+                            className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-xs focus:border-emerald-500"
+                          >
+                            <option value="bridge">bridge (Default - Virtual Bridge & Port Mapping)</option>
+                            <option value="host">host (Direct Host Network - Direct UDP Port Binding)</option>
+                            {availableNetworks
+                              .filter((n) => n !== 'bridge' && n !== 'host')
+                              .map((net) => (
+                                <option key={net} value={net}>
+                                  {net} (Custom Docker Network)
+                                </option>
+                              ))}
+                          </select>
+                          <p className="text-[10px] text-slate-400 leading-relaxed">
+                            {networkMode === 'host'
+                              ? 'Host Mode: Binds UDP directly to host network interface. Eliminates bridge forwarding latency and resolves UFW forwarding blocks.'
+                              : 'Bridge Mode: Container gets isolated virtual IP. Traffic is forwarded via Docker NAT proxy.'}
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -810,6 +859,13 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                           {portGate ? `Enabled (${portGateMode})` : 'Disabled (Public Open)'}
                         </span>
                       </div>
+
+                      {isAdmin && (
+                        <div className="col-span-full p-3 rounded-lg bg-obsidian-900 border border-obsidian-800 flex items-center justify-between">
+                          <span className="text-slate-500">Deployment Network Mode:</span>
+                          <span className="text-emerald-400 font-bold uppercase">{networkMode}</span>
+                        </div>
+                      )}
 
                       <div className="col-span-full p-3.5 rounded-lg bg-obsidian-900 border border-obsidian-800">
                         <span className="text-slate-500 block mb-1">World Generation Seed:</span>
@@ -1141,6 +1197,38 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                       <option value="gamertag">Gamertag Allowlist</option>
                       <option value="combined">Combined (Passphrase + Gamertag)</option>
                     </select>
+                  </div>
+                )}
+
+                {isAdmin && (
+                  <div className="pt-2 border-t border-obsidian-800/80 space-y-1">
+                    <label className="block text-[11px] font-mono text-slate-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 font-bold">
+                        <Network className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>Deployment Network</span>
+                      </span>
+                      <span className="text-[10px] text-emerald-400 font-normal">Admin Option</span>
+                    </label>
+                    <select
+                      value={networkMode}
+                      onChange={(e) => setNetworkMode(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 font-mono text-xs focus:border-emerald-500"
+                    >
+                      <option value="bridge">bridge (Default - Virtual Bridge & Port Mapping)</option>
+                      <option value="host">host (Direct Host Network - Direct UDP Port Binding)</option>
+                      {availableNetworks
+                        .filter((n) => n !== 'bridge' && n !== 'host')
+                        .map((net) => (
+                          <option key={net} value={net}>
+                            {net} (Custom Docker Network)
+                          </option>
+                        ))}
+                    </select>
+                    <p className="text-[10px] text-slate-400">
+                      {networkMode === 'host'
+                        ? 'Host Mode: Direct host UDP binding. Resolves bridge/UFW forwarding conflicts.'
+                        : 'Bridge Mode: Isolated virtual bridge network with NAT forwarding.'}
+                    </p>
                   </div>
                 )}
               </div>

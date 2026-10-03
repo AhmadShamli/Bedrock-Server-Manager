@@ -647,4 +647,66 @@ func TestLegacyDatabaseMigration(t *testing.T) {
 	}
 }
 
+func TestServerNetworkModePersistence(t *testing.T) {
+	ctx := context.Background()
+	db, err := OpenManagerDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenManagerDB failed: %v", err)
+	}
+	defer db.Close()
+
+	// 1. Create server with host network mode
+	srvHost := &models.Server{
+		ID:          "srv-host",
+		Name:        "Host Net Server",
+		Port:        19132,
+		PortV6:      19133,
+		NetworkMode: "host",
+	}
+	if err := db.CreateServer(ctx, srvHost); err != nil {
+		t.Fatalf("CreateServer (host) failed: %v", err)
+	}
+
+	got, err := db.GetServer(ctx, "srv-host")
+	if err != nil {
+		t.Fatalf("GetServer failed: %v", err)
+	}
+	if got.NetworkMode != "host" {
+		t.Errorf("expected NetworkMode host, got %s", got.NetworkMode)
+	}
+
+	// 2. Create server with empty network mode (should default to bridge)
+	srvDefault := &models.Server{
+		ID:     "srv-default",
+		Name:   "Default Net Server",
+		Port:   19134,
+		PortV6: 19135,
+	}
+	if err := db.CreateServer(ctx, srvDefault); err != nil {
+		t.Fatalf("CreateServer (default) failed: %v", err)
+	}
+
+	gotDefault, err := db.GetServer(ctx, "srv-default")
+	if err != nil {
+		t.Fatalf("GetServer failed: %v", err)
+	}
+	if gotDefault.NetworkMode != "bridge" {
+		t.Errorf("expected default NetworkMode bridge, got %s", gotDefault.NetworkMode)
+	}
+
+	// 3. Update network mode
+	gotDefault.NetworkMode = "host"
+	if err := db.UpdateServer(ctx, gotDefault); err != nil {
+		t.Fatalf("UpdateServer failed: %v", err)
+	}
+
+	updated, err := db.GetServer(ctx, "srv-default")
+	if err != nil {
+		t.Fatalf("GetServer failed: %v", err)
+	}
+	if updated.NetworkMode != "host" {
+		t.Errorf("expected updated NetworkMode host, got %s", updated.NetworkMode)
+	}
+}
+
 

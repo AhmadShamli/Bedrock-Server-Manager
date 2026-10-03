@@ -685,6 +685,7 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
         onClose={() => setShowModal(false)}
         onSuccess={() => fetchServers(true)}
         userPlan={userPlan}
+        user={user}
       />
     </div>
   );

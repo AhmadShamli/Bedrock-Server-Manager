@@ -116,13 +116,28 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 
 	containerName := fmt.Sprintf("bsm-%s", server.ID)
 
+	networkMode := strings.TrimSpace(server.NetworkMode)
+	if networkMode == "" {
+		networkMode = "bridge"
+	}
+	isHostNet := networkMode == "host"
+
+	serverPort := "19132"
+	serverPortV6 := "19133"
+	if isHostNet {
+		serverPort = strconv.Itoa(server.Port)
+		if server.PortV6 > 0 {
+			serverPortV6 = strconv.Itoa(server.PortV6)
+		}
+	}
+
 	envVars := []string{
 		"EULA=TRUE",
 		fmt.Sprintf("SERVER_NAME=%s", server.Name),
 		fmt.Sprintf("GAMEMODE=%s", server.Mode),
 		fmt.Sprintf("DIFFICULTY=%s", server.Difficulty),
-		"SERVER_PORT=19132",
-		"SERVER_PORT_V6=19133",
+		fmt.Sprintf("SERVER_PORT=%s", serverPort),
+		fmt.Sprintf("SERVER_PORT_V6=%s", serverPortV6),
 	}
 	if server.Seed != "" {
 		envVars = append(envVars, fmt.Sprintf("LEVEL_SEED=%s", server.Seed))
@@ -134,23 +149,18 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 		Tty:       true,
 		OpenStdin: true,
 		StdinOnce: false,
-		ExposedPorts: nat.PortSet{
+	}
+	if !isHostNet {
+		config.ExposedPorts = nat.PortSet{
 			"19132/udp": struct{}{},
 			"19133/udp": struct{}{},
-		},
+		}
 	}
 
 	hostConfig := &container.HostConfig{
+		NetworkMode: container.NetworkMode(networkMode),
 		Binds: []string{
 			fmt.Sprintf("%s:/data", hostServerDir),
-		},
-		PortBindings: nat.PortMap{
-			"19132/udp": []nat.PortBinding{
-				{HostIP: "0.0.0.0", HostPort: strconv.Itoa(server.Port)},
-			},
-			"19133/udp": []nat.PortBinding{
-				{HostIP: "0.0.0.0", HostPort: strconv.Itoa(server.PortV6)},
-			},
 		},
 		Resources: container.Resources{
 			Memory:     memBytes,
@@ -160,6 +170,16 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 		RestartPolicy: container.RestartPolicy{
 			Name: "unless-stopped",
 		},
+	}
+	if !isHostNet {
+		hostConfig.PortBindings = nat.PortMap{
+			"19132/udp": []nat.PortBinding{
+				{HostIP: "0.0.0.0", HostPort: strconv.Itoa(server.Port)},
+			},
+			"19133/udp": []nat.PortBinding{
+				{HostIP: "0.0.0.0", HostPort: strconv.Itoa(server.PortV6)},
+			},
+		}
 	}
 
 	resp, err := e.cli.ContainerCreate(ctx, config, hostConfig, nil, nil, containerName)
@@ -642,4 +662,34 @@ func (e *DockerEngine) captureContainerLogs(serverID, containerID string) {
 			listener(serverID, line)
 		}
 	}
+}
+
+// ListNetworks queries the Docker daemon for available networks.
+func (e *DockerEngine) ListNetworks(ctx context.Context) ([]string, error) {
+	networks, err := e.cli.NetworkList(ctx, types.NetworkListOptions{})
+	if err != nil {
+		return []string{"bridge", "host"}, nil
+	}
+	var names []string
+	hasBridge := false
+	hasHost := false
+	for _, n := range networks {
+		if n.Name == "none" {
+			continue
+		}
+		if n.Name == "bridge" {
+			hasBridge = true
+		}
+		if n.Name == "host" {
+			hasHost = true
+		}
+		names = append(names, n.Name)
+	}
+	if !hasBridge {
+		names = append([]string{"bridge"}, names...)
+	}
+	if !hasHost {
+		names = append(names, "host")
+	}
+	return names, nil
 }

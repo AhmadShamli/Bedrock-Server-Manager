@@ -5,7 +5,8 @@ import {
   HardDrive, Cpu, AlertTriangle, Loader2, Send, Users, MessageSquare, Copy,
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
-  ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles
+  ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles,
+  Network
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User, Backup, AddonPack, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer } from '../types';
@@ -68,6 +69,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [editServerPortGateMode, setEditServerPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
   const [editServerPortGateTimeout, setEditServerPortGateTimeout] = useState(7200);
   const [editGameServerAddress, setEditGameServerAddress] = useState('');
+  const [editServerNetworkMode, setEditServerNetworkMode] = useState('bridge');
+  const [availableNetworks, setAvailableNetworks] = useState<string[]>(['bridge', 'host']);
   const [serverUpdating, setServerUpdating] = useState(false);
   const [serverUpdatedMsg, setServerUpdatedMsg] = useState<string | null>(null);
   const [propertyFilter, setPropertyFilter] = useState('');
@@ -386,8 +389,21 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setEditServerPortGateMode(server.port_gate_mode);
       setEditServerPortGateTimeout(server.port_gate_timeout);
       setEditGameServerAddress(server.game_server_address || '');
+      setEditServerNetworkMode(server.network_mode || 'bridge');
     }
   }, [server]);
+
+  useEffect(() => {
+    if (user.role === 'admin') {
+      api.listNetworks()
+        .then((res) => {
+          if (res && Array.isArray(res.networks) && res.networks.length > 0) {
+            setAvailableNetworks(res.networks);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [user.role]);
 
   const handleCreateAccessKey = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -477,6 +493,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         port_gate_mode: editServerPortGateMode,
         port_gate_timeout: Number(editServerPortGateTimeout),
         game_server_address: editGameServerAddress.trim(),
+        network_mode: editServerNetworkMode,
       });
       setServer((prev) => (prev ? { ...prev, ...updated, status: prev.status } : null));
       setServerUpdatedMsg('Server instance configuration updated successfully!');
@@ -1102,6 +1119,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               <span>ID: {server.id}</span>
               <span>•</span>
               <span>UDP: {server.port}</span>
+              <span>•</span>
+              <span className="text-cyan-400 font-medium">net: {server.network_mode || 'bridge'}</span>
               <span>•</span>
               <span>v{server.version}</span>
               {server.seed && (
@@ -2715,6 +2734,38 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                       className="w-full px-2.5 py-1.5 rounded bg-obsidian-950 border border-obsidian-700 text-slate-200 text-xs"
                     />
                   </div>
+                </div>
+              )}
+
+              {user.role === 'admin' && (
+                <div className="pt-3 border-t border-obsidian-800/60 space-y-1.5">
+                  <label className="block text-slate-300 font-bold flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Network className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Deployment Network Mode</span>
+                    </span>
+                    <span className="text-[10px] text-emerald-400 font-normal">Admin Setting</span>
+                  </label>
+                  <select
+                    value={editServerNetworkMode}
+                    onChange={(e) => setEditServerNetworkMode(e.target.value)}
+                    className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500 font-mono"
+                  >
+                    <option value="bridge">bridge (Default - Isolated Virtual Bridge & Port Mapping)</option>
+                    <option value="host">host (Direct Host Network - Direct UDP Port Binding)</option>
+                    {availableNetworks
+                      .filter((n) => n !== 'bridge' && n !== 'host')
+                      .map((net) => (
+                        <option key={net} value={net}>
+                          {net} (Custom Docker Network)
+                        </option>
+                      ))}
+                  </select>
+                  <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                    {editServerNetworkMode === 'host'
+                      ? 'Host Mode: Binds UDP directly to host network interface. Eliminates bridge forwarding latency and resolves UFW forwarding blocks. Saving will gracefully recreate the container with host networking without losing any world data.'
+                      : 'Bridge Mode: Container runs in an isolated virtual bridge network with NAT forwarding. Saving will recreate the container without data loss.'}
+                  </p>
                 </div>
               )}
             </form>
