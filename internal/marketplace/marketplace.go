@@ -88,6 +88,36 @@ type MarketplaceItem struct {
 	PageURL     string   `json:"page_url,omitempty"`
 }
 
+type MarketplaceScreenshot struct {
+	ID           int64  `json:"id"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	ThumbnailURL string `json:"thumbnail_url"`
+	URL          string `json:"url"`
+}
+
+type MarketplaceFile struct {
+	ID           int64    `json:"id"`
+	DisplayName  string   `json:"display_name"`
+	FileName     string   `json:"file_name"`
+	FileDate     string   `json:"file_date"`
+	FileLength   int64    `json:"file_length"`
+	DownloadURL  string   `json:"download_url,omitempty"`
+	GameVersions []string `json:"game_versions,omitempty"`
+}
+
+type MarketplaceItemDetails struct {
+	MarketplaceItem
+	DescriptionHTML string                  `json:"description_html"`
+	Screenshots     []MarketplaceScreenshot `json:"screenshots"`
+	Files           []MarketplaceFile       `json:"files"`
+	DateCreated     string                  `json:"date_created,omitempty"`
+	DateModified    string                  `json:"date_modified,omitempty"`
+	WebsiteURL      string                  `json:"website_url,omitempty"`
+	WikiURL         string                  `json:"wiki_url,omitempty"`
+	IssuesURL       string                  `json:"issues_url,omitempty"`
+}
+
 // SearchResult contains matching marketplace items.
 type SearchResult struct {
 	Provider string            `json:"provider"`
@@ -103,19 +133,33 @@ type cfSearchResponse struct {
 }
 
 type cfMod struct {
-	ID          int64       `json:"id"`
-	Name        string      `json:"name"`
-	Summary     string      `json:"summary"`
-	Links       cfLinks     `json:"links"`
-	DownloadCnt float64     `json:"downloadCount"`
-	Logo        cfLogo      `json:"logo"`
-	Authors     []cfAuthor  `json:"authors"`
-	Categories  []cfCat     `json:"categories"`
-	LatestFiles []cfFile    `json:"latestFiles"`
+	ID           int64          `json:"id"`
+	Name         string         `json:"name"`
+	Summary      string         `json:"summary"`
+	Links        cfLinks        `json:"links"`
+	DownloadCnt  float64        `json:"downloadCount"`
+	Logo         cfLogo         `json:"logo"`
+	Authors      []cfAuthor     `json:"authors"`
+	Categories   []cfCat        `json:"categories"`
+	LatestFiles  []cfFile       `json:"latestFiles"`
+	Screenshots  []cfScreenshot `json:"screenshots"`
+	DateModified string         `json:"dateModified"`
+	DateCreated  string         `json:"dateCreated"`
+}
+
+type cfScreenshot struct {
+	ID           int64  `json:"id"`
+	ModID        int64  `json:"modId"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	ThumbnailURL string `json:"thumbnailUrl"`
+	URL          string `json:"url"`
 }
 
 type cfLinks struct {
 	WebsiteURL string `json:"websiteUrl"`
+	WikiURL    string `json:"wikiUrl"`
+	IssuesURL  string `json:"issuesUrl"`
 }
 
 type cfLogo struct {
@@ -133,10 +177,13 @@ type cfCat struct {
 }
 
 type cfFile struct {
-	ID          int64  `json:"id"`
-	DisplayName string `json:"displayName"`
-	FileName    string `json:"fileName"`
-	DownloadURL string `json:"downloadUrl"`
+	ID           int64    `json:"id"`
+	DisplayName  string   `json:"displayName"`
+	FileName     string   `json:"fileName"`
+	FileDate     string   `json:"fileDate"`
+	FileLength   int64    `json:"fileLength"`
+	DownloadURL  string   `json:"downloadUrl"`
+	GameVersions []string `json:"gameVersions"`
 }
 
 type cfPagination struct {
@@ -381,6 +428,169 @@ func GetCurseForgeDownloadURL(ctx context.Context, client *http.Client, apiKey s
 	}
 
 	return res.Data, nil
+}
+
+// GetCurseForgeModDetails fetches rich details for a single mod including description HTML, screenshots, and files.
+func GetCurseForgeModDetails(ctx context.Context, client *http.Client, apiKey string, modID int64) (*MarketplaceItemDetails, error) {
+	if apiKey == "" {
+		return nil, errors.New("curseforge_api_key is required")
+	}
+	if client == nil {
+		client = SafeHTTPClient(15*time.Second, false)
+	}
+
+	// 1. Fetch Mod Details
+	modEndpoint := fmt.Sprintf("%s/mods/%d", curseForgeBaseURL, modID)
+	req, err := http.NewRequestWithContext(ctx, "GET", modEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("curseforge mod details request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
+		return nil, errors.New("invalid or unauthorized CurseForge API key")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("curseforge mod details status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var modRes struct {
+		Data cfMod `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&modRes); err != nil {
+		return nil, fmt.Errorf("failed to decode mod details: %w", err)
+	}
+	m := modRes.Data
+
+	// 2. Fetch Description HTML (optional, best-effort)
+	descHTML := m.Summary
+	descReq, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/mods/%d/description", curseForgeBaseURL, modID), nil)
+	if err == nil {
+		descReq.Header.Set("x-api-key", apiKey)
+		descReq.Header.Set("Accept", "application/json")
+		if descResp, err := client.Do(descReq); err == nil {
+			defer descResp.Body.Close()
+			if descResp.StatusCode == http.StatusOK {
+				var descData struct {
+					Data string `json:"data"`
+				}
+				if err := json.NewDecoder(descResp.Body).Decode(&descData); err == nil && strings.TrimSpace(descData.Data) != "" {
+					descHTML = descData.Data
+				}
+			}
+		}
+	}
+
+	// 3. Fetch Files (optional, check /files for full list, fallback to LatestFiles)
+	files := make([]MarketplaceFile, 0)
+	filesReq, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("%s/mods/%d/files?pageSize=20", curseForgeBaseURL, modID), nil)
+	if err == nil {
+		filesReq.Header.Set("x-api-key", apiKey)
+		filesReq.Header.Set("Accept", "application/json")
+		if filesResp, err := client.Do(filesReq); err == nil {
+			defer filesResp.Body.Close()
+			if filesResp.StatusCode == http.StatusOK {
+				var filesData struct {
+					Data []cfFile `json:"data"`
+				}
+				if err := json.NewDecoder(filesResp.Body).Decode(&filesData); err == nil && len(filesData.Data) > 0 {
+					for _, f := range filesData.Data {
+						files = append(files, MarketplaceFile{
+							ID:           f.ID,
+							DisplayName:  f.DisplayName,
+							FileName:     f.FileName,
+							FileDate:     f.FileDate,
+							FileLength:   f.FileLength,
+							DownloadURL:  f.DownloadURL,
+							GameVersions: f.GameVersions,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	if len(files) == 0 && len(m.LatestFiles) > 0 {
+		for _, f := range m.LatestFiles {
+			files = append(files, MarketplaceFile{
+				ID:           f.ID,
+				DisplayName:  f.DisplayName,
+				FileName:     f.FileName,
+				FileDate:     f.FileDate,
+				FileLength:   f.FileLength,
+				DownloadURL:  f.DownloadURL,
+				GameVersions: f.GameVersions,
+			})
+		}
+	}
+
+	// 4. Screenshots
+	screenshots := make([]MarketplaceScreenshot, 0, len(m.Screenshots))
+	for _, s := range m.Screenshots {
+		screenshots = append(screenshots, MarketplaceScreenshot{
+			ID:           s.ID,
+			Title:        s.Title,
+			Description:  s.Description,
+			ThumbnailURL: s.ThumbnailURL,
+			URL:          s.URL,
+		})
+	}
+
+	author := ""
+	if len(m.Authors) > 0 {
+		author = m.Authors[0].Name
+	}
+	icon := m.Logo.ThumbnailURL
+	if icon == "" {
+		icon = m.Logo.URL
+	}
+	cats := make([]string, 0, len(m.Categories))
+	for _, c := range m.Categories {
+		cats = append(cats, c.Name)
+	}
+
+	var latestFileID int64
+	var latestFileName, latestDownloadURL, versionStr string
+	if len(files) > 0 {
+		latestFileID = files[0].ID
+		latestFileName = files[0].FileName
+		latestDownloadURL = files[0].DownloadURL
+		versionStr = files[0].DisplayName
+	}
+
+	return &MarketplaceItemDetails{
+		MarketplaceItem: MarketplaceItem{
+			ID:          strconv.FormatInt(m.ID, 10),
+			Provider:    "curseforge",
+			Name:        m.Name,
+			Summary:     m.Summary,
+			Author:      author,
+			IconURL:     icon,
+			Downloads:   int64(m.DownloadCnt),
+			Version:     versionStr,
+			FileID:      latestFileID,
+			FileName:    latestFileName,
+			DownloadURL: latestDownloadURL,
+			Categories:  cats,
+			PageURL:     m.Links.WebsiteURL,
+		},
+		DescriptionHTML: descHTML,
+		Screenshots:     screenshots,
+		Files:           files,
+		DateCreated:     m.DateCreated,
+		DateModified:    m.DateModified,
+		WebsiteURL:      m.Links.WebsiteURL,
+		WikiURL:         m.Links.WikiURL,
+		IssuesURL:       m.Links.IssuesURL,
+	}, nil
 }
 
 

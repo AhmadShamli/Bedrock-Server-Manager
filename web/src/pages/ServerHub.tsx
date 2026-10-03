@@ -6,10 +6,10 @@ import {
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
   ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles,
-  Network, Search, Clock, History, Save
+  Network, Search, Clock, History, Save, Eye, Image, FileText, MessageCircle
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, MarketplaceItem, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
+import { Server, User, Backup, AddonPack, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
@@ -263,6 +263,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [marketplaceCategory, setMarketplaceCategory] = useState<'' | 'behavior' | 'resource'>('');
   const [marketplaceLoading, setMarketplaceLoading] = useState(false);
   const [installingMarketplaceId, setInstallingMarketplaceId] = useState<string | null>(null);
+
+  // Addon Details Modal state
+  const [addonDetailsModalOpen, setAddonDetailsModalOpen] = useState(false);
+  const [selectedAddonSummary, setSelectedAddonSummary] = useState<MarketplaceItem | null>(null);
+  const [selectedAddonDetails, setSelectedAddonDetails] = useState<MarketplaceItemDetails | null>(null);
+  const [loadingAddonDetails, setLoadingAddonDetails] = useState(false);
+  const [addonDetailsError, setAddonDetailsError] = useState<string | null>(null);
+  const [activeDetailsTab, setActiveDetailsTab] = useState<'overview' | 'screenshots' | 'files' | 'comments'>('overview');
+  const [previewScreenshotUrl, setPreviewScreenshotUrl] = useState<string | null>(null);
 
   // Console WebSocket state
   const [logs, setLogs] = useState<string[]>([]);
@@ -1360,6 +1369,45 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       alert(`Successfully installed "${item.name}"!`);
     } catch (err: any) {
       alert(err.message || 'Failed to install addon from marketplace');
+    } finally {
+      setInstallingMarketplaceId(null);
+    }
+  };
+
+  const handleOpenAddonDetails = async (item: MarketplaceItem) => {
+    setSelectedAddonSummary(item);
+    setSelectedAddonDetails(null);
+    setAddonDetailsError(null);
+    setActiveDetailsTab('overview');
+    setPreviewScreenshotUrl(null);
+    setAddonDetailsModalOpen(true);
+    setLoadingAddonDetails(true);
+
+    try {
+      const details = await api.getMarketplaceItemDetails(item.id);
+      setSelectedAddonDetails(details);
+    } catch (err: any) {
+      setAddonDetailsError(err.message || 'Failed to load addon details');
+    } finally {
+      setLoadingAddonDetails(false);
+    }
+  };
+
+  const handleInstallSpecificMarketplaceFile = async (item: MarketplaceItem, file: MarketplaceFile) => {
+    if (!id) return;
+    setInstallingMarketplaceId(item.id);
+    try {
+      await api.installAddonFromMarketplace(id, {
+        provider: 'curseforge',
+        item_id: item.id,
+        file_id: file.id,
+        download_url: file.download_url,
+      });
+      const updated = await api.listAddons(id);
+      setAddonsList(updated);
+      alert(`Successfully installed "${item.name}" (${file.display_name || file.file_name})!`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to install file from marketplace');
     } finally {
       setInstallingMarketplaceId(null);
     }
@@ -3124,14 +3172,21 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                               )}
                               <div className="min-w-0 flex-1">
                                 <h5 className="font-mono font-bold text-sm text-slate-100 truncate flex items-center space-x-1.5">
-                                  <span title={item.name}>{item.name}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenAddonDetails(item)}
+                                    className="text-left truncate hover:text-emerald-400 transition-colors"
+                                    title={`View details for ${item.name}`}
+                                  >
+                                    {item.name}
+                                  </button>
                                   {item.page_url && (
                                     <a
                                       href={item.page_url}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="text-slate-500 hover:text-slate-300"
-                                      title="Open Project Page"
+                                      className="text-slate-500 hover:text-slate-300 shrink-0"
+                                      title="Open CurseForge Project Page in new tab"
                                     >
                                       <ExternalLink className="w-3 h-3" />
                                     </a>
@@ -3158,28 +3213,41 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                             )}
                           </div>
 
-                          <div className="mt-4 pt-3 border-t border-obsidian-800/80 flex items-center justify-between">
-                            <span className="font-mono text-[11px] text-slate-500 truncate max-w-[120px]">
+                          <div className="mt-4 pt-3 border-t border-obsidian-800/80 flex items-center justify-between gap-2">
+                            <span className="font-mono text-[11px] text-slate-500 truncate max-w-[100px]" title={item.version || (item.file_name ? item.file_name : 'Latest')}>
                               {item.version || (item.file_name ? item.file_name : 'Latest')}
                             </span>
 
-                            <button
-                              onClick={() => handleInstallMarketplaceItem(item)}
-                              disabled={isInstalling || addonLoading}
-                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors"
-                            >
-                              {isInstalling ? (
-                                <>
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                  <span>Installing...</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Download className="w-3.5 h-3.5" />
-                                  <span>Install</span>
-                                </>
-                              )}
-                            </button>
+                            <div className="flex items-center space-x-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAddonDetails(item)}
+                                className="px-2.5 py-1.5 rounded-lg bg-obsidian-900 hover:bg-obsidian-800 text-slate-300 hover:text-slate-100 border border-obsidian-700/60 font-mono text-xs font-semibold flex items-center space-x-1 transition-colors"
+                                title="View details, description, screenshots and releases"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Details</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleInstallMarketplaceItem(item)}
+                                disabled={isInstalling || addonLoading}
+                                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors"
+                              >
+                                {isInstalling ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Installing...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Download className="w-3.5 h-3.5" />
+                                    <span>Install</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
                           </div>
                         </div>
                       );
@@ -3188,6 +3256,417 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ADDON DETAILS MODAL */}
+      {addonDetailsModalOpen && selectedAddonSummary && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 md:p-6 overflow-y-auto">
+          <div className="bg-obsidian-950 border border-obsidian-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden my-auto">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-obsidian-800 bg-obsidian-900/60 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-start space-x-4 min-w-0">
+                {selectedAddonSummary.icon_url ? (
+                  <img
+                    src={selectedAddonSummary.icon_url}
+                    alt={selectedAddonSummary.name}
+                    className="w-14 h-14 rounded-xl object-cover bg-obsidian-900 border border-obsidian-700/80 shrink-0 shadow"
+                    onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                  />
+                ) : (
+                  <div className="w-14 h-14 rounded-xl bg-obsidian-900 border border-obsidian-700/80 flex items-center justify-center shrink-0 text-slate-500 shadow">
+                    <Package className="w-7 h-7" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2 mb-1">
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-orange-500/10 text-orange-400 border-orange-500/30">
+                      CurseForge
+                    </span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                      Bedrock Edition
+                    </span>
+                    {selectedAddonSummary.version && (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded border bg-obsidian-800 text-slate-300 border-obsidian-700">
+                        {selectedAddonSummary.version}
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="font-mono font-bold text-lg text-slate-100 truncate" title={selectedAddonSummary.name}>
+                    {selectedAddonSummary.name}
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-mono text-slate-400 mt-1">
+                    <span>by <strong className="text-slate-300 font-semibold">{selectedAddonSummary.author || 'Community Creator'}</strong></span>
+                    <span>•</span>
+                    <span className="flex items-center space-x-1">
+                      <Download className="w-3.5 h-3.5 text-slate-500" />
+                      <span>{selectedAddonSummary.downloads.toLocaleString()} downloads</span>
+                    </span>
+                    {selectedAddonDetails?.date_modified && (
+                      <>
+                        <span>•</span>
+                        <span className="flex items-center space-x-1 text-slate-400">
+                          <Clock className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Updated {formatFriendlyDate(selectedAddonDetails.date_modified)}</span>
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Top actions: Install button & close */}
+              <div className="flex items-center space-x-2 shrink-0 self-end md:self-center">
+                <button
+                  type="button"
+                  onClick={() => handleInstallMarketplaceItem(selectedAddonSummary)}
+                  disabled={installingMarketplaceId === selectedAddonSummary.id || addonLoading}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-mono text-xs font-bold flex items-center space-x-2 shadow-lg shadow-emerald-950/40 transition-all"
+                >
+                  {installingMarketplaceId === selectedAddonSummary.id ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Installing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4" />
+                      <span>Install Addon</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAddonDetailsModalOpen(false);
+                    setPreviewScreenshotUrl(null);
+                  }}
+                  className="p-2 rounded-xl bg-obsidian-900 border border-obsidian-700/80 text-slate-400 hover:text-slate-200 hover:bg-obsidian-800 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Tabs Navigation */}
+            <div className="flex items-center space-x-1 px-5 pt-3 border-b border-obsidian-800 bg-obsidian-950 shrink-0 overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => setActiveDetailsTab('overview')}
+                className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-t-lg font-mono text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                  activeDetailsTab === 'overview'
+                    ? 'border-emerald-500 text-emerald-400 bg-obsidian-900/60'
+                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-obsidian-900/30'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Overview & Guides</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveDetailsTab('screenshots')}
+                className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-t-lg font-mono text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                  activeDetailsTab === 'screenshots'
+                    ? 'border-emerald-500 text-emerald-400 bg-obsidian-900/60'
+                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-obsidian-900/30'
+                }`}
+              >
+                <Image className="w-3.5 h-3.5" />
+                <span>Screenshots ({selectedAddonDetails?.screenshots?.length || 0})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveDetailsTab('files')}
+                className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-t-lg font-mono text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                  activeDetailsTab === 'files'
+                    ? 'border-emerald-500 text-emerald-400 bg-obsidian-900/60'
+                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-obsidian-900/30'
+                }`}
+              >
+                <Package className="w-3.5 h-3.5" />
+                <span>Files & Releases ({selectedAddonDetails?.files?.length || 0})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveDetailsTab('comments')}
+                className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-t-lg font-mono text-xs font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                  activeDetailsTab === 'comments'
+                    ? 'border-emerald-500 text-emerald-400 bg-obsidian-900/60'
+                    : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-obsidian-900/30'
+                }`}
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>Community & Comments</span>
+              </button>
+            </div>
+
+            {/* Modal Body / Tab Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {loadingAddonDetails ? (
+                <div className="flex flex-col items-center justify-center py-20 text-slate-400 space-y-3 font-mono text-xs">
+                  <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+                  <span>Loading full addon description, screenshots, and files from CurseForge...</span>
+                </div>
+              ) : addonDetailsError ? (
+                <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 font-mono text-xs flex items-center justify-between">
+                  <span>{addonDetailsError}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenAddonDetails(selectedAddonSummary)}
+                    className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 rounded font-bold"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {/* TAB 1: OVERVIEW */}
+                  {activeDetailsTab === 'overview' && (
+                    <div className="space-y-6">
+                      {/* Summary Banner */}
+                      {selectedAddonSummary.summary && (
+                        <div className="p-3.5 rounded-xl bg-obsidian-900/80 border border-obsidian-800 text-slate-300 font-mono text-xs leading-relaxed">
+                          <strong className="text-slate-200 font-bold block mb-1">Summary</strong>
+                          {selectedAddonSummary.summary}
+                        </div>
+                      )}
+
+                      {/* HTML Description from CurseForge */}
+                      <div className="bg-obsidian-900/40 border border-obsidian-800/80 rounded-xl p-5">
+                        {selectedAddonDetails?.description_html ? (
+                          <div
+                            className="addon-html-description text-slate-300 font-sans text-sm leading-relaxed space-y-3 [&_h1]:text-xl [&_h1]:font-bold [&_h1]:text-slate-100 [&_h1]:border-b [&_h1]:border-obsidian-800 [&_h1]:pb-2 [&_h2]:text-lg [&_h2]:font-bold [&_h2]:text-slate-100 [&_h3]:text-base [&_h3]:font-bold [&_h3]:text-slate-200 [&_p]:text-slate-300 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_a]:text-emerald-400 [&_a]:underline [&_img]:max-w-full [&_img]:rounded-lg [&_img]:border [&_img]:border-obsidian-700/60 [&_pre]:bg-obsidian-950 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_code]:font-mono [&_code]:text-xs [&_blockquote]:border-l-4 [&_blockquote]:border-emerald-500/60 [&_blockquote]:pl-3 [&_blockquote]:italic"
+                            dangerouslySetInnerHTML={{ __html: selectedAddonDetails.description_html }}
+                          />
+                        ) : (
+                          <p className="text-slate-400 font-mono text-xs">
+                            {selectedAddonSummary.summary || 'No rich description available.'}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Metadata & External Links Card */}
+                      <div className="p-4 rounded-xl bg-obsidian-900 border border-obsidian-800 flex flex-wrap items-center justify-between gap-4 font-mono text-xs">
+                        <div className="flex flex-wrap items-center gap-4 text-slate-400">
+                          {selectedAddonDetails?.date_created && (
+                            <span>Created: <strong className="text-slate-300">{formatFriendlyDate(selectedAddonDetails.date_created)}</strong></span>
+                          )}
+                          {selectedAddonDetails?.date_modified && (
+                            <span>Modified: <strong className="text-slate-300">{formatFriendlyDate(selectedAddonDetails.date_modified)}</strong></span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          {selectedAddonDetails?.page_url && (
+                            <a
+                              href={selectedAddonDetails.page_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 hover:text-slate-100 border border-obsidian-700 flex items-center space-x-1.5 transition-colors"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              <span>CurseForge Page</span>
+                            </a>
+                          )}
+                          {selectedAddonDetails?.wiki_url && (
+                            <a
+                              href={selectedAddonDetails.wiki_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 hover:text-slate-100 border border-obsidian-700 flex items-center space-x-1.5 transition-colors"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>Wiki</span>
+                            </a>
+                          )}
+                          {selectedAddonDetails?.issues_url && (
+                            <a
+                              href={selectedAddonDetails.issues_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-300 hover:text-slate-100 border border-obsidian-700 flex items-center space-x-1.5 transition-colors"
+                            >
+                              <ShieldAlert className="w-3.5 h-3.5" />
+                              <span>Issue Tracker</span>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB 2: SCREENSHOTS */}
+                  {activeDetailsTab === 'screenshots' && (
+                    <div className="space-y-4">
+                      {(!selectedAddonDetails?.screenshots || selectedAddonDetails.screenshots.length === 0) ? (
+                        <div className="text-center py-16 bg-obsidian-900/40 border border-obsidian-800 rounded-xl text-slate-500 font-mono text-xs">
+                          No screenshots provided by the creator for this addon.
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {selectedAddonDetails.screenshots.map((s) => (
+                            <div
+                              key={s.id}
+                              onClick={() => setPreviewScreenshotUrl(s.url || s.thumbnail_url)}
+                              className="group cursor-pointer bg-obsidian-900 border border-obsidian-800 hover:border-emerald-500/50 rounded-xl overflow-hidden transition-all shadow-md flex flex-col"
+                            >
+                              <div className="relative aspect-video bg-obsidian-950 overflow-hidden">
+                                <img
+                                  src={s.thumbnail_url || s.url}
+                                  alt={s.title || 'Screenshot'}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                />
+                                <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                  <span className="px-3 py-1 rounded-lg bg-black/70 text-slate-200 font-mono text-xs font-semibold flex items-center space-x-1">
+                                    <Eye className="w-3.5 h-3.5" />
+                                    <span>Enlarge</span>
+                                  </span>
+                                </div>
+                              </div>
+                              {(s.title || s.description) && (
+                                <div className="p-3 font-mono text-xs">
+                                  {s.title && <h6 className="font-bold text-slate-200 truncate">{s.title}</h6>}
+                                  {s.description && <p className="text-slate-400 mt-1 line-clamp-2 text-[11px]">{s.description}</p>}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 3: FILES & RELEASES */}
+                  {activeDetailsTab === 'files' && (
+                    <div className="space-y-3">
+                      {(!selectedAddonDetails?.files || selectedAddonDetails.files.length === 0) ? (
+                        <div className="text-center py-16 bg-obsidian-900/40 border border-obsidian-800 rounded-xl text-slate-500 font-mono text-xs">
+                          No release files listed for this addon.
+                        </div>
+                      ) : (
+                        <div className="border border-obsidian-800 rounded-xl overflow-hidden divide-y divide-obsidian-800">
+                          {selectedAddonDetails.files.map((f) => (
+                            <div
+                              key={f.id}
+                              className="p-4 bg-obsidian-900/60 hover:bg-obsidian-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center space-x-2">
+                                  <Package className="w-4 h-4 text-emerald-400 shrink-0" />
+                                  <h6 className="font-mono font-bold text-sm text-slate-200 truncate">
+                                    {f.display_name || f.file_name}
+                                  </h6>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 font-mono text-[11px] text-slate-400">
+                                  <span>{f.file_name}</span>
+                                  {f.file_length > 0 && (
+                                    <>
+                                      <span>•</span>
+                                      <span>{(f.file_length / (1024 * 1024)).toFixed(2)} MB</span>
+                                    </>
+                                  )}
+                                  {f.file_date && (
+                                    <>
+                                      <span>•</span>
+                                      <span>{formatFriendlyDate(f.file_date)}</span>
+                                    </>
+                                  )}
+                                </div>
+                                {f.game_versions && f.game_versions.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-2">
+                                    {f.game_versions.map((gv, i) => (
+                                      <span key={i} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-obsidian-950 border border-obsidian-800 text-slate-400">
+                                        {gv}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => handleInstallSpecificMarketplaceFile(selectedAddonSummary, f)}
+                                disabled={installingMarketplaceId === selectedAddonSummary.id || addonLoading}
+                                className="px-3.5 py-2 rounded-lg bg-emerald-600/90 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-mono text-xs font-bold flex items-center justify-center space-x-1.5 shrink-0 transition-colors"
+                              >
+                                {installingMarketplaceId === selectedAddonSummary.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Download className="w-3.5 h-3.5" />
+                                )}
+                                <span>Install File</span>
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TAB 4: COMMENTS */}
+                  {activeDetailsTab === 'comments' && (
+                    <div className="space-y-5">
+                      <div className="p-6 rounded-2xl bg-obsidian-900 border border-obsidian-800 text-center max-w-xl mx-auto space-y-4">
+                        <div className="w-12 h-12 rounded-xl bg-obsidian-800 border border-obsidian-700 flex items-center justify-center mx-auto text-emerald-400">
+                          <MessageCircle className="w-6 h-6" />
+                        </div>
+
+                        <div>
+                          <h4 className="font-mono font-bold text-base text-slate-100">
+                            CurseForge Community Comments
+                          </h4>
+                          <p className="font-mono text-xs text-slate-400 mt-2 leading-relaxed">
+                            CurseForge does not expose user comments and reviews via their public REST API in order to protect discussions against spam and prevent automated bot actions.
+                          </p>
+                          <p className="font-mono text-xs text-slate-400 mt-1 leading-relaxed">
+                            You can join the community conversation, read creator updates, post bug reports, and submit feedback directly on the official CurseForge mod page.
+                          </p>
+                        </div>
+
+                        <div className="pt-2">
+                          <a
+                            href={selectedAddonDetails?.website_url ? `${selectedAddonDetails.website_url}#comments` : selectedAddonSummary.page_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold shadow-lg shadow-emerald-950/40 transition-colors"
+                          >
+                            <span>Open Discussion on CurseForge</span>
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* LIGHTBOX FOR SCREENSHOT ZOOM */}
+      {previewScreenshotUrl && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-md flex items-center justify-center p-4"
+          onClick={() => setPreviewScreenshotUrl(null)}
+        >
+          <div className="relative max-w-5xl max-h-[90vh] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={previewScreenshotUrl}
+              alt="Enlarged Screenshot"
+              className="max-w-full max-h-[85vh] object-contain rounded-xl border border-obsidian-700 shadow-2xl"
+            />
+            <button
+              type="button"
+              onClick={() => setPreviewScreenshotUrl(null)}
+              className="absolute top-3 right-3 p-2 rounded-xl bg-black/70 hover:bg-black/90 text-slate-300 hover:text-white border border-obsidian-700 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
         </div>
       )}

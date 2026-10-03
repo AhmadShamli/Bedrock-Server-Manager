@@ -195,6 +195,35 @@ export interface MarketplaceItem {
   page_url?: string;
 }
 
+export interface MarketplaceScreenshot {
+  id: number;
+  title?: string;
+  description?: string;
+  thumbnail_url: string;
+  url: string;
+}
+
+export interface MarketplaceFile {
+  id: number;
+  display_name: string;
+  file_name: string;
+  file_date: string;
+  file_length: number;
+  download_url?: string;
+  game_versions?: string[];
+}
+
+export interface MarketplaceItemDetails extends MarketplaceItem {
+  description_html: string;
+  screenshots: MarketplaceScreenshot[];
+  files: MarketplaceFile[];
+  date_created?: string;
+  date_modified?: string;
+  website_url?: string;
+  wiki_url?: string;
+  issues_url?: string;
+}
+
 export interface MarketplaceSearchResult {
   provider: string;
   items: MarketplaceItem[];

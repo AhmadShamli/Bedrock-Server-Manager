@@ -1,4 +1,4 @@
-import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, MarketplaceSearchResult, MarketplaceConfig, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary } from '../types';
+import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -651,6 +651,10 @@ class APIClient {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  }
+
+  async getMarketplaceItemDetails(itemId: string): Promise<MarketplaceItemDetails> {
+    return this.request(`/api/addons/marketplace/details/${encodeURIComponent(itemId)}`);
   }
 
   async getMarketplaceConfig(): Promise<MarketplaceConfig> {

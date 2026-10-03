@@ -92,3 +92,105 @@ func TestSearchCurseForge(t *testing.T) {
 		t.Fatalf("expected item name Super Backpacks, got %s", res.Items[0].Name)
 	}
 }
+
+func TestGetCurseForgeModDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "test-cf-key" {
+			http.Error(w, `{"error": "Unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path == "/mods/12345" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"id": 12345,
+					"name": "Super Backpacks",
+					"summary": "Adds backpacks for Bedrock",
+					"links": {"websiteUrl": "https://curseforge.com/mc/12345", "wikiUrl": "https://wiki.example.com"},
+					"downloadCount": 9876,
+					"logo": {"thumbnailUrl": "https://img.example.com/icon.png"},
+					"authors": [{"name": "SteveCraft"}],
+					"categories": [{"id": 4559, "name": "Bedrock Addons"}],
+					"dateCreated": "2024-01-01T00:00:00Z",
+					"dateModified": "2024-02-01T00:00:00Z",
+					"screenshots": [
+						{
+							"id": 101,
+							"modId": 12345,
+							"title": "Inventory UI",
+							"description": "Showing backpacks in inventory",
+							"thumbnailUrl": "https://img.example.com/thumb.png",
+							"url": "https://img.example.com/full.png"
+						}
+					],
+					"latestFiles": [
+						{
+							"id": 999,
+							"displayName": "v1.2.0",
+							"fileName": "backpacks.mcaddon",
+							"fileDate": "2024-02-01T00:00:00Z",
+							"fileLength": 1048576,
+							"downloadUrl": "https://cdn.example.com/backpacks.mcaddon",
+							"gameVersions": ["1.21.0"]
+						}
+					]
+				}
+			}`))
+			return
+		}
+		if r.URL.Path == "/mods/12345/description" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"data": "<h1>Super Backpacks</h1><p>Craft backpacks using leather!</p>"
+			}`))
+			return
+		}
+		if r.URL.Path == "/mods/12345/files" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"id": 999,
+						"displayName": "v1.2.0",
+						"fileName": "backpacks.mcaddon",
+						"fileDate": "2024-02-01T00:00:00Z",
+						"fileLength": 1048576,
+						"downloadUrl": "https://cdn.example.com/backpacks.mcaddon",
+						"gameVersions": ["1.21.0"]
+					}
+				]
+			}`))
+			return
+		}
+
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	origCFURL := curseForgeBaseURL
+	curseForgeBaseURL = server.URL
+	defer func() { curseForgeBaseURL = origCFURL }()
+
+	client := server.Client()
+
+	details, err := GetCurseForgeModDetails(context.Background(), client, "test-cf-key", 12345)
+	if err != nil {
+		t.Fatalf("GetCurseForgeModDetails failed: %v", err)
+	}
+
+	if details.Name != "Super Backpacks" {
+		t.Errorf("expected name 'Super Backpacks', got '%s'", details.Name)
+	}
+	if !strings.Contains(details.DescriptionHTML, "<h1>Super Backpacks</h1>") {
+		t.Errorf("expected DescriptionHTML to contain heading, got '%s'", details.DescriptionHTML)
+	}
+	if len(details.Screenshots) != 1 || details.Screenshots[0].Title != "Inventory UI" {
+		t.Errorf("expected 1 screenshot with title 'Inventory UI', got %+v", details.Screenshots)
+	}
+	if len(details.Files) != 1 || details.Files[0].ID != 999 {
+		t.Errorf("expected 1 file with ID 999, got %+v", details.Files)
+	}
+	if details.WikiURL != "https://wiki.example.com" {
+		t.Errorf("expected WikiURL 'https://wiki.example.com', got '%s'", details.WikiURL)
+	}
+}

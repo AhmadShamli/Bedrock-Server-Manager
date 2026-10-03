@@ -180,6 +180,31 @@ func (h *AddonHandler) MarketplaceSearch(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// MarketplaceDetails retrieves full details, description HTML, screenshots, and files for a marketplace item.
+func (h *AddonHandler) MarketplaceDetails(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	modID, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || modID <= 0 {
+		http.Error(w, `{"error": "Invalid addon ID"}`, http.StatusBadRequest)
+		return
+	}
+
+	cfKey, _ := h.db.GetSetting(r.Context(), "curseforge_api_key")
+	if cfKey == "" {
+		http.Error(w, `{"error": "CurseForge API key is not configured"}`, http.StatusBadRequest)
+		return
+	}
+
+	details, err := marketplace.GetCurseForgeModDetails(r.Context(), nil, cfKey, modID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(details)
+}
+
 // MarketplaceInstall downloads and installs a pack selected from CurseForge.
 func (h *AddonHandler) MarketplaceInstall(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")

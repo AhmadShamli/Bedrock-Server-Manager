@@ -102,6 +102,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 			// Addon Marketplace
 			authGroup.Get("/addons/marketplace/search", addonHandler.MarketplaceSearch)
+			authGroup.Get("/addons/marketplace/details/{id}", addonHandler.MarketplaceDetails)
 			authGroup.Get("/addons/marketplace/config", addonHandler.GetMarketplaceConfig)
 
 			// Servers (Listing & Creation allowed for both Admin and User roles)
