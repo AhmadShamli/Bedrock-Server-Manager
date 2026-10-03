@@ -178,9 +178,13 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 				// Addon Manager
 				srvGroup.Get("/servers/{id}/addons", addonHandler.List)
+				srvGroup.Get("/servers/{id}/addons/config", addonHandler.GetConfig)
+				srvGroup.Put("/servers/{id}/addons/config", addonHandler.UpdateConfig)
 				srvGroup.Post("/servers/{id}/addons", addonHandler.Install)
 				srvGroup.Post("/servers/{id}/addons/url", addonHandler.InstallFromURL)
 				srvGroup.Post("/servers/{id}/addons/marketplace/install", addonHandler.MarketplaceInstall)
+				srvGroup.Post("/servers/{id}/addons/{type}/{folder}/toggle", addonHandler.TogglePack)
+				srvGroup.Post("/servers/{id}/addons/order", addonHandler.ReorderPacks)
 				srvGroup.Delete("/servers/{id}/addons/{type}/{folder}", addonHandler.Delete)
 
 				// Multi-level Player Sync & Promotion

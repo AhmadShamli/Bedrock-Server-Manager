@@ -313,3 +313,126 @@ func TestInstallMcaddonNested(t *testing.T) {
 		t.Fatalf("unexpected pack name: %s", pack.Name)
 	}
 }
+
+func TestPackActivationFlow(t *testing.T) {
+	serverDir := t.TempDir()
+
+	// 1. Install a behavior pack
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+	w, _ := zw.Create("manifest.json")
+	_, _ = w.Write([]byte(`{
+		"format_version": 2,
+		"header": {
+			"name": "Activation Test Pack",
+			"description": "Test activation",
+			"uuid": "99999999-8888-7777-6666-555555555555",
+			"version": [2, 0, 1]
+		},
+		"modules": [{"type": "data", "uuid": "88888888-7777-6666-5555-444444444444"}]
+	}`))
+	_ = zw.Close()
+
+	pack, err := InstallPack(serverDir, bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("InstallPack failed: %v", err)
+	}
+
+	// Initially inactive
+	packs, err := ListInstalledPacks(serverDir)
+	if err != nil || len(packs) != 1 {
+		t.Fatalf("ListInstalledPacks failed: %v", err)
+	}
+	if packs[0].Active {
+		t.Errorf("expected pack to be inactive initially")
+	}
+
+	// Activate pack
+	updated, err := SetPackActive(serverDir, pack.Type, pack.Folder, true)
+	if err != nil {
+		t.Fatalf("SetPackActive true failed: %v", err)
+	}
+	if !updated.Active {
+		t.Errorf("expected updated pack to be active")
+	}
+
+	// Verify world_behavior_packs.json written
+	levelName := GetActiveLevelName(serverDir)
+	refs, err := GetWorldPackRefs(serverDir, levelName, "behavior")
+	if err != nil || len(refs) != 1 {
+		t.Fatalf("expected 1 ref in world_behavior_packs.json, got: %v", refs)
+	}
+	if refs[0].PackID != "99999999-8888-7777-6666-555555555555" {
+		t.Errorf("unexpected pack_id: %s", refs[0].PackID)
+	}
+	if len(refs[0].Version) != 3 || refs[0].Version[0] != 2 {
+		t.Errorf("unexpected version: %+v", refs[0].Version)
+	}
+
+	// Verify ListInstalledPacks shows active: true
+	packs, _ = ListInstalledPacks(serverDir)
+	if !packs[0].Active {
+		t.Errorf("expected ListInstalledPacks to report active: true")
+	}
+
+	// Deactivate pack
+	updated, err = SetPackActive(serverDir, pack.Type, pack.Folder, false)
+	if err != nil {
+		t.Fatalf("SetPackActive false failed: %v", err)
+	}
+	if updated.Active {
+		t.Errorf("expected updated pack to be inactive")
+	}
+
+	refs, _ = GetWorldPackRefs(serverDir, levelName, "behavior")
+	if len(refs) != 0 {
+		t.Errorf("expected 0 refs after deactivation, got %d", len(refs))
+	}
+}
+
+func TestPackReorderingFlow(t *testing.T) {
+	serverDir := t.TempDir()
+	levelName := GetActiveLevelName(serverDir)
+
+	initialRefs := []WorldPackRef{
+		{PackID: "uuid-1", Version: []int{1, 0, 0}},
+		{PackID: "uuid-2", Version: []int{1, 0, 0}},
+		{PackID: "uuid-3", Version: []int{1, 0, 0}},
+	}
+	_ = SaveWorldPackRefs(serverDir, levelName, "resource", initialRefs)
+
+	// Reorder to uuid-3, uuid-1, uuid-2
+	err := SetPackOrder(serverDir, "resource", []string{"uuid-3", "uuid-1", "uuid-2"})
+	if err != nil {
+		t.Fatalf("SetPackOrder failed: %v", err)
+	}
+
+	refs, err := GetWorldPackRefs(serverDir, levelName, "resource")
+	if err != nil || len(refs) != 3 {
+		t.Fatalf("unexpected refs: %+v", refs)
+	}
+	if refs[0].PackID != "uuid-3" || refs[1].PackID != "uuid-1" || refs[2].PackID != "uuid-2" {
+		t.Errorf("reordering failed: %+v", refs)
+	}
+}
+
+func TestAddonConfigFlow(t *testing.T) {
+	serverDir := t.TempDir()
+
+	// Default config
+	cfg := GetAddonConfig(serverDir)
+	if cfg.ActiveWorld != "Bedrock level" || cfg.TexturePackRequired {
+		t.Errorf("unexpected initial config: %+v", cfg)
+	}
+
+	// Update texturepack-required
+	err := UpdateAddonConfig(serverDir, true)
+	if err != nil {
+		t.Fatalf("UpdateAddonConfig failed: %v", err)
+	}
+
+	cfg = GetAddonConfig(serverDir)
+	if !cfg.TexturePackRequired {
+		t.Errorf("expected TexturePackRequired to be true")
+	}
+}

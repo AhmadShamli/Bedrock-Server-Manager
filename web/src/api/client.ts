@@ -1,4 +1,4 @@
-import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary } from '../types';
+import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AddonServerConfig, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -612,6 +612,31 @@ class APIClient {
   async deleteAddon(serverId: string, type: string, folder: string): Promise<{ success: boolean }> {
     return this.request(`/api/servers/${serverId}/addons/${type}/${folder}`, {
       method: 'DELETE',
+    });
+  }
+
+  async toggleAddonActive(serverId: string, type: string, folder: string, active?: boolean): Promise<AddonPack> {
+    return this.request(`/api/servers/${serverId}/addons/${type}/${folder}/toggle`, {
+      method: 'POST',
+      body: JSON.stringify(typeof active === 'boolean' ? { active } : {}),
+    });
+  }
+
+  async getAddonConfig(serverId: string): Promise<AddonServerConfig> {
+    return this.request(`/api/servers/${serverId}/addons/config`);
+  }
+
+  async updateAddonConfig(serverId: string, payload: { texturepack_required: boolean }): Promise<AddonServerConfig> {
+    return this.request(`/api/servers/${serverId}/addons/config`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async reorderAddonPacks(serverId: string, type: 'behavior' | 'resource', packIds: string[]): Promise<{ success: boolean }> {
+    return this.request(`/api/servers/${serverId}/addons/order`, {
+      method: 'POST',
+      body: JSON.stringify({ type, pack_ids: packIds }),
     });
   }
 

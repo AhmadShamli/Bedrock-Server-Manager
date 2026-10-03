@@ -177,6 +177,13 @@ export interface AddonPack {
   description: string;
   uuid: string;
   version: string;
+  version_ints?: number[];
+  active: boolean;
+}
+
+export interface AddonServerConfig {
+  active_world: string;
+  texturepack_required: boolean;
 }
 
 export interface MarketplaceItem {

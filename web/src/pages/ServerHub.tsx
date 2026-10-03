@@ -6,10 +6,10 @@ import {
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
   ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles,
-  Network, Search, Clock, History, Save, Eye, Image, FileText, MessageCircle
+  Network, Search, Clock, History, Save, Eye, Image, FileText, MessageCircle, ArrowUp, ArrowDown
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
+import { Server, User, Backup, AddonPack, AddonServerConfig, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
@@ -252,6 +252,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [urlModalOpen, setUrlModalOpen] = useState(false);
   const [addonUrlInput, setAddonUrlInput] = useState('');
   const [installingUrl, setInstallingUrl] = useState(false);
+  const [addonConfig, setAddonConfig] = useState<AddonServerConfig | null>(null);
+  const [togglingPackKey, setTogglingPackKey] = useState<string | null>(null);
+  const [updatingAddonConfig, setUpdatingAddonConfig] = useState(false);
+  const [packActivationChanged, setPackActivationChanged] = useState(false);
 
   const [marketplaceConfigModalOpen, setMarketplaceConfigModalOpen] = useState(false);
   const [curseForgeKeyInput, setCurseForgeKeyInput] = useState('');
@@ -552,6 +556,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       api.listBackups(id).then((res) => setBackupsList(Array.isArray(res) ? res : [])).catch(() => {});
     } else if (activeTab === 'addons') {
       api.listAddons(id).then((res) => setAddonsList(Array.isArray(res) ? res : [])).catch(() => {});
+      api.getAddonConfig(id).then((cfg) => setAddonConfig(cfg)).catch(() => {});
       api.getMarketplaceConfig().then((cfg) => setCurseForgeConfigured(!!cfg.curseforge_configured)).catch(() => {});
     } else if (activeTab === 'settings') {
       api.getProperties(id).then((res) => {
@@ -1312,6 +1317,62 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setAddonsList(updated);
     } catch (err: any) {
       alert(err.message || 'Failed to delete addon');
+    }
+  };
+
+  const handleToggleAddon = async (pack: AddonPack) => {
+    if (!id) return;
+    const key = `${pack.type}-${pack.folder}`;
+    setTogglingPackKey(key);
+    try {
+      const updated = await api.toggleAddonActive(id, pack.type, pack.folder, !pack.active);
+      setAddonsList((prev) =>
+        prev.map((p) => (p.type === pack.type && p.folder === pack.folder ? { ...p, active: updated.active } : p))
+      );
+      setPackActivationChanged(true);
+    } catch (err: any) {
+      alert(err.message || 'Failed to toggle addon status');
+    } finally {
+      setTogglingPackKey(null);
+    }
+  };
+
+  const handleToggleTexturePackRequired = async () => {
+    if (!id || !addonConfig) return;
+    setUpdatingAddonConfig(true);
+    try {
+      const updated = await api.updateAddonConfig(id, {
+        texturepack_required: !addonConfig.texturepack_required,
+      });
+      setAddonConfig(updated);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update texture pack setting');
+    } finally {
+      setUpdatingAddonConfig(false);
+    }
+  };
+
+  const handleMovePack = async (pack: AddonPack, direction: 'up' | 'down') => {
+    if (!id) return;
+    const ofType = addonsList.filter((p) => p.type === pack.type && p.active);
+    const index = ofType.findIndex((p) => p.folder === pack.folder);
+    if (index === -1) return;
+    if (direction === 'up' && index === 0) return;
+    if (direction === 'down' && index === ofType.length - 1) return;
+
+    const newIndex = direction === 'up' ? index - 1 : index + 1;
+    const reordered = [...ofType];
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(newIndex, 0, moved);
+
+    const packIds = reordered.map((p) => p.uuid);
+    try {
+      await api.reorderAddonPacks(id, pack.type, packIds);
+      const updated = await api.listAddons(id);
+      setAddonsList(updated);
+      setPackActivationChanged(true);
+    } catch (err: any) {
+      alert(err.message || 'Failed to reorder packs');
     }
   };
 
@@ -3007,7 +3068,49 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
             {/* SUBTAB 1: INSTALLED PACKS */}
             {addonSubTab === 'installed' && (
-              <div>
+              <div className="space-y-4">
+                {/* World & Addon Configuration Strip */}
+                <div className="p-4 rounded-xl bg-obsidian-950/80 border border-obsidian-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 font-mono text-xs">
+                  <div className="flex items-center space-x-2.5">
+                    <Globe className="w-4 h-4 text-emerald-400" />
+                    <div>
+                      <span className="text-slate-400">Target World: </span>
+                      <strong className="text-slate-200 font-semibold">{addonConfig?.active_world || 'Bedrock level'}</strong>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-3">
+                    <label className="flex items-center space-x-2 cursor-pointer select-none text-slate-300 hover:text-slate-100 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={!!addonConfig?.texturepack_required}
+                        onChange={handleToggleTexturePackRequired}
+                        disabled={updatingAddonConfig}
+                        className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500 h-4 w-4"
+                      />
+                      <span>Require Resource Packs for Clients (texturepack-required)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Restart Alert Banner if packs changed on a running server */}
+                {packActivationChanged && server?.status === 'running' && (
+                  <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 font-mono text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center space-x-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>Pack activations updated! Bedrock Dedicated Server requires a restart to reload active world packs.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRestart}
+                      className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center space-x-1.5 shrink-0 transition-colors"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Restart Server</span>
+                    </button>
+                  </div>
+                )}
+
                 {(addonsList || []).length === 0 ? (
                   <div className="text-center py-12 bg-obsidian-950/60 border border-obsidian-800 rounded-lg text-slate-500 font-mono text-xs space-y-3">
                     <Package className="w-8 h-8 text-slate-600 mx-auto" />
@@ -3018,42 +3121,126 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {(addonsList || []).map((pack) => (
-                      <div
-                        key={`${pack.type}-${pack.folder}`}
-                        className="bg-obsidian-950 border border-obsidian-800 rounded-lg p-4 flex flex-col justify-between hover:border-obsidian-700 transition-colors"
-                      >
-                        <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <span
-                              className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${
-                                pack.type === 'behavior'
-                                  ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
-                                  : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
-                              }`}
-                            >
-                              {pack.type === 'behavior' ? 'Behavior Pack' : 'Resource Pack'}
-                            </span>
-                            <span className="text-[11px] font-mono text-slate-400">v{pack.version}</span>
-                          </div>
-                          <h5 className="font-mono font-bold text-sm text-slate-200">{pack.name}</h5>
-                          <p className="font-mono text-xs text-slate-400 mt-1 line-clamp-2">
-                            {pack.description || 'No description provided.'}
-                          </p>
-                        </div>
+                    {(addonsList || []).map((pack) => {
+                      const isToggling = togglingPackKey === `${pack.type}-${pack.folder}`;
+                      const ofTypeActive = (addonsList || []).filter((p) => p.type === pack.type && p.active);
+                      const activeIndex = ofTypeActive.findIndex((p) => p.folder === pack.folder);
 
-                        <div className="mt-4 pt-3 border-t border-obsidian-800/80 flex items-center justify-between font-mono text-[11px] text-slate-500">
-                          <span>Folder: {pack.folder}</span>
-                          <button
-                            onClick={() => handleDeleteAddon(pack.type, pack.folder)}
-                            className="text-rose-400 hover:text-rose-300 flex items-center space-x-1 transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Remove</span>
-                          </button>
+                      return (
+                        <div
+                          key={`${pack.type}-${pack.folder}`}
+                          className={`bg-obsidian-950 border rounded-xl p-4 flex flex-col justify-between transition-colors ${
+                            pack.active
+                              ? 'border-emerald-500/40 shadow-sm shadow-emerald-950/20'
+                              : 'border-obsidian-800 hover:border-obsidian-700'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center space-x-2">
+                                <span
+                                  className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${
+                                    pack.type === 'behavior'
+                                      ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                                      : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
+                                  }`}
+                                >
+                                  {pack.type === 'behavior' ? 'Behavior Pack' : 'Resource Pack'}
+                                </span>
+
+                                {pack.active ? (
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-emerald-500/15 text-emerald-400 border-emerald-500/30 flex items-center space-x-1">
+                                    <Check className="w-3 h-3" />
+                                    <span>Active</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-obsidian-900 text-slate-500 border-obsidian-800">
+                                    Inactive
+                                  </span>
+                                )}
+                              </div>
+
+                              <span className="text-[11px] font-mono text-slate-400">v{pack.version}</span>
+                            </div>
+
+                            <h5 className="font-mono font-bold text-sm text-slate-200">{pack.name}</h5>
+                            <p className="font-mono text-xs text-slate-400 mt-1 line-clamp-2">
+                              {pack.description || 'No description provided.'}
+                            </p>
+
+                            <div className="mt-2 text-[10px] font-mono text-slate-500 truncate" title={pack.uuid}>
+                              UUID: {pack.uuid}
+                            </div>
+                          </div>
+
+                          <div className="mt-4 pt-3 border-t border-obsidian-800/80 flex items-center justify-between gap-2">
+                            <div className="flex items-center space-x-1.5">
+                              {/* Activate / Deactivate 1-Click Toggle */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleAddon(pack)}
+                                disabled={isToggling || addonLoading}
+                                className={`px-3 py-1.5 rounded-lg font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors ${
+                                  pack.active
+                                    ? 'bg-obsidian-900 hover:bg-obsidian-800 text-amber-400 border border-amber-500/30'
+                                    : 'bg-emerald-600 hover:bg-emerald-500 text-slate-950'
+                                }`}
+                              >
+                                {isToggling ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                    <span>Updating...</span>
+                                  </>
+                                ) : pack.active ? (
+                                  <>
+                                    <Square className="w-3.5 h-3.5" />
+                                    <span>Deactivate</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Play className="w-3.5 h-3.5 fill-current" />
+                                    <span>Activate</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {/* Pack Reordering priority buttons (when active) */}
+                              {pack.active && ofTypeActive.length > 1 && (
+                                <div className="flex items-center space-x-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMovePack(pack, 'up')}
+                                    disabled={activeIndex === 0}
+                                    className="p-1.5 rounded-lg bg-obsidian-900 border border-obsidian-800 text-slate-400 hover:text-slate-200 disabled:opacity-30 transition-colors"
+                                    title="Increase load priority (load higher)"
+                                  >
+                                    <ArrowUp className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleMovePack(pack, 'down')}
+                                    disabled={activeIndex === ofTypeActive.length - 1}
+                                    className="p-1.5 rounded-lg bg-obsidian-900 border border-obsidian-800 text-slate-400 hover:text-slate-200 disabled:opacity-30 transition-colors"
+                                    title="Decrease load priority (load lower)"
+                                  >
+                                    <ArrowDown className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteAddon(pack.type, pack.folder)}
+                              className="text-rose-400 hover:text-rose-300 font-mono text-[11px] flex items-center space-x-1 transition-colors px-2 py-1 rounded hover:bg-rose-500/10"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              <span>Remove</span>
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

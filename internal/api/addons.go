@@ -350,3 +350,143 @@ func (h *AddonHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
+
+// TogglePack activates or deactivates an installed addon pack.
+func (h *AddonHandler) TogglePack(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	packType := chi.URLParam(r, "type")
+	folder := chi.URLParam(r, "folder")
+	serverDir := filepath.Join(h.dataDir, "servers", serverID)
+
+	var payload struct {
+		Active *bool `json:"active,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+
+	var targetActive bool
+	if payload.Active != nil {
+		targetActive = *payload.Active
+	} else {
+		// Auto-toggle: check current active state
+		packs, err := addon.ListInstalledPacks(serverDir)
+		if err == nil {
+			for _, p := range packs {
+				if p.Type == packType && p.Folder == folder {
+					targetActive = !p.Active
+					break
+				}
+			}
+		}
+	}
+
+	updatedPack, err := addon.SetPackActive(serverDir, packType, folder, targetActive)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to update pack state: %s"}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	if claims != nil {
+		actionStr := "addon_activate"
+		if !targetActive {
+			actionStr = "addon_deactivate"
+		}
+		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+			UserID:    &claims.UserID,
+			ActorType: "user",
+			ActorName: claims.Username,
+			Action:    actionStr,
+			Target:    serverID,
+			Details:   fmt.Sprintf(`{"folder": %q, "type": %q, "name": %q, "active": %t}`, folder, packType, updatedPack.Name, targetActive),
+			ClientIP:  GetClientIP(r).String(),
+			Timestamp: time.Now(),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(updatedPack)
+}
+
+// GetConfig returns active world and addon-related properties for a server.
+func (h *AddonHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	serverDir := filepath.Join(h.dataDir, "servers", serverID)
+
+	cfg := addon.GetAddonConfig(serverDir)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+// UpdateConfig saves addon-related properties (such as texturepack-required).
+func (h *AddonHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	serverDir := filepath.Join(h.dataDir, "servers", serverID)
+
+	var payload struct {
+		TexturePackRequired bool `json:"texturepack_required"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := addon.UpdateAddonConfig(serverDir, payload.TexturePackRequired); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	if claims != nil {
+		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+			UserID:    &claims.UserID,
+			ActorType: "user",
+			ActorName: claims.Username,
+			Action:    "addon_config_update",
+			Target:    serverID,
+			Details:   fmt.Sprintf(`{"texturepack_required": %t}`, payload.TexturePackRequired),
+			ClientIP:  GetClientIP(r).String(),
+			Timestamp: time.Now(),
+		})
+	}
+
+	cfg := addon.GetAddonConfig(serverDir)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+// ReorderPacks updates the load order of active packs.
+func (h *AddonHandler) ReorderPacks(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	serverDir := filepath.Join(h.dataDir, "servers", serverID)
+
+	var payload struct {
+		Type    string   `json:"type"`
+		PackIDs []string `json:"pack_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := addon.SetPackOrder(serverDir, payload.Type, payload.PackIDs); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	claims := GetUserClaims(r)
+	if claims != nil {
+		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+			UserID:    &claims.UserID,
+			ActorType: "user",
+			ActorName: claims.Username,
+			Action:    "addon_reorder",
+			Target:    serverID,
+			Details:   fmt.Sprintf(`{"type": %q, "count": %d}`, payload.Type, len(payload.PackIDs)),
+			ClientIP:  GetClientIP(r).String(),
+			Timestamp: time.Now(),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
