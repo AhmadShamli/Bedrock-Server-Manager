@@ -3,18 +3,28 @@ import { Link } from 'react-router-dom';
 import {
   Shield, Globe, Server as ServerIcon, Ban, Clock, Search, RefreshCw,
   Plus, AlertCircle, ExternalLink, Copy, Check,
-  Loader2, Filter, AlertTriangle, ArrowUpRight
+  Loader2, Filter, AlertTriangle, ArrowUpRight, UserPlus
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, PortGateAllowRule, PortGateBanRule, PortGateLease } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
+import {
+  DurationUnit,
+  durationToMinutes,
+  durationToSeconds,
+  formatDurationSeconds,
+  formatDurationMinutes,
+  formatLeaseDateTime,
+  formatLeaseTimeLeft,
+} from '../utils/duration';
 
 export const PortGateManager: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'whitelist' | 'bans' | 'leases' | 'instances'>('whitelist');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
   // Data states
   const [servers, setServers] = useState<Server[]>([]);
@@ -38,6 +48,14 @@ export const PortGateManager: React.FC = () => {
   const [newBanScope, setNewBanScope] = useState<'global' | string>('global');
   const [newBanReason, setNewBanReason] = useState('');
 
+  const [showManualLeaseModal, setShowManualLeaseModal] = useState(false);
+  const [manualServerId, setManualServerId] = useState<string>('');
+  const [manualIP, setManualIP] = useState('');
+  const [manualGamertag, setManualGamertag] = useState('');
+  const [manualDuration, setManualDuration] = useState(60);
+  const [manualDurationUnit, setManualDurationUnit] = useState<DurationUnit>('minutes');
+  const [manualComment, setManualComment] = useState('');
+
   // Copied state
   const [copiedText, setCopiedText] = useState<string | null>(null);
 
@@ -60,6 +78,9 @@ export const PortGateManager: React.FC = () => {
 
       const srvList = Array.isArray(serversRes) ? serversRes : [];
       setServers(srvList);
+      if (srvList.length > 0 && !manualServerId) {
+        setManualServerId(srvList[0].id);
+      }
       setWhitelistRules(Array.isArray(allowRes) ? allowRes : []);
       setBanRules(Array.isArray(banRes) ? banRes : []);
       setActiveLeases(Array.isArray(leasesRes) ? leasesRes : []);
@@ -85,6 +106,15 @@ export const PortGateManager: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'leases') return;
+    setNowMs(Date.now());
+    const tick = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [activeTab]);
 
   const serverMap = useMemo(() => {
     const map = new Map<string, Server>();
@@ -294,6 +324,31 @@ export const PortGateManager: React.FC = () => {
     }
   };
 
+  const handleCreateManualLease = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const targetServer = manualServerId || (servers[0]?.id ?? '');
+    if (!targetServer || !manualIP.trim()) return;
+
+    setActionLoading(true);
+    try {
+      await api.createManualLease(targetServer, {
+        ip_address: manualIP.trim(),
+        gamertag: manualGamertag.trim(),
+        duration_minutes: durationToMinutes(Number(manualDuration), manualDurationUnit),
+        comment: manualComment.trim(),
+      });
+      setShowManualLeaseModal(false);
+      setManualIP('');
+      setManualGamertag('');
+      setManualComment('');
+      await loadData();
+    } catch (err: any) {
+      alert(`Failed to grant manual lease: ${err.message || 'Unknown error'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
       {/* Header */}
@@ -326,6 +381,21 @@ export const PortGateManager: React.FC = () => {
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-emerald-400' : ''}`} />
             <span>Refresh</span>
           </button>
+
+          {servers.length > 0 && (
+            <button
+              onClick={() => {
+                if (!manualServerId && servers.length > 0) {
+                  setManualServerId(servers[0].id);
+                }
+                setShowManualLeaseModal(true);
+              }}
+              className="px-3.5 py-2 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 border border-obsidian-600 text-slate-200 font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors"
+            >
+              <UserPlus className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Manual IP Grant</span>
+            </button>
+          )}
 
           <button
             onClick={() => setShowAddAllowModal(true)}
@@ -770,9 +840,25 @@ export const PortGateManager: React.FC = () => {
                 Live Dynamic Firewall Leases
               </h2>
             </div>
-            <span className="text-xs font-mono text-slate-400">
-              {activeLeases.length} total active player ports
-            </span>
+            <div className="flex items-center space-x-3">
+              <span className="text-xs font-mono text-slate-400">
+                {activeLeases.length} total active player ports
+              </span>
+              {servers.length > 0 && (
+                <button
+                  onClick={() => {
+                    if (!manualServerId && servers.length > 0) {
+                      setManualServerId(servers[0].id);
+                    }
+                    setShowManualLeaseModal(true);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 border border-obsidian-600 text-slate-200 font-mono text-xs font-bold flex items-center space-x-1.5"
+                >
+                  <UserPlus className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>+ Manual IP Grant</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {leasesPagination.paginatedItems.length === 0 ? (
@@ -781,20 +867,25 @@ export const PortGateManager: React.FC = () => {
             </div>
           ) : (
             <div className="overflow-x-auto w-full max-w-full">
-              <table className="w-full text-left text-xs font-mono min-w-[650px]">
+              <table className="w-full text-left text-xs font-mono min-w-[820px]">
                 <thead className="bg-obsidian-800/60 text-slate-400 uppercase tracking-wider text-[11px] border-b border-obsidian-700">
                   <tr>
                     <th className="px-4 py-3">Server Instance</th>
                     <th className="px-4 py-3">Client IP Address</th>
                     <th className="px-4 py-3">Gamertag</th>
                     <th className="px-4 py-3">Knock Method</th>
+                    <th className="px-4 py-3">Granted At</th>
                     <th className="px-4 py-3">Expires At</th>
+                    <th className="px-4 py-3">Time Left</th>
                     <th className="px-4 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-obsidian-800/80">
                   {leasesPagination.paginatedItems.map((lease) => {
                     const serverObj = serverMap.get(lease.server_id);
+                    const grantedInfo = formatLeaseDateTime(lease.granted_at, undefined, nowMs);
+                    const expiresInfo = formatLeaseDateTime(lease.expires_at, lease.granted_at, nowMs);
+                    const timeLeft = formatLeaseTimeLeft(lease.expires_at, nowMs);
                     return (
                       <tr key={lease.id} className="hover:bg-obsidian-800/30 transition-colors">
                         <td className="px-4 py-3 font-bold text-slate-200">
@@ -836,8 +927,50 @@ export const PortGateManager: React.FC = () => {
                         <td className="px-4 py-3 text-slate-400 capitalize">
                           {lease.knock_method}
                         </td>
-                        <td className="px-4 py-3 text-amber-400 font-bold">
-                          {new Date(lease.expires_at).toLocaleString()}
+                        <td className="px-4 py-3 text-slate-400">
+                          <div className="flex flex-col">
+                            <span className="text-slate-300">{grantedInfo.timeStr}</span>
+                            <span className="text-[10px] text-slate-500">{grantedInfo.dateStr}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-col">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={
+                                  expiresInfo.isDifferentDay
+                                    ? 'text-amber-300 font-bold'
+                                    : 'text-slate-200 font-semibold'
+                                }
+                              >
+                                {expiresInfo.isDifferentDay
+                                  ? `${expiresInfo.dateStr}, ${expiresInfo.timeStr}`
+                                  : expiresInfo.timeStr}
+                              </span>
+                              {expiresInfo.dayOffsetFromRef > 0 && (
+                                <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold">
+                                  +{expiresInfo.dayOffsetFromRef}d
+                                </span>
+                              )}
+                            </div>
+                            {!expiresInfo.isDifferentDay && (
+                              <span className="text-[10px] text-slate-500">{expiresInfo.dateStr}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold tabular-nums border ${
+                              timeLeft.isExpired
+                                ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                                : timeLeft.isExpiringSoon
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 animate-pulse'
+                                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                            }`}
+                          >
+                            <Clock className="w-3 h-3 shrink-0" />
+                            <span>{timeLeft.text}</span>
+                          </span>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <button
@@ -879,7 +1012,7 @@ export const PortGateManager: React.FC = () => {
           </div>
 
           <div className="overflow-x-auto w-full max-w-full">
-            <table className="w-full text-left text-xs font-mono min-w-[700px]">
+            <table className="w-full text-left text-xs font-mono min-w-[760px]">
               <thead className="bg-obsidian-800/60 text-slate-400 uppercase tracking-wider text-[11px] border-b border-obsidian-700">
                 <tr>
                   <th className="px-4 py-3">Server Instance</th>
@@ -887,6 +1020,7 @@ export const PortGateManager: React.FC = () => {
                   <th className="px-4 py-3">Game Address</th>
                   <th className="px-4 py-3">Port Gate Status</th>
                   <th className="px-4 py-3">Auth Mode</th>
+                  <th className="px-4 py-3">Default Lease</th>
                   <th className="px-4 py-3">Portal Link</th>
                   <th className="px-4 py-3 text-right">Hub Link</th>
                 </tr>
@@ -929,6 +1063,9 @@ export const PortGateManager: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 capitalize text-slate-300">
                         {srv.port_gate_mode || 'passphrase'}
+                      </td>
+                      <td className="px-4 py-3 text-emerald-400 font-semibold">
+                        {formatDurationSeconds(srv.port_gate_timeout || 7200)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center space-x-2">
@@ -977,6 +1114,125 @@ export const PortGateManager: React.FC = () => {
               onPageSizeChange={serversPagination.setPageSize}
               pageSizeOptions={[10, 25, 50]}
             />
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: MANUAL IP LEASE */}
+      {showManualLeaseModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-md w-full p-6 shadow-2xl">
+            <h3 className="text-base font-mono font-bold text-slate-100 mb-4 flex items-center gap-2">
+              <UserPlus className="w-4 h-4 text-emerald-400" />
+              <span>Grant Manual IP Bypass</span>
+            </h3>
+            <form onSubmit={handleCreateManualLease} className="space-y-4 font-mono text-xs">
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Server Instance</label>
+                <select
+                  value={manualServerId}
+                  onChange={(e) => setManualServerId(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                >
+                  {servers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} (UDP {s.port})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-300 font-bold">Client IP Address</label>
+                  {detectedClientIP && (
+                    <button
+                      type="button"
+                      onClick={() => setManualIP(detectedClientIP)}
+                      className="text-[11px] text-emerald-400 hover:text-emerald-300 underline"
+                    >
+                      Use My IP ({detectedClientIP})
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. 198.51.100.24"
+                  value={manualIP}
+                  onChange={(e) => setManualIP(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Gamertag (optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. DiamondMiner99"
+                  value={manualGamertag}
+                  onChange={(e) => setManualGamertag(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-300 font-bold">Lease Duration</label>
+                  <span className="text-[11px] text-emerald-400 font-bold">
+                    {formatDurationMinutes(durationToMinutes(manualDuration, manualDurationUnit))}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="1"
+                    value={manualDuration}
+                    onChange={(e) => setManualDuration(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="flex-1 px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                  />
+                  <select
+                    value={manualDurationUnit}
+                    onChange={(e) => setManualDurationUnit(e.target.value as DurationUnit)}
+                    className="px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500 font-bold"
+                  >
+                    <option value="minutes">Minutes</option>
+                    <option value="hours">Hours</option>
+                    <option value="days">Days</option>
+                  </select>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Expires around:{' '}
+                  <span className="text-slate-300">
+                    {new Date(Date.now() + durationToSeconds(manualDuration, manualDurationUnit) * 1000).toLocaleString()}
+                  </span>
+                </p>
+              </div>
+              <div>
+                <label className="block text-slate-300 mb-1 font-bold">Comment / Note</label>
+                <input
+                  type="text"
+                  placeholder="Reason for manual bypass"
+                  value={manualComment}
+                  onChange={(e) => setManualComment(e.target.value)}
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
+                <button
+                  type="button"
+                  onClick={() => setShowManualLeaseModal(false)}
+                  className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-750 font-bold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center gap-1.5"
+                >
+                  {actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                  <span>Apply Firewall Rule</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

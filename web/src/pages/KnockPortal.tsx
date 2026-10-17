@@ -44,34 +44,46 @@ export const KnockPortal: React.FC = () => {
   const formatTimerDigital = (totalSec: number | null): string => {
     if (totalSec === null) return '--:--:--';
     if (totalSec <= 0) return '00:00:00';
-    const hours = Math.floor(totalSec / 3600);
+    const days = Math.floor(totalSec / 86400);
+    const hours = Math.floor((totalSec % 86400) / 3600);
     const minutes = Math.floor((totalSec % 3600) / 60);
     const seconds = totalSec % 60;
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    const hms = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    return days > 0 ? `${days}d ${hms}` : hms;
   };
 
   const formatTimerHuman = (totalSec: number | null): string => {
     if (totalSec === null) return '';
     if (totalSec <= 0) return 'Expired';
-    const hours = Math.floor(totalSec / 3600);
+    const days = Math.floor(totalSec / 86400);
+    const hours = Math.floor((totalSec % 86400) / 3600);
     const minutes = Math.floor((totalSec % 3600) / 60);
     const seconds = totalSec % 60;
+    if (days > 0) {
+      return `${days}d ${hours}h ${minutes}m left`;
+    }
     if (hours > 0) {
-      return `${hours}h ${minutes}m ${seconds}s`;
+      return `${hours}h ${minutes}m ${seconds}s left`;
     }
     if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
+      return `${minutes}m ${seconds}s left`;
     }
-    return `${seconds}s`;
+    return `${seconds}s left`;
   };
 
   const formatDurationFriendly = (sec?: number): string => {
     if (!sec || sec <= 0) return '2 hours';
-    const hrs = Math.floor(sec / 3600);
+    const days = Math.floor(sec / 86400);
+    const hrs = Math.floor((sec % 86400) / 3600);
     const mins = Math.floor((sec % 3600) / 60);
-    if (hrs > 0 && mins > 0) return `${hrs}h ${mins}m`;
-    if (hrs > 0) return `${hrs} hour${hrs > 1 ? 's' : ''}`;
-    return `${mins} minute${mins > 1 ? 's' : ''}`;
+    if (days > 0 && hrs === 0 && mins === 0) return `${days} day${days > 1 ? 's' : ''}`;
+    if (days === 0 && hrs > 0 && mins === 0) return `${hrs} hour${hrs > 1 ? 's' : ''}`;
+    if (days === 0 && hrs === 0) return `${mins} minute${mins > 1 ? 's' : ''}`;
+    const parts: string[] = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hrs > 0) parts.push(`${hrs}h`);
+    if (mins > 0) parts.push(`${mins}m`);
+    return parts.join(' ');
   };
 
   const handleWakeServer = async () => {

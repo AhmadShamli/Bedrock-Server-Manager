@@ -13,6 +13,16 @@ import { Server, User, Backup, AddonPack, AddonServerConfig, MarketplaceItem, Ma
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
+import {
+  DurationUnit,
+  durationToMinutes,
+  durationToSeconds,
+  secondsToValueAndUnit,
+  formatDurationSeconds,
+  formatDurationMinutes,
+  formatLeaseDateTime,
+  formatLeaseTimeLeft,
+} from '../utils/duration';
 
 const formatFriendlyDate = (dateStr?: string) => {
   if (!dateStr) return 'N/A';
@@ -191,17 +201,20 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   // Port Gate Leases & Access Keys state
   const [leases, setLeases] = useState<PortGateLease[]>([]);
   const [accessKeys, setAccessKeys] = useState<PortGateKey[]>([]);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [showManualLeaseModal, setShowManualLeaseModal] = useState(false);
   const [manualIP, setManualIP] = useState('');
   const [manualGamertag, setManualGamertag] = useState('');
   const [manualDuration, setManualDuration] = useState(60);
+  const [manualDurationUnit, setManualDurationUnit] = useState<DurationUnit>('minutes');
   const [manualComment, setManualComment] = useState('');
 
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [newKeyLabel, setNewKeyLabel] = useState('');
   const [newKeyPassphrase, setNewKeyPassphrase] = useState('');
   const [newKeyMaxUses, setNewKeyMaxUses] = useState(0);
-  const [newKeyDurationMinutes, setNewKeyDurationMinutes] = useState(120);
+  const [newKeyDurationMinutes, setNewKeyDurationMinutes] = useState(2);
+  const [newKeyDurationUnit, setNewKeyDurationUnit] = useState<DurationUnit>('hours');
   const [createdKeySecret, setCreatedKeySecret] = useState<string | null>(null);
   const [copiedSecret, setCopiedSecret] = useState(false);
   const [copiedSeed, setCopiedSeed] = useState(false);
@@ -228,7 +241,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [editServerAutostart, setEditServerAutostart] = useState(false);
   const [editServerPortGate, setEditServerPortGate] = useState(false);
   const [editServerPortGateMode, setEditServerPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
-  const [editServerPortGateTimeout, setEditServerPortGateTimeout] = useState(7200);
+  const [editPortGateTimeoutValue, setEditPortGateTimeoutValue] = useState(2);
+  const [editPortGateTimeoutUnit, setEditPortGateTimeoutUnit] = useState<DurationUnit>('hours');
   const [editGameServerAddress, setEditGameServerAddress] = useState('');
   const [editServerNetworkMode, setEditServerNetworkMode] = useState('host');
   const [editIdleTimeoutMinutes, setEditIdleTimeoutMinutes] = useState(0);
@@ -583,6 +597,24 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     }
   }, [id, activeTab, server?.version]);
 
+  // Live 1-second clock & periodic lease refresh when on Port Gate tab
+  useEffect(() => {
+    if (activeTab !== 'portgate') return;
+    setNowMs(Date.now());
+    const tick = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    const refreshLeases = setInterval(() => {
+      if (id) {
+        api.listLeases(id).then((res) => setLeases(Array.isArray(res) ? res : [])).catch(() => {});
+      }
+    }, 15000);
+    return () => {
+      clearInterval(tick);
+      clearInterval(refreshLeases);
+    };
+  }, [id, activeTab]);
+
   useEffect(() => {
     if (server) {
       setEditServerName(server.name);
@@ -597,7 +629,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setEditServerAutostart(server.autostart_on_boot);
       setEditServerPortGate(server.port_gate_enabled);
       setEditServerPortGateMode(server.port_gate_mode);
-      setEditServerPortGateTimeout(server.port_gate_timeout);
+      const parsedTimeout = secondsToValueAndUnit(server.port_gate_timeout || 7200);
+      setEditPortGateTimeoutValue(parsedTimeout.value);
+      setEditPortGateTimeoutUnit(parsedTimeout.unit);
       setEditGameServerAddress(server.game_server_address || '');
       setEditServerNetworkMode(server.network_mode || 'host');
       setEditIdleTimeoutMinutes(server.idle_timeout_minutes || 0);
@@ -642,7 +676,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         label: newKeyLabel.trim(),
         passphrase: newKeyPassphrase.trim() || undefined,
         max_uses: Number(newKeyMaxUses),
-        lease_duration_seconds: Number(newKeyDurationMinutes) * 60,
+        lease_duration_seconds: durationToSeconds(Number(newKeyDurationMinutes), newKeyDurationUnit),
       });
       setCreatedKeySecret(res.plaintext_passphrase || newKeyPassphrase.trim());
       setNewKeyLabel('');
@@ -706,6 +740,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     if (!id) return;
     setServerUpdating(true);
     setServerUpdatedMsg(null);
+    const computedTimeoutSec = durationToSeconds(Number(editPortGateTimeoutValue), editPortGateTimeoutUnit);
     try {
       const updated = await api.updateServer(id, {
         name: editServerName,
@@ -721,7 +756,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         idle_timeout_minutes: Math.max(0, Number(editIdleTimeoutMinutes) || 0),
         port_gate_enabled: editServerPortGate,
         port_gate_mode: editServerPortGateMode,
-        port_gate_timeout: Number(editServerPortGateTimeout),
+        port_gate_timeout: computedTimeoutSec,
         game_server_address: editGameServerAddress.trim(),
         network_mode: editServerNetworkMode,
       });
@@ -1220,7 +1255,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       await api.createManualLease(id, {
         ip_address: manualIP,
         gamertag: manualGamertag,
-        duration_minutes: manualDuration,
+        duration_minutes: durationToMinutes(Number(manualDuration), manualDurationUnit),
         comment: manualComment,
       });
       setShowManualLeaseModal(false);
@@ -2302,7 +2337,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   <span>Dynamic Firewall Port Gate</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1 font-mono">
-                  Port {server.port}/udp is dynamically granted to verified players.
+                  Port {server.port}/udp is dynamically granted to verified players (Default lease:{' '}
+                  <span className="text-emerald-400 font-semibold">
+                    {formatDurationSeconds(server.port_gate_timeout || 7200)}
+                  </span>
+                  ).
                 </p>
               </div>
               <div className="flex items-center space-x-3">
@@ -2375,7 +2414,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             ) : (
               <div className="border border-obsidian-800 rounded-lg overflow-hidden w-full max-w-full">
                 <div className="overflow-x-auto w-full max-w-full">
-                  <table className="w-full text-left font-mono text-xs min-w-[650px]">
+                  <table className="w-full text-left font-mono text-xs min-w-[760px]">
                     <thead className="bg-obsidian-950 text-slate-400 border-b border-obsidian-800 uppercase">
                       <tr>
                         <th className="px-4 py-2.5">IP Address</th>
@@ -2383,27 +2422,76 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                         <th className="px-4 py-2.5">Knock Method</th>
                         <th className="px-4 py-2.5">Granted At</th>
                         <th className="px-4 py-2.5">Expires At</th>
+                        <th className="px-4 py-2.5">Time Left</th>
                         <th className="px-4 py-2.5 text-right">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-obsidian-800 bg-obsidian-950/40">
-                      {paginatedLeases.map((lease) => (
-                        <tr key={lease.id} className="hover:bg-obsidian-800/40">
-                          <td className="px-4 py-2.5 text-emerald-400 font-bold">{lease.ip_address}</td>
-                          <td className="px-4 py-2.5 text-slate-300">{lease.gamertag || '—'}</td>
-                          <td className="px-4 py-2.5 text-slate-400 capitalize">{lease.knock_method}</td>
-                          <td className="px-4 py-2.5 text-slate-400">{new Date(lease.granted_at).toLocaleTimeString()}</td>
-                          <td className="px-4 py-2.5 text-slate-400">{new Date(lease.expires_at).toLocaleTimeString()}</td>
-                          <td className="px-4 py-2.5 text-right">
-                            <button
-                              onClick={() => handleRevokeLease(lease.id)}
-                              className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
-                            >
-                              Revoke
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {paginatedLeases.map((lease) => {
+                        const grantedInfo = formatLeaseDateTime(lease.granted_at, undefined, nowMs);
+                        const expiresInfo = formatLeaseDateTime(lease.expires_at, lease.granted_at, nowMs);
+                        const timeLeft = formatLeaseTimeLeft(lease.expires_at, nowMs);
+                        return (
+                          <tr key={lease.id} className="hover:bg-obsidian-800/40">
+                            <td className="px-4 py-2.5 text-emerald-400 font-bold">{lease.ip_address}</td>
+                            <td className="px-4 py-2.5 text-slate-300">{lease.gamertag || '—'}</td>
+                            <td className="px-4 py-2.5 text-slate-400 capitalize">{lease.knock_method}</td>
+                            <td className="px-4 py-2.5 text-slate-400">
+                              <div className="flex flex-col">
+                                <span className="text-slate-300">{grantedInfo.timeStr}</span>
+                                <span className="text-[10px] text-slate-500">{grantedInfo.dateStr}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <div className="flex flex-col">
+                                <div className="flex items-center gap-1.5">
+                                  <span
+                                    className={
+                                      expiresInfo.isDifferentDay
+                                        ? 'text-amber-300 font-bold'
+                                        : 'text-slate-200 font-semibold'
+                                    }
+                                  >
+                                    {expiresInfo.isDifferentDay
+                                      ? `${expiresInfo.dateStr}, ${expiresInfo.timeStr}`
+                                      : expiresInfo.timeStr}
+                                  </span>
+                                  {expiresInfo.dayOffsetFromRef > 0 && (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold">
+                                      +{expiresInfo.dayOffsetFromRef}d
+                                    </span>
+                                  )}
+                                </div>
+                                {!expiresInfo.isDifferentDay && (
+                                  <span className="text-[10px] text-slate-500">{expiresInfo.dateStr}</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <span
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold tabular-nums border ${
+                                  timeLeft.isExpired
+                                    ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                                    : timeLeft.isExpiringSoon
+                                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 animate-pulse'
+                                    : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                                }`}
+                              >
+                                <Clock className="w-3 h-3 shrink-0" />
+                                <span>{timeLeft.text}</span>
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-right">
+                              <button
+                                onClick={() => handleRevokeLease(lease.id)}
+                                className="px-2 py-1 rounded bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[10px] font-bold"
+                              >
+                                Revoke
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -2450,14 +2538,36 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     />
                   </div>
                   <div>
-                    <label className="block text-slate-300 mb-1 font-bold">Duration (minutes)</label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={manualDuration}
-                      onChange={(e) => setManualDuration(parseInt(e.target.value) || 60)}
-                      className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
-                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-slate-300 font-bold">Lease Duration</label>
+                      <span className="text-[11px] text-emerald-400 font-bold">
+                        {formatDurationMinutes(durationToMinutes(manualDuration, manualDurationUnit))}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="1"
+                        value={manualDuration}
+                        onChange={(e) => setManualDuration(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="flex-1 px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                      <select
+                        value={manualDurationUnit}
+                        onChange={(e) => setManualDurationUnit(e.target.value as DurationUnit)}
+                        className="px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500 font-bold"
+                      >
+                        <option value="minutes">Minutes</option>
+                        <option value="hours">Hours</option>
+                        <option value="days">Days</option>
+                      </select>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      Expires around:{' '}
+                      <span className="text-slate-300">
+                        {new Date(Date.now() + durationToSeconds(manualDuration, manualDurationUnit) * 1000).toLocaleString()}
+                      </span>
+                    </p>
                   </div>
                   <div>
                     <label className="block text-slate-300 mb-1 font-bold">Comment / Note</label>
@@ -2541,8 +2651,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                           <td className="px-4 py-2.5 text-slate-300">
                             {k.used_count} / {k.max_uses === 0 ? '∞' : k.max_uses}
                           </td>
-                          <td className="px-4 py-2.5 text-slate-400">
-                            {Math.round(k.lease_duration_seconds / 60)} min
+                          <td className="px-4 py-2.5 text-slate-300 font-semibold">
+                            {formatDurationSeconds(k.lease_duration_seconds)}
                           </td>
                           <td className="px-4 py-2.5">
                             <span
@@ -2647,7 +2757,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                         className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div>
                         <label className="block text-slate-300 mb-1 font-bold">Max Uses (0 = unlimited)</label>
                         <input
@@ -2659,14 +2769,30 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                         />
                       </div>
                       <div>
-                        <label className="block text-slate-300 mb-1 font-bold">Duration (minutes)</label>
-                        <input
-                          type="number"
-                          min="5"
-                          value={newKeyDurationMinutes}
-                          onChange={(e) => setNewKeyDurationMinutes(parseInt(e.target.value) || 120)}
-                          className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
-                        />
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-slate-300 font-bold">Grant Duration</label>
+                          <span className="text-[10px] text-emerald-400 font-bold">
+                            {formatDurationSeconds(durationToSeconds(newKeyDurationMinutes, newKeyDurationUnit))}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="1"
+                            value={newKeyDurationMinutes}
+                            onChange={(e) => setNewKeyDurationMinutes(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                          />
+                          <select
+                            value={newKeyDurationUnit}
+                            onChange={(e) => setNewKeyDurationUnit(e.target.value as DurationUnit)}
+                            className="px-2.5 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500 font-bold shrink-0"
+                          >
+                            <option value="minutes">Min</option>
+                            <option value="hours">Hours</option>
+                            <option value="days">Days</option>
+                          </select>
+                        </div>
                       </div>
                     </div>
                     <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
@@ -4324,14 +4450,36 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-slate-400 mb-1 text-[11px] font-bold">Lease Timeout (seconds)</label>
-                    <input
-                      type="number"
-                      min="60"
-                      value={editServerPortGateTimeout}
-                      onChange={(e) => setEditServerPortGateTimeout(parseInt(e.target.value) || 7200)}
-                      className="w-full px-2.5 py-1.5 rounded bg-obsidian-950 border border-obsidian-700 text-slate-200 text-xs"
-                    />
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-slate-400 text-[11px] font-bold">Default Lease Duration</label>
+                      <span className="text-[10px] text-emerald-400 font-bold">
+                        {formatDurationSeconds(durationToSeconds(editPortGateTimeoutValue, editPortGateTimeoutUnit))}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min="1"
+                        value={editPortGateTimeoutValue}
+                        onChange={(e) => {
+                          const val = Math.max(1, parseInt(e.target.value) || 1);
+                          setEditPortGateTimeoutValue(val);
+                        }}
+                        className="w-full px-2.5 py-1.5 rounded bg-obsidian-950 border border-obsidian-700 text-slate-200 text-xs"
+                      />
+                      <select
+                        value={editPortGateTimeoutUnit}
+                        onChange={(e) => {
+                          const unit = e.target.value as DurationUnit;
+                          setEditPortGateTimeoutUnit(unit);
+                        }}
+                        className="px-2.5 py-1.5 rounded bg-obsidian-950 border border-obsidian-700 text-slate-200 text-xs font-bold shrink-0"
+                      >
+                        <option value="minutes">Minutes</option>
+                        <option value="hours">Hours</option>
+                        <option value="days">Days</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
               )}
