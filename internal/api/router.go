@@ -53,8 +53,10 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 		serverHandler.SetResourceMonitor(opts.ResourceMonitor)
 	}
 	knockHandler := NewKnockHandler(opts.DB, opts.RateLimiter, opts.Pepper, opts.Firewall)
+	knockHandler.SetServerHandler(serverHandler)
 	playerHubHandler := NewPlayerHubHandler(serverHandler, opts.PlayerManager)
 	backupHandler := NewBackupHandler(opts.DB, opts.Engine, opts.DataDir)
+	backupHandler.SetServerHandler(serverHandler)
 	addonHandler := NewAddonHandler(opts.DB, opts.DataDir)
 	taskHandler := NewTaskHandler(opts.DB, opts.Scheduler)
 	globalPlayerHandler := NewGlobalPlayerHandler(opts.DB, opts.Engine, opts.DataDir)
@@ -81,6 +83,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 			k.Get("/config", knockHandler.GetConfig)
 			k.Post("/", knockHandler.Knock)
 			k.Post("/knock", knockHandler.Knock)
+			k.Post("/start", knockHandler.StartServer)
 			k.Post("/heartbeat", knockHandler.Heartbeat)
 			k.Get("/status", knockHandler.Status)
 		})
@@ -121,6 +124,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				srvGroup.Use(mw.RequireServerAccess)
 
 				srvGroup.Get("/servers/{id}", serverHandler.Get)
+				srvGroup.Put("/servers/{id}", serverHandler.Update)
 				srvGroup.Delete("/servers/{id}", serverHandler.Delete)
 				srvGroup.Get("/servers/{id}/stats", serverHandler.Stats)
 				srvGroup.Get("/servers/{id}/resource-status", serverHandler.ResourceStatus)
@@ -181,6 +185,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				srvGroup.Post("/servers/{id}/backups/{backupId}/restore", backupHandler.RestoreBackup)
 				srvGroup.Get("/servers/{id}/world/export", backupHandler.ExportWorld)
 				srvGroup.Post("/servers/{id}/world/import", backupHandler.ImportWorld)
+				srvGroup.Post("/servers/{id}/world/reset", backupHandler.ResetWorld)
 
 				// Addon Manager
 				srvGroup.Get("/servers/{id}/addons", addonHandler.List)
@@ -202,7 +207,6 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 			authGroup.Group(func(adminGroup chi.Router) {
 				adminGroup.Use(mw.RequireAdmin)
 
-				adminGroup.Put("/servers/{id}", serverHandler.Update)
 				adminGroup.Post("/servers/{id}/clone", serverHandler.Clone)
 				adminGroup.Post("/servers/{id}/copy-configs", serverHandler.CopyConfigs)
 				adminGroup.Get("/servers/{id}/export", serverHandler.Export)

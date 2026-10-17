@@ -10,7 +10,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/addon"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/backup"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/configfile"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
@@ -18,9 +20,10 @@ import (
 )
 
 type BackupHandler struct {
-	db      *database.ManagerDB
-	eng     engine.ServerEngine
-	dataDir string
+	db            *database.ManagerDB
+	eng           engine.ServerEngine
+	dataDir       string
+	serverHandler *ServerHandler
 }
 
 func NewBackupHandler(db *database.ManagerDB, eng engine.ServerEngine, dataDir string) *BackupHandler {
@@ -29,6 +32,10 @@ func NewBackupHandler(db *database.ManagerDB, eng engine.ServerEngine, dataDir s
 		eng:     eng,
 		dataDir: dataDir,
 	}
+}
+
+func (h *BackupHandler) SetServerHandler(sh *ServerHandler) {
+	h.serverHandler = sh
 }
 
 // ListBackups returns all backups for the given server.
@@ -259,6 +266,7 @@ func (h *BackupHandler) ExportWorld(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
+	levelName := addon.GetActiveLevelName(serverDir)
 	tempFile, err := os.CreateTemp("", fmt.Sprintf("%s_export_*.mcworld", server.ID))
 	if err != nil {
 		http.Error(w, `{"error": "Failed to create temporary export file"}`, http.StatusInternalServerError)
@@ -268,7 +276,7 @@ func (h *BackupHandler) ExportWorld(w http.ResponseWriter, r *http.Request) {
 	_ = tempFile.Close()
 	defer os.Remove(tempExportFile)
 
-	if err := backup.ExportWorld(serverDir, "Bedrock level", tempExportFile); err != nil {
+	if err := backup.ExportWorld(serverDir, levelName, tempExportFile); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to export world: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -326,9 +334,10 @@ func (h *BackupHandler) ImportWorld(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
 	worldName := r.FormValue("world_name")
 	if worldName == "" {
-		worldName = "Bedrock level"
+		worldName = addon.GetActiveLevelName(serverDir)
 	}
 	cleanWorldName := filepath.Clean(worldName)
 	if strings.Contains(cleanWorldName, "..") || strings.Contains(cleanWorldName, "/") || strings.Contains(cleanWorldName, "\\") || filepath.IsAbs(cleanWorldName) {
@@ -336,11 +345,13 @@ func (h *BackupHandler) ImportWorld(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
 	if err := backup.ImportWorld(serverDir, cleanWorldName, tempFile, size); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to import world: %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
+
+	// Ensure active addons remain synced with the imported world
+	addon.SyncActivePacksToWorlds(serverDir)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -350,3 +361,155 @@ func (h *BackupHandler) ImportWorld(w http.ResponseWriter, r *http.Request) {
 		"size_bytes": size,
 	})
 }
+
+// ResetWorldRequest configures options when resetting a server's world data.
+type ResetWorldRequest struct {
+	CreateBackup bool    `json:"create_backup"`
+	KeepAddons   *bool   `json:"keep_addons"`
+	Seed         *string `json:"seed"`
+}
+
+// ResetWorld wipes all world data for the instance so it generates a clean new world.
+// If the server is currently running, it is gracefully stopped, cleaned, and restarted.
+func (h *BackupHandler) ResetWorld(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	server, err := h.db.GetServer(r.Context(), serverID)
+	if err != nil || server == nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	var req ResetWorldRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+
+	keepAddons := true
+	if req.KeepAddons != nil {
+		keepAddons = *req.KeepAddons
+	}
+
+	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
+	backupDir := filepath.Join(h.dataDir, "backups", server.ID)
+	levelName := addon.GetActiveLevelName(serverDir)
+
+	// 1. Optional pre-reset backup if worlds directory exists
+	var createdBackup *models.Backup
+	if req.CreateBackup {
+		if _, err := os.Stat(filepath.Join(serverDir, "worlds")); err == nil {
+			if b, bErr := backup.CreateHotBackup(r.Context(), server, serverDir, backupDir, h.eng, "pre-reset", false, h.db); bErr == nil {
+				createdBackup = b
+			}
+		}
+	}
+
+	// 2. Capture active addon pack bindings before wiping worlds/
+	var behaviorRefs, resourceRefs []addon.WorldPackRef
+	if keepAddons {
+		behaviorRefs, _ = addon.GetWorldPackRefs(serverDir, levelName, "behavior")
+		resourceRefs, _ = addon.GetWorldPackRefs(serverDir, levelName, "resource")
+	}
+
+	// 3. Check live server status; stop if running so LevelDB files are not locked
+	liveStatus := server.Status
+	if h.eng != nil {
+		if st, err := h.eng.GetServerStatus(r.Context(), server); err == nil && st != "" {
+			liveStatus = st
+		}
+	}
+	wasRunning := liveStatus == models.ServerStatusRunning || liveStatus == models.ServerStatusStarting
+
+	if wasRunning && h.eng != nil {
+		_ = h.eng.StopServer(r.Context(), server, 15)
+		server.Status = models.ServerStatusStopped
+		_ = h.db.UpdateServerStatus(r.Context(), server.ID, models.ServerStatusStopped, server.ContainerID)
+		if h.serverHandler != nil && h.serverHandler.resourceMonitor != nil {
+			h.serverHandler.resourceMonitor.ResetIdleTimer(server.ID)
+		}
+	}
+
+	// 4. Wipe existing world data cleanly
+	if err := backup.ResetWorld(serverDir); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to reset world data: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	// 5. Optional seed update for the new world
+	if req.Seed != nil {
+		newSeed := strings.TrimSpace(*req.Seed)
+		server.Seed = newSeed
+		_ = h.db.UpdateServer(r.Context(), server)
+
+		propPath := filepath.Join(serverDir, "server.properties")
+		updated, _ := configfile.UpdateExistingPropertyFile(propPath, map[string]string{
+			"level-seed": newSeed,
+		})
+		if !updated {
+			existingProps, existingKeys, ok, _ := configfile.ReadPendingProperties(serverDir)
+			if !ok || existingProps == nil {
+				existingProps, existingKeys = configfile.MergeDefaultProperties(make(map[string]string), nil, server)
+			}
+			mergedProps, mergedKeys := configfile.MergeProperties(existingProps, existingKeys, map[string]string{
+				"level-seed": newSeed,
+			})
+			_ = configfile.WritePendingProperties(serverDir, mergedProps, mergedKeys)
+		}
+	}
+
+	// 6. Restore active addon pack bindings into the fresh world directory
+	if keepAddons {
+		if len(behaviorRefs) > 0 {
+			_ = addon.SaveWorldPackRefs(serverDir, levelName, "behavior", behaviorRefs)
+		}
+		if len(resourceRefs) > 0 {
+			_ = addon.SaveWorldPackRefs(serverDir, levelName, "resource", resourceRefs)
+		}
+		addon.SyncActivePacksToWorlds(serverDir)
+	}
+
+	claims := GetUserClaims(r)
+	actorName := "user"
+	if claims != nil {
+		actorName = claims.Username
+	}
+
+	// 7. Restart server if it was running before the world reset
+	restarted := false
+	if wasRunning {
+		if h.serverHandler != nil {
+			if err := h.serverHandler.StartServerInstance(r.Context(), server, "user", actorName, "server_restart_after_world_reset", GetClientIP(r).String()); err == nil {
+				restarted = true
+			}
+		} else if h.eng != nil {
+			if err := h.eng.StartServer(r.Context(), server); err == nil {
+				server.Status = models.ServerStatusRunning
+				_ = h.db.UpdateServerStatus(r.Context(), server.ID, models.ServerStatusRunning, server.ContainerID)
+				restarted = true
+			}
+		}
+	}
+
+	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+		ActorType: "user",
+		ActorName: actorName,
+		Action:    "world_reset",
+		Target:    server.ID,
+		Details:   fmt.Sprintf(`{"world_name": "%s", "keep_addons": %t, "create_backup": %t, "restarted": %t, "seed": "%s"}`, levelName, keepAddons, req.CreateBackup, restarted, server.Seed),
+		ClientIP:  GetClientIP(r).String(),
+	})
+
+	resp := map[string]interface{}{
+		"success":     true,
+		"world_name":  levelName,
+		"keep_addons": keepAddons,
+		"restarted":   restarted,
+		"seed":        server.Seed,
+	}
+	if createdBackup != nil {
+		resp["backup"] = createdBackup
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+

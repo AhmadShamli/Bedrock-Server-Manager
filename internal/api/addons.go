@@ -78,11 +78,22 @@ func (h *AddonHandler) Install(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pack, err := addon.InstallPack(serverDir, tempFile, size)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
+	packs, err := addon.InstallAllPacks(serverDir, tempFile, size)
+	if err != nil || len(packs) == 0 {
+		errMsg := "failed to install addon"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, errMsg), http.StatusBadRequest)
 		return
 	}
+
+	for i := range packs {
+		if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
+			packs[i] = *activePack
+		}
+	}
+	pack := &packs[0]
 
 	claims := GetUserClaims(r)
 	if claims != nil {
@@ -92,7 +103,7 @@ func (h *AddonHandler) Install(w http.ResponseWriter, r *http.Request) {
 			ActorName: claims.Username,
 			Action:    "addon_install_upload",
 			Target:    serverID,
-			Details:   fmt.Sprintf(`{"pack": %q, "type": %q, "version": %q}`, pack.Name, pack.Type, pack.Version),
+			Details:   fmt.Sprintf(`{"pack": %q, "type": %q, "version": %q, "count": %d}`, pack.Name, pack.Type, pack.Version, len(packs)),
 			ClientIP:  GetClientIP(r).String(),
 			Timestamp: time.Now(),
 		})
@@ -122,11 +133,22 @@ func (h *AddonHandler) InstallFromURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pack, err := addon.InstallFromURL(r.Context(), serverDir, strings.TrimSpace(payload.URL))
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Installation from URL failed: %s"}`, err.Error()), http.StatusBadRequest)
+	packs, err := addon.InstallAllFromURL(r.Context(), serverDir, strings.TrimSpace(payload.URL))
+	if err != nil || len(packs) == 0 {
+		errMsg := "no packs found"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		http.Error(w, fmt.Sprintf(`{"error": "Installation from URL failed: %s"}`, errMsg), http.StatusBadRequest)
 		return
 	}
+
+	for i := range packs {
+		if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
+			packs[i] = *activePack
+		}
+	}
+	pack := &packs[0]
 
 	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 		UserID:    &claims.UserID,
@@ -134,7 +156,7 @@ func (h *AddonHandler) InstallFromURL(w http.ResponseWriter, r *http.Request) {
 		ActorName: claims.Username,
 		Action:    "addon_install_url",
 		Target:    serverID,
-		Details:   fmt.Sprintf(`{"url": %q, "pack": %q, "type": %q, "version": %q}`, payload.URL, pack.Name, pack.Type, pack.Version),
+		Details:   fmt.Sprintf(`{"url": %q, "pack": %q, "type": %q, "version": %q, "count": %d}`, payload.URL, pack.Name, pack.Type, pack.Version, len(packs)),
 		ClientIP:  GetClientIP(r).String(),
 		Timestamp: time.Now(),
 	})
@@ -248,11 +270,22 @@ func (h *AddonHandler) MarketplaceInstall(w http.ResponseWriter, r *http.Request
 		downloadURL = resolvedURL
 	}
 
-	pack, err := addon.InstallFromURL(r.Context(), serverDir, downloadURL)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to install addon: %s"}`, err.Error()), http.StatusBadRequest)
+	packs, err := addon.InstallAllFromURL(r.Context(), serverDir, downloadURL)
+	if err != nil || len(packs) == 0 {
+		errMsg := "no packs found"
+		if err != nil {
+			errMsg = err.Error()
+		}
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to install addon: %s"}`, errMsg), http.StatusBadRequest)
 		return
 	}
+
+	for i := range packs {
+		if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
+			packs[i] = *activePack
+		}
+	}
+	pack := &packs[0]
 
 	claims := GetUserClaims(r)
 	if claims != nil {
@@ -262,7 +295,7 @@ func (h *AddonHandler) MarketplaceInstall(w http.ResponseWriter, r *http.Request
 			ActorName: claims.Username,
 			Action:    "addon_marketplace_install",
 			Target:    serverID,
-			Details:   fmt.Sprintf(`{"provider": %q, "item_id": %q, "pack": %q, "type": %q}`, provider, payload.ItemID, pack.Name, pack.Type),
+			Details:   fmt.Sprintf(`{"provider": %q, "item_id": %q, "pack": %q, "type": %q, "count": %d}`, provider, payload.ItemID, pack.Name, pack.Type, len(packs)),
 			ClientIP:  GetClientIP(r).String(),
 			Timestamp: time.Now(),
 		})

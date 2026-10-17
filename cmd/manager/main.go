@@ -225,18 +225,23 @@ func main() {
 					_ = mgrDB.UpdateServerStatus(context.Background(), s.ID, st, s.ContainerID)
 				}
 				if s.Status == models.ServerStatusRunning {
-					if stats, err := serverEngine.GetContainerStats(context.Background(), &s); err == nil && stats != nil {
-						playerCount := len(playerMgr.GetOnlinePlayers(s.ID))
-						if playerCount == 0 && s.Port > 0 {
-							if pong, err := raknet.PingServer("127.0.0.1", s.Port, 300*time.Millisecond); err == nil && pong.OnlinePlayers > 0 {
-								playerCount = pong.OnlinePlayers
-							}
+					playerCount := len(playerMgr.GetOnlinePlayers(s.ID))
+					if playerCount == 0 && s.Port > 0 {
+						if pong, err := raknet.PingServer("127.0.0.1", s.Port, 300*time.Millisecond); err == nil && pong.OnlinePlayers > 0 {
+							playerCount = pong.OnlinePlayers
 						}
+					}
+					if stats, err := serverEngine.GetContainerStats(context.Background(), &s); err == nil && stats != nil {
 						telemetryCollector.Ingest(s.ID, stats.CPUPercent, stats.RAMBytes, playerCount)
 
 						// Check resource usage vs allocated and automatically broadcast every 1m if nearly full
 						_, _, _ = resourceMonitor.CheckServer(context.Background(), &s, stats.CPUPercent, stats.RAMBytes)
 					}
+
+					// Check idle timeout (0 players) and auto-stop if configured
+					_, _ = resourceMonitor.CheckIdle(context.Background(), &s, playerCount, time.Now().UTC())
+				} else {
+					_, _ = resourceMonitor.CheckIdle(context.Background(), &s, 0, time.Now().UTC())
 				}
 			}
 		}

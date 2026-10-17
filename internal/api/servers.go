@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/addon"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/configfile"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
@@ -166,7 +167,7 @@ func (h *ServerHandler) ListNetworks(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"networks": networks,
-		"default":  "bridge",
+		"default":  "host",
 	})
 }
 
@@ -211,6 +212,9 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.PortGateTimeout <= 0 {
 		s.PortGateTimeout = 7200
+	}
+	if s.IdleTimeoutMinutes < 0 {
+		s.IdleTimeoutMinutes = 0
 	}
 	s.GameServerAddress = strings.TrimSpace(s.GameServerAddress)
 
@@ -303,6 +307,13 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		// 7. Enforce Network Mode (Normal users deploy with host mode by default)
 		s.NetworkMode = "host"
 
+		// 8. Enforce Idle Timeout if plan defines a mandatory idle timeout
+		if plan.IdleTimeoutMinutes > 0 {
+			if s.IdleTimeoutMinutes <= 0 || s.IdleTimeoutMinutes > plan.IdleTimeoutMinutes {
+				s.IdleTimeoutMinutes = plan.IdleTimeoutMinutes
+			}
+		}
+
 		s.OwnerUserID = &claims.UserID
 	} else if claims.Role == models.RoleAdmin {
 		if s.NetworkMode != "" {
@@ -376,6 +387,64 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(s)
 }
 
+// EnsurePendingBaselineBeforeBoot ensures that an uninitialized server (where server.properties does not exist yet)
+// has a complete .pending_properties.json with transport=raknet and server defaults prior to first container boot.
+func (h *ServerHandler) EnsurePendingBaselineBeforeBoot(server *models.Server) {
+	if server == nil {
+		return
+	}
+	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
+	propPath := filepath.Join(serverDir, "server.properties")
+	if _, err := os.Stat(propPath); err == nil {
+		return // Already initialized on disk
+	}
+
+	pendingProps, pendingKeys, _, _ := configfile.ReadPendingProperties(serverDir)
+	mergedProps, mergedKeys := configfile.MergeDefaultProperties(pendingProps, pendingKeys, server)
+	_ = configfile.WritePendingProperties(serverDir, mergedProps, mergedKeys)
+}
+
+// StartServerInstance starts a server, syncs global players, resets the idle timer, and applies any pre-boot properties.
+func (h *ServerHandler) StartServerInstance(ctx context.Context, server *models.Server, actorType, actorName, action, clientIP string) error {
+	if server == nil {
+		return fmt.Errorf("server is nil")
+	}
+
+	// Ensure baseline properties (including transport=raknet) are queued if this is the very first boot
+	h.EnsurePendingBaselineBeforeBoot(server)
+
+	// Automatically update and merge from global and server list on start
+	_, _ = player.SyncServerWithGlobal(ctx, h.dataDir, server.ID, h.db, nil)
+
+	// Sync active addon packs to the active world directory before starting
+	addon.SyncActivePacksToWorlds(filepath.Join(h.dataDir, "servers", server.ID))
+
+	if err := h.engine.StartServer(ctx, server); err != nil {
+		return err
+	}
+
+	server.Status = models.ServerStatusRunning
+	_ = h.db.UpdateServerStatus(ctx, server.ID, models.ServerStatusRunning, server.ContainerID)
+	if h.resourceMonitor != nil {
+		h.resourceMonitor.ResetIdleTimer(server.ID)
+	}
+
+	if action != "" {
+		_ = h.db.CreateAuditLog(ctx, &models.AuditLog{
+			ActorType: actorType,
+			ActorName: actorName,
+			Action:    action,
+			Target:    server.ID,
+			ClientIP:  clientIP,
+		})
+	}
+
+	// If there are pending pre-boot property updates, wait for itzg to unpack server.properties, merge changes, and restart
+	go h.applyPendingPropertiesOnStart(server.ID)
+
+	return nil
+}
+
 // Start boots the server container.
 func (h *ServerHandler) Start(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
@@ -385,44 +454,63 @@ func (h *ServerHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Automatically update and merge from global and server list on start
-	_, _ = player.SyncServerWithGlobal(r.Context(), h.dataDir, server.ID, h.db, nil)
+	actorName := "admin"
+	if claims := GetUserClaims(r); claims != nil {
+		actorName = claims.Username
+	}
 
-	if err := h.engine.StartServer(r.Context(), server); err != nil {
+	if err := h.StartServerInstance(r.Context(), server, "user", actorName, "start_server", GetClientIP(r).String()); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to start server: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-
-	_ = h.db.UpdateServerStatus(r.Context(), server.ID, models.ServerStatusRunning, server.ContainerID)
-	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
-		ActorType: "user",
-		ActorName: GetUserClaims(r).Username,
-		Action:    "start_server",
-		Target:    server.ID,
-		ClientIP:  GetClientIP(r).String(),
-	})
-
-	// If there are pending pre-boot property updates, wait for itzg to unpack server.properties, merge changes, and restart
-	go h.applyPendingPropertiesOnStart(server.ID)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "running"})
 }
 
+// isItzgStillUnpacking returns true if an active BDS archive download/extraction is still in progress in serverDir.
+func isItzgStillUnpacking(serverDir string) bool {
+	entries, err := os.ReadDir(serverDir)
+	if err != nil {
+		return false
+	}
+	hasVersionedBinary := false
+	hasUnversionedBinary := false
+	hasZip := false
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, "bedrock-server-") && strings.HasSuffix(name, ".zip") {
+			hasZip = true
+		} else if name == "bedrock_server" {
+			hasUnversionedBinary = true
+		} else if strings.HasPrefix(name, "bedrock_server-") {
+			hasVersionedBinary = true
+		}
+	}
+	// If a zip archive is present or bedrock_server hasn't been renamed to bedrock_server-<version> yet, itzg is still unpacking
+	return hasZip || (hasUnversionedBinary && !hasVersionedBinary)
+}
+
 // applyPendingPropertiesOnStart checks for pre-boot pending properties, waits for itzg to unpack server.properties, merges pending properties, and restarts the container if any values changed.
 func (h *ServerHandler) applyPendingPropertiesOnStart(serverID string) {
 	serverDir := filepath.Join(h.dataDir, "servers", serverID)
-	pendingProps, _, hasPending, err := configfile.ReadPendingProperties(serverDir)
+	pendingProps, pendingKeys, hasPending, err := configfile.ReadPendingProperties(serverDir)
 	if err != nil || !hasPending || len(pendingProps) == 0 {
 		return
 	}
 
+	var srv *models.Server
+	if h.db != nil {
+		srv, _ = h.db.GetServer(context.Background(), serverID)
+	}
+	pendingProps, _ = configfile.MergeDefaultProperties(pendingProps, pendingKeys, srv)
+
 	propPath := filepath.Join(serverDir, "server.properties")
 
-	// Poll until itzg unzips server.properties on disk (timeout after 45 seconds)
+	// Poll until itzg unzips server.properties on disk (timeout after 5 minutes for initial BDS download)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	timeout := time.After(45 * time.Second)
+	timeout := time.After(5 * time.Minute)
 
 	var unzipped bool
 	for !unzipped {
@@ -430,7 +518,7 @@ func (h *ServerHandler) applyPendingPropertiesOnStart(serverID string) {
 		case <-timeout:
 			return // Timed out waiting for itzg to initialize
 		case <-ticker.C:
-			if fi, err := os.Stat(propPath); err == nil && fi.Size() > 0 {
+			if fi, err := os.Stat(propPath); err == nil && fi.Size() > 0 && !isItzgStillUnpacking(serverDir) {
 				unzipped = true
 			}
 		}
@@ -456,6 +544,7 @@ func (h *ServerHandler) applyPendingPropertiesOnStart(serverID string) {
 	if hasChanges {
 		mergedProps, mergedKeys := configfile.MergeProperties(currentProps, currentKeys, pendingProps)
 		_ = configfile.WriteProperties(propPath, mergedProps, mergedKeys)
+		addon.SyncActivePacksToWorlds(serverDir)
 
 		// Synchronize seed if updated
 		if sVal, exists := pendingProps["level-seed"]; exists {
@@ -470,6 +559,9 @@ func (h *ServerHandler) applyPendingPropertiesOnStart(serverID string) {
 		// Restart container so BDS reads updated properties
 		if srv, err := h.db.GetServer(context.Background(), serverID); err == nil && srv != nil {
 			_ = h.engine.RestartServer(context.Background(), srv)
+			if h.resourceMonitor != nil {
+				h.resourceMonitor.ResetIdleTimer(serverID)
+			}
 		}
 
 		_ = h.db.CreateAuditLog(context.Background(), &models.AuditLog{
@@ -479,6 +571,8 @@ func (h *ServerHandler) applyPendingPropertiesOnStart(serverID string) {
 			Target:    serverID,
 			Details:   `{"restarted": true, "reason": "applied_preboot_properties"}`,
 		})
+	} else {
+		addon.SyncActivePacksToWorlds(serverDir)
 	}
 
 	// Clean up pending file
@@ -497,6 +591,10 @@ func (h *ServerHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	if err := h.engine.StopServer(r.Context(), server, 15); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to stop server: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
+	}
+
+	if h.resourceMonitor != nil {
+		h.resourceMonitor.ResetIdleTimer(server.ID)
 	}
 
 	_ = h.db.UpdateServerStatus(r.Context(), server.ID, models.ServerStatusStopped, server.ContainerID)
@@ -521,9 +619,15 @@ func (h *ServerHandler) Restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	addon.SyncActivePacksToWorlds(filepath.Join(h.dataDir, "servers", server.ID))
+
 	if err := h.engine.RestartServer(r.Context(), server); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error": "Failed to restart server: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
+	}
+
+	if h.resourceMonitor != nil {
+		h.resourceMonitor.ResetIdleTimer(server.ID)
 	}
 
 	_ = h.db.UpdateServerStatus(r.Context(), server.ID, models.ServerStatusRunning, server.ContainerID)
@@ -863,21 +967,22 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name            *string  `json:"name"`
-		Port            *int     `json:"port"`
-		PortV6          *int     `json:"portv6"`
-		Mode            *string  `json:"mode"`
-		Difficulty      *string  `json:"difficulty"`
-		Version         *string  `json:"version"`
-		AutostartOnBoot *bool    `json:"autostart_on_boot"`
-		PortGateEnabled *bool    `json:"port_gate_enabled"`
-		PortGateMode    *string  `json:"port_gate_mode"`
-		PortGateTimeout *int     `json:"port_gate_timeout"`
-		MemoryLimit     *string  `json:"memory_limit"`
-		CPULimit          *float64 `json:"cpu_limit"`
-		Seed              *string  `json:"seed"`
-		GameServerAddress *string  `json:"game_server_address"`
-		NetworkMode       *string  `json:"network_mode"`
+		Name               *string  `json:"name"`
+		Port               *int     `json:"port"`
+		PortV6             *int     `json:"portv6"`
+		Mode               *string  `json:"mode"`
+		Difficulty         *string  `json:"difficulty"`
+		Version            *string  `json:"version"`
+		AutostartOnBoot    *bool    `json:"autostart_on_boot"`
+		PortGateEnabled    *bool    `json:"port_gate_enabled"`
+		PortGateMode       *string  `json:"port_gate_mode"`
+		PortGateTimeout    *int     `json:"port_gate_timeout"`
+		MemoryLimit        *string  `json:"memory_limit"`
+		CPULimit           *float64 `json:"cpu_limit"`
+		Seed               *string  `json:"seed"`
+		GameServerAddress  *string  `json:"game_server_address"`
+		NetworkMode        *string  `json:"network_mode"`
+		IdleTimeoutMinutes *int     `json:"idle_timeout_minutes"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -885,14 +990,19 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	claims := GetUserClaims(r)
+	isAdmin := claims == nil || claims.Role == models.RoleAdmin
+
 	targetPort := existing.Port
 	targetPortV6 := existing.PortV6
 
-	if req.Port != nil && *req.Port > 0 {
-		targetPort = *req.Port
-	}
-	if req.PortV6 != nil && *req.PortV6 > 0 {
-		targetPortV6 = *req.PortV6
+	if isAdmin {
+		if req.Port != nil && *req.Port > 0 {
+			targetPort = *req.Port
+		}
+		if req.PortV6 != nil && *req.PortV6 > 0 {
+			targetPortV6 = *req.PortV6
+		}
 	}
 
 	// If ports are changing, validate they aren't taken by other servers
@@ -931,32 +1041,56 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.PortGateTimeout != nil && *req.PortGateTimeout > 0 {
 		existing.PortGateTimeout = *req.PortGateTimeout
 	}
-	if req.MemoryLimit != nil && *req.MemoryLimit != "" {
-		existing.MemoryLimit = *req.MemoryLimit
+	if isAdmin {
+		if req.MemoryLimit != nil && *req.MemoryLimit != "" {
+			existing.MemoryLimit = *req.MemoryLimit
+		}
+		if req.CPULimit != nil && *req.CPULimit > 0 {
+			existing.CPULimit = *req.CPULimit
+		}
 	}
-	if req.CPULimit != nil && *req.CPULimit > 0 {
-		existing.CPULimit = *req.CPULimit
+	if req.IdleTimeoutMinutes != nil {
+		val := *req.IdleTimeoutMinutes
+		if val < 0 {
+			val = 0
+		}
+		if !isAdmin && claims != nil {
+			if user, err := h.db.GetUserByID(r.Context(), claims.UserID); err == nil && user != nil {
+				var plan *models.Plan
+				if user.PlanID != nil {
+					plan, _ = h.db.GetPlan(r.Context(), *user.PlanID)
+				}
+				if plan == nil {
+					plan, _ = h.db.GetDefaultPlan(r.Context())
+				}
+				if plan != nil && plan.IdleTimeoutMinutes > 0 {
+					if val <= 0 || val > plan.IdleTimeoutMinutes {
+						val = plan.IdleTimeoutMinutes
+					}
+				}
+			}
+		}
+		existing.IdleTimeoutMinutes = val
+		if h.resourceMonitor != nil {
+			h.resourceMonitor.ResetIdleTimer(existing.ID)
+		}
 	}
 	if req.Seed != nil {
 		existing.Seed = *req.Seed
 		propPath, err := configfile.SafePath(h.dataDir, existing.ID, "server.properties")
 		if err == nil {
-			props, keys, _ := configfile.ReadProperties(propPath)
-			if props == nil {
-				props = make(map[string]string)
-			}
-			props["level-seed"] = *req.Seed
-			hasKey := false
-			for _, k := range keys {
-				if k == "level-seed" {
-					hasKey = true
-					break
+			updated, _ := configfile.UpdateExistingPropertyFile(propPath, map[string]string{
+				"level-seed": *req.Seed,
+			})
+			if !updated {
+				serverDir := filepath.Dir(propPath)
+				if pendingProps, pendingKeys, hasPending, _ := configfile.ReadPendingProperties(serverDir); hasPending {
+					mergedProps, mergedKeys := configfile.MergeProperties(pendingProps, pendingKeys, map[string]string{
+						"level-seed": *req.Seed,
+					})
+					_ = configfile.WritePendingProperties(serverDir, mergedProps, mergedKeys)
 				}
 			}
-			if !hasKey {
-				keys = append(keys, "level-seed")
-			}
-			_ = configfile.WriteProperties(propPath, props, keys)
 		}
 	}
 	if req.GameServerAddress != nil {
@@ -964,10 +1098,10 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	networkModeChanged := false
-	if req.NetworkMode != nil {
+	if isAdmin && req.NetworkMode != nil {
 		newMode := strings.TrimSpace(*req.NetworkMode)
 		if newMode == "" {
-			newMode = "bridge"
+			newMode = "host"
 		}
 		if newMode != existing.NetworkMode {
 			existing.NetworkMode = newMode
@@ -1005,7 +1139,6 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims := GetUserClaims(r)
 	actorName := "admin"
 	var userID *int64
 	if claims != nil {

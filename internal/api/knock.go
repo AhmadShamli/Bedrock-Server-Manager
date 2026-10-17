@@ -18,10 +18,11 @@ import (
 )
 
 type KnockHandler struct {
-	db          *database.ManagerDB
-	rateLimiter *auth.RateLimiter
-	pepper      string
-	firewall    firewall.FirewallDriver
+	db            *database.ManagerDB
+	rateLimiter   *auth.RateLimiter
+	pepper        string
+	firewall      firewall.FirewallDriver
+	serverHandler *ServerHandler
 }
 
 func NewKnockHandler(db *database.ManagerDB, rateLimiter *auth.RateLimiter, pepper string, fw firewall.FirewallDriver) *KnockHandler {
@@ -33,10 +34,57 @@ func NewKnockHandler(db *database.ManagerDB, rateLimiter *auth.RateLimiter, pepp
 	}
 }
 
+// SetServerHandler wires the ServerHandler so the Knock Portal can inspect live status and auto-start idle/stopped instances.
+func (h *KnockHandler) SetServerHandler(sh *ServerHandler) {
+	h.serverHandler = sh
+}
+
+func (h *KnockHandler) getLiveServerStatus(ctx context.Context, server *models.Server) string {
+	if server == nil {
+		return models.ServerStatusStopped
+	}
+	if h.serverHandler != nil && h.serverHandler.engine != nil {
+		if st, err := h.serverHandler.engine.GetServerStatus(ctx, server); err == nil && st != "" {
+			if st != server.Status {
+				server.Status = st
+				_ = h.db.UpdateServerStatus(ctx, server.ID, st, server.ContainerID)
+			}
+		}
+	}
+	if server.Status == "" {
+		return models.ServerStatusStopped
+	}
+	return server.Status
+}
+
+// ensureServerRunning starts the server if it is currently stopped and resets its idle timer.
+func (h *KnockHandler) ensureServerRunning(ctx context.Context, server *models.Server, actorName, clientIP string) (string, bool) {
+	status := h.getLiveServerStatus(ctx, server)
+	if status == models.ServerStatusRunning || status == models.ServerStatusStarting {
+		if h.serverHandler != nil && h.serverHandler.resourceMonitor != nil {
+			h.serverHandler.resourceMonitor.ResetIdleTimer(server.ID)
+		}
+		return status, false
+	}
+	if h.serverHandler == nil {
+		return status, false
+	}
+	if actorName == "" {
+		actorName = "visitor"
+	}
+	if err := h.serverHandler.StartServerInstance(ctx, server, "knock", actorName, "server_autostart_on_knock", clientIP); err != nil {
+		return status, false
+	}
+	return models.ServerStatusRunning, true
+}
+
 // KnockConfigResponse conveys public port gate configuration to visitors.
 type KnockConfigResponse struct {
 	ServerID                 string `json:"server_id"`
 	ServerName               string `json:"server_name"`
+	ServerStatus             string `json:"server_status"`
+	IdleTimeoutMinutes       int    `json:"idle_timeout_minutes"`
+	AutoStarted              bool   `json:"auto_started,omitempty"`
 	Port                     int    `json:"port"`
 	GameServerAddress        string `json:"game_server_address"`
 	PortGateEnabled          bool   `json:"port_gate_enabled"`
@@ -92,6 +140,8 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(KnockConfigResponse{
 			ServerID:                 server.ID,
 			ServerName:               server.Name,
+			ServerStatus:             h.getLiveServerStatus(r.Context(), server),
+			IdleTimeoutMinutes:       server.IdleTimeoutMinutes,
 			Port:                     server.Port,
 			GameServerAddress:        gameHost,
 			PortGateEnabled:          server.PortGateEnabled,
@@ -111,10 +161,21 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 		ruleComment = matchRule.Comment
 	}
 
+	var srvStatus string
+	var autoStarted bool
+	if !server.PortGateEnabled || alwaysAllowed {
+		srvStatus, autoStarted = h.ensureServerRunning(r.Context(), server, "knock_portal", clientIP)
+	} else {
+		srvStatus = h.getLiveServerStatus(r.Context(), server)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(KnockConfigResponse{
 		ServerID:                 server.ID,
 		ServerName:               server.Name,
+		ServerStatus:             srvStatus,
+		IdleTimeoutMinutes:       server.IdleTimeoutMinutes,
+		AutoStarted:              autoStarted,
 		Port:                     server.Port,
 		GameServerAddress:        gameHost,
 		PortGateEnabled:          server.PortGateEnabled,
@@ -172,20 +233,24 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 				_ = h.firewall.AllowPort(r.Context(), matchRule.IPOrSubnet, server.PortV6, comment)
 			}
 		}
+		srvStatus, autoStarted := h.ensureServerRunning(r.Context(), server, "always_allowed", clientIP)
 		directURL := fmt.Sprintf("minecraft://connect?serverUrl=%s&serverPort=%d", gameHost, server.Port)
 		addServerURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"success":             true,
-			"always_allowed":      true,
-			"message":             "Your IP address is permanently authorized. Port is open without knocking.",
-			"ip_address":          clientIP,
-			"direct_launch_url":   directURL,
-			"add_server_url":      addServerURL,
-			"server_name":         server.Name,
-			"server_port":         server.Port,
-			"game_server_address": gameHost,
-			"expires_in_seconds":  86400 * 365,
+			"success":              true,
+			"always_allowed":       true,
+			"message":              "Your IP address is permanently authorized. Port is open without knocking.",
+			"ip_address":           clientIP,
+			"direct_launch_url":    directURL,
+			"add_server_url":       addServerURL,
+			"server_name":          server.Name,
+			"server_port":          server.Port,
+			"server_status":        srvStatus,
+			"auto_started":         autoStarted,
+			"idle_timeout_minutes": server.IdleTimeoutMinutes,
+			"game_server_address":  gameHost,
+			"expires_in_seconds":   86400 * 365,
 		})
 		return
 	}
@@ -307,6 +372,13 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Auto-start server if currently stopped / idle
+	actorName := req.Gamertag
+	if actorName == "" && matchingKey != nil {
+		actorName = matchingKey.Label
+	}
+	srvStatus, autoStarted := h.ensureServerRunning(r.Context(), server, actorName, clientIP)
+
 	// Set signed session cookie for mobile roaming & heartbeat
 	http.SetCookie(w, &http.Cookie{
 		Name:     "bsm_knock_" + server.ID,
@@ -323,16 +395,54 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":             true,
-		"ip_address":          clientIP,
-		"expires_at":          database.FormatTime(lease.ExpiresAt),
-		"expires_in_seconds":  int(leaseDuration.Seconds()),
-		"session_token":       sessionToken,
-		"direct_launch_url":   directURL,
-		"add_server_url":      addServerURL,
-		"server_name":         server.Name,
-		"server_port":         server.Port,
-		"game_server_address": gameHost,
+		"success":              true,
+		"ip_address":           clientIP,
+		"expires_at":           database.FormatTime(lease.ExpiresAt),
+		"expires_in_seconds":   int(leaseDuration.Seconds()),
+		"session_token":        sessionToken,
+		"direct_launch_url":    directURL,
+		"add_server_url":       addServerURL,
+		"server_name":          server.Name,
+		"server_port":          server.Port,
+		"server_status":        srvStatus,
+		"auto_started":         autoStarted,
+		"idle_timeout_minutes": server.IdleTimeoutMinutes,
+		"game_server_address":  gameHost,
+	})
+}
+
+// StartServer wakes / auto-starts a stopped server instance from the Knock Portal.
+func (h *KnockHandler) StartServer(w http.ResponseWriter, r *http.Request) {
+	serverID := chi.URLParam(r, "id")
+	server, err := h.db.GetServer(r.Context(), serverID)
+	if err != nil || server == nil {
+		http.Error(w, `{"error": "Server not found"}`, http.StatusNotFound)
+		return
+	}
+
+	clientIP := GetClientIP(r).String()
+
+	if banned, banReason, _ := h.db.IsIPBanned(r.Context(), serverID, clientIP); banned {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  fmt.Sprintf("Access denied: Your IP address is banned. Reason: %s", banReason),
+			"banned": true,
+			"reason": banReason,
+		})
+		return
+	}
+
+	srvStatus, autoStarted := h.ensureServerRunning(r.Context(), server, "knock_portal", clientIP)
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success":              true,
+		"server_id":            server.ID,
+		"server_name":          server.Name,
+		"server_status":        srvStatus,
+		"auto_started":         autoStarted,
+		"idle_timeout_minutes": server.IdleTimeoutMinutes,
 	})
 }
 
@@ -418,6 +528,7 @@ func (h *KnockHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":             "active",
+		"server_status":      h.getLiveServerStatus(r.Context(), server),
 		"ip_address":         currentIP,
 		"ip_updated":         ipUpdated,
 		"expires_in_seconds": remaining,
@@ -453,32 +564,58 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Check if caller IP is in permanent allowlist
 	if matchRule, allowed, err := h.db.IsIPAllowed(r.Context(), serverID, currentIP); err == nil && allowed && matchRule != nil {
+		srvStatus, autoStarted := h.ensureServerRunning(r.Context(), server, "always_allowed", currentIP)
 		directURL := fmt.Sprintf("minecraft://connect?serverUrl=%s&serverPort=%d", gameHost, server.Port)
 		addServerURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"active":              true,
-			"always_allowed":      true,
-			"ip_address":          currentIP,
-			"rule_comment":        matchRule.Comment,
-			"is_global":           matchRule.ServerID == nil || *matchRule.ServerID == "",
-			"direct_launch_url":   directURL,
-			"add_server_url":      addServerURL,
-			"server_name":         server.Name,
-			"server_port":         server.Port,
-			"game_server_address": gameHost,
-			"expires_in_seconds":  86400 * 365,
+			"active":               true,
+			"always_allowed":       true,
+			"ip_address":           currentIP,
+			"rule_comment":         matchRule.Comment,
+			"is_global":            matchRule.ServerID == nil || *matchRule.ServerID == "",
+			"direct_launch_url":    directURL,
+			"add_server_url":       addServerURL,
+			"server_name":          server.Name,
+			"server_port":          server.Port,
+			"server_status":        srvStatus,
+			"auto_started":         autoStarted,
+			"idle_timeout_minutes": server.IdleTimeoutMinutes,
+			"game_server_address":  gameHost,
+			"expires_in_seconds":   86400 * 365,
 		})
 		return
 	}
 
 	lease, err := h.db.GetActiveLeaseByIP(r.Context(), serverID, currentIP)
 	if err != nil || lease == nil {
+		if !server.PortGateEnabled {
+			srvStatus, autoStarted := h.ensureServerRunning(r.Context(), server, "open_portal", currentIP)
+			directURL := fmt.Sprintf("minecraft://connect?serverUrl=%s&serverPort=%d", gameHost, server.Port)
+			addServerURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"active":               true,
+				"ip_address":           currentIP,
+				"direct_launch_url":    directURL,
+				"add_server_url":       addServerURL,
+				"server_name":          server.Name,
+				"server_port":          server.Port,
+				"server_status":        srvStatus,
+				"auto_started":         autoStarted,
+				"idle_timeout_minutes": server.IdleTimeoutMinutes,
+				"game_server_address":  gameHost,
+				"expires_in_seconds":   86400 * 365,
+			})
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"active":              false,
-			"ip_address":          currentIP,
-			"game_server_address": gameHost,
+			"active":               false,
+			"ip_address":           currentIP,
+			"server_status":        h.getLiveServerStatus(r.Context(), server),
+			"idle_timeout_minutes": server.IdleTimeoutMinutes,
+			"game_server_address":  gameHost,
 		})
 		return
 	}
@@ -488,20 +625,24 @@ func (h *KnockHandler) Status(w http.ResponseWriter, r *http.Request) {
 		remaining = 0
 	}
 
+	srvStatus, autoStarted := h.ensureServerRunning(r.Context(), server, lease.Gamertag, currentIP)
 	directURL := fmt.Sprintf("minecraft://connect?serverUrl=%s&serverPort=%d", gameHost, server.Port)
 	addServerURL := fmt.Sprintf("minecraft://?addExternalServer=%s|%s:%d", server.Name, gameHost, server.Port)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"active":              true,
-		"ip_address":          currentIP,
-		"gamertag":            lease.Gamertag,
-		"expires_in_seconds":  remaining,
-		"direct_launch_url":   directURL,
-		"add_server_url":      addServerURL,
-		"server_name":         server.Name,
-		"server_port":         server.Port,
-		"game_server_address": gameHost,
+		"active":               true,
+		"ip_address":           currentIP,
+		"gamertag":             lease.Gamertag,
+		"expires_in_seconds":   remaining,
+		"direct_launch_url":    directURL,
+		"add_server_url":       addServerURL,
+		"server_name":          server.Name,
+		"server_port":          server.Port,
+		"server_status":        srvStatus,
+		"auto_started":         autoStarted,
+		"idle_timeout_minutes": server.IdleTimeoutMinutes,
+		"game_server_address":  gameHost,
 	})
 }
 

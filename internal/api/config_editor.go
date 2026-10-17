@@ -47,6 +47,11 @@ func (h *ServerHandler) GetProperties(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// If pending pre-boot properties are still being applied on first boot, overlay them
+		if pendingProps, _, hasPending, _ := configfile.ReadPendingProperties(serverDir); hasPending && len(pendingProps) > 0 {
+			props, keys = configfile.MergeProperties(props, keys, pendingProps)
+		}
+
 		// Merge missing default keys if existing server has reduced properties
 		props, keys = configfile.MergeDefaultProperties(props, keys, srv)
 
@@ -65,8 +70,7 @@ func (h *ServerHandler) GetProperties(w http.ResponseWriter, r *http.Request) {
 		// Uninitialized instance: check if pending configuration overrides already exist
 		pendingProps, pendingKeys, hasPending, _ := configfile.ReadPendingProperties(serverDir)
 		if hasPending && len(pendingProps) > 0 {
-			props = pendingProps
-			keys = pendingKeys
+			props, keys = configfile.MergeDefaultProperties(pendingProps, pendingKeys, srv)
 			isPending = true
 		} else {
 			// Generate standard default properties tailored to this instance

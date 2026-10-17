@@ -27,6 +27,11 @@ type CommandSender interface {
 	SendConsoleCommand(ctx context.Context, server *models.Server, cmd string) error
 }
 
+// ServerStopper is an optional interface implemented by engine.ServerEngine to stop idle servers.
+type ServerStopper interface {
+	StopServer(ctx context.Context, server *models.Server, timeoutSeconds int) error
+}
+
 // ChatBroadcaster posts chat messages to server chat feeds.
 type ChatBroadcaster interface {
 	AddChatMessage(serverID, gamertag, message string)
@@ -37,6 +42,11 @@ type DBStore interface {
 	GetSetting(ctx context.Context, key string) (string, error)
 	CreateAuditLog(ctx context.Context, log *models.AuditLog) error
 	GetUserByID(ctx context.Context, id int64) (*models.User, error)
+}
+
+// ServerStatusUpdater is an optional interface implemented by database.ManagerDB to update server status on idle stop.
+type ServerStatusUpdater interface {
+	UpdateServerStatus(ctx context.Context, id, status, containerID string) error
 }
 
 // WebhookSender dispatches alerts to outbound webhooks (e.g. Discord).
@@ -78,6 +88,7 @@ type ResourceMonitor struct {
 	mu           sync.RWMutex
 	lastAlert    map[string]time.Time
 	latestStatus map[string]*ResourceStatus
+	idleSince    map[string]time.Time
 }
 
 // NewResourceMonitor creates a new ResourceMonitor instance.
@@ -111,6 +122,7 @@ func NewResourceMonitor(
 		cfg:             c,
 		lastAlert:       make(map[string]time.Time),
 		latestStatus:    make(map[string]*ResourceStatus),
+		idleSince:       make(map[string]time.Time),
 	}
 }
 
@@ -425,3 +437,92 @@ func (rm *ResourceMonitor) GetLastAlertTime(serverID string) time.Time {
 	defer rm.mu.RUnlock()
 	return rm.lastAlert[serverID]
 }
+
+// ResetIdleTimer resets the zero-player idle timer for a server (e.g. on manual start or knock unlock).
+func (rm *ResourceMonitor) ResetIdleTimer(serverID string) {
+	rm.mu.Lock()
+	defer rm.mu.Unlock()
+	rm.idleSince[serverID] = time.Now().UTC()
+}
+
+// GetIdleSince returns the timestamp when the server first became idle (0 players), if currently idle.
+func (rm *ResourceMonitor) GetIdleSince(serverID string) (time.Time, bool) {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+	t, ok := rm.idleSince[serverID]
+	return t, ok
+}
+
+// CheckIdle evaluates whether a running server has had 0 players for at least server.IdleTimeoutMinutes.
+// When the idle timeout is reached, it stops the server container, updates DB status to stopped, and records an audit log.
+func (rm *ResourceMonitor) CheckIdle(
+	ctx context.Context,
+	server *models.Server,
+	playerCount int,
+	now time.Time,
+) (bool, error) {
+	if server == nil {
+		return false, nil
+	}
+
+	if server.Status != models.ServerStatusRunning || server.IdleTimeoutMinutes <= 0 || playerCount > 0 {
+		rm.mu.Lock()
+		delete(rm.idleSince, server.ID)
+		rm.mu.Unlock()
+		return false, nil
+	}
+
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+
+	rm.mu.Lock()
+	since, exists := rm.idleSince[server.ID]
+	if !exists {
+		rm.idleSince[server.ID] = now
+		rm.mu.Unlock()
+		return false, nil
+	}
+
+	idleDuration := now.Sub(since)
+	timeoutDuration := time.Duration(server.IdleTimeoutMinutes) * time.Minute
+	if idleDuration < timeoutDuration {
+		rm.mu.Unlock()
+		return false, nil
+	}
+
+	// Idle threshold reached: clear timer and stop the server
+	delete(rm.idleSince, server.ID)
+	rm.mu.Unlock()
+
+	log.Printf("[IdleMonitor] Server '%s' (%s) has been idle with 0 players for %v (limit: %dm); stopping instance...",
+		server.Name, server.ID, idleDuration.Round(time.Second), server.IdleTimeoutMinutes)
+
+	if stopper, ok := rm.engine.(ServerStopper); ok && stopper != nil {
+		if err := stopper.StopServer(ctx, server, 15); err != nil {
+			return false, fmt.Errorf("failed to stop idle server %s: %w", server.ID, err)
+		}
+	}
+
+	server.Status = models.ServerStatusStopped
+	if updater, ok := rm.db.(ServerStatusUpdater); ok && updater != nil {
+		_ = updater.UpdateServerStatus(ctx, server.ID, models.ServerStatusStopped, server.ContainerID)
+	}
+
+	if rm.db != nil {
+		details := fmt.Sprintf(`{"idle_timeout_minutes": %d, "idle_seconds": %d, "reason": "no_players_online"}`,
+			server.IdleTimeoutMinutes, int(idleDuration.Seconds()))
+		_ = rm.db.CreateAuditLog(ctx, &models.AuditLog{
+			ActorType: "system",
+			ActorName: "IdleMonitor",
+			Action:    "idle_auto_stop",
+			Target:    server.ID,
+			Details:   details,
+			ClientIP:  "127.0.0.1",
+			Timestamp: now.UTC(),
+		})
+	}
+
+	return true, nil
+}
+

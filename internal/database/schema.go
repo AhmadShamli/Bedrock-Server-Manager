@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS servers (
     seed TEXT NOT NULL DEFAULT '',
     game_server_address TEXT NOT NULL DEFAULT '',
     network_mode TEXT NOT NULL DEFAULT 'host',
+    idle_timeout_minutes INTEGER NOT NULL DEFAULT 0,
     owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

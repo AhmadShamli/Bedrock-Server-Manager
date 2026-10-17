@@ -25,6 +25,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/preset"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/resourcemonitor"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
 )
 
@@ -2482,6 +2483,224 @@ func TestResourceStatusAPI(t *testing.T) {
 		t.Errorf("expected threshold_percent 85.0, got %v", resp["threshold_percent"])
 	}
 }
+
+func TestFirstBootTransportAndIdleAutoStopAndKnockStart(t *testing.T) {
+	router, db, mockEngine, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	defer os.RemoveAll("data_test")
+	ctx := context.Background()
+	resMon := resourcemonitor.NewResourceMonitor(mockEngine, nil, db, nil)
+
+	adminUser, err := db.CreateUser(ctx, "idleadmin", "hash", models.RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	adminToken, _ := auth.GenerateJWT(jwtSecret, adminUser.ID, adminUser.Username, adminUser.Role, time.Hour)
+
+	// 1. Create a new server with idle_timeout_minutes = 10
+	createBody := `{
+		"id": "srv-idle-1",
+		"name": "Idle Wake Realm",
+		"port": 19152,
+		"portv6": 19153,
+		"idle_timeout_minutes": 10,
+		"port_gate_enabled": true,
+		"port_gate_mode": "passphrase"
+	}`
+	req := httptest.NewRequest("POST", "/api/servers", strings.NewReader(createBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateServer failed: %d %s", w.Code, w.Body.String())
+	}
+
+	// 2. Verify GET /api/servers/srv-idle-1/properties before first boot has transport=raknet and level-name=Bedrock level
+	req = httptest.NewRequest("GET", "/api/servers/srv-idle-1/properties", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetProperties failed: %d %s", w.Code, w.Body.String())
+	}
+	var propResp struct {
+		Properties map[string]string `json:"properties"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &propResp)
+	if propResp.Properties["transport"] != "raknet" {
+		t.Fatalf("expected pre-boot transport=raknet, got %q", propResp.Properties["transport"])
+	}
+	if propResp.Properties["level-name"] != "Bedrock level" {
+		t.Fatalf("expected pre-boot level-name='Bedrock level', got %q", propResp.Properties["level-name"])
+	}
+
+	// 3. Start server and verify .pending_properties.json baseline was written with transport=raknet before first boot
+	req = httptest.NewRequest("POST", "/api/servers/srv-idle-1/start", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("StartServer failed: %d %s", w.Code, w.Body.String())
+	}
+	pendingPath := filepath.Join("data_test", "servers", "srv-idle-1", ".pending_properties.json")
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("expected .pending_properties.json baseline to exist on uninitialized first start: %v", err)
+	}
+
+	// 4. Simulate 0 players for 10+ minutes and verify CheckIdle automatically stops the server
+	srv, _ := db.GetServer(ctx, "srv-idle-1")
+	t0 := time.Now()
+	if stopped, err := resMon.CheckIdle(ctx, srv, 0, t0); err != nil || stopped {
+		t.Fatalf("expected CheckIdle not to stop immediately at t0: stopped=%v err=%v", stopped, err)
+	}
+	// Player joins -> resets timer
+	if stopped, err := resMon.CheckIdle(ctx, srv, 1, t0.Add(5*time.Minute)); err != nil || stopped {
+		t.Fatalf("expected CheckIdle not to stop while player online: stopped=%v err=%v", stopped, err)
+	}
+	// 0 players again -> starts new idle timer
+	_, _ = resMon.CheckIdle(ctx, srv, 0, t0.Add(6*time.Minute))
+	// After 10 minutes of 0 players -> should auto-stop!
+	if stopped, err := resMon.CheckIdle(ctx, srv, 0, t0.Add(17*time.Minute)); err != nil || !stopped {
+		t.Fatalf("expected CheckIdle to auto-stop server after 10m of 0 players: stopped=%v err=%v", stopped, err)
+	}
+	st, _ := mockEngine.GetServerStatus(ctx, srv)
+	if st != models.ServerStatusStopped {
+		t.Fatalf("expected mock engine status 'stopped' after idle timeout, got %s", st)
+	}
+
+	// 5. Check Knock Portal config while stopped -> returns server_status="stopped" and idle_timeout_minutes=10
+	req = httptest.NewRequest("GET", "/api/knock/srv-idle-1/config", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetKnockConfig failed: %d", w.Code)
+	}
+	var knockCfg KnockConfigResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &knockCfg)
+	if knockCfg.ServerStatus != models.ServerStatusStopped {
+		t.Fatalf("expected knock config server_status='stopped', got %s", knockCfg.ServerStatus)
+	}
+	if knockCfg.IdleTimeoutMinutes != 10 {
+		t.Fatalf("expected knock config idle_timeout_minutes=10, got %d", knockCfg.IdleTimeoutMinutes)
+	}
+
+	// 6. Visitor triggers POST /api/knock/srv-idle-1/start on Knock Portal -> wakes server!
+	req = httptest.NewRequest("POST", "/api/knock/srv-idle-1/start", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Knock StartServer failed: %d %s", w.Code, w.Body.String())
+	}
+	var startRes map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &startRes)
+	if startRes["server_status"] != models.ServerStatusRunning || startRes["auto_started"] != true {
+		t.Fatalf("expected server_status='running' and auto_started=true, got %+v", startRes)
+	}
+}
+
+func TestResetWorldAPI(t *testing.T) {
+	router, db, mockEngine, _, jwtSecret, _ := setupTestRouter(t)
+	defer db.Close()
+	defer os.RemoveAll("data_test")
+	ctx := context.Background()
+
+	adminUser, err := db.CreateUser(ctx, "resetadmin", "hash", models.RoleAdmin)
+	if err != nil {
+		t.Fatalf("CreateUser failed: %v", err)
+	}
+	adminToken, _ := auth.GenerateJWT(jwtSecret, adminUser.ID, adminUser.Username, adminUser.Role, time.Hour)
+
+	srv := &models.Server{
+		ID:     "srv-reset-1",
+		Name:   "Reset World Realm",
+		Port:   19162,
+		PortV6: 19163,
+		Status: models.ServerStatusRunning,
+		Seed:   "old-seed",
+	}
+	if err := db.CreateServer(ctx, srv); err != nil {
+		t.Fatalf("CreateServer failed: %v", err)
+	}
+	_ = mockEngine.StartServer(ctx, srv)
+
+	serverDir := filepath.Join("data_test", "servers", "srv-reset-1")
+	worldDBDir := filepath.Join(serverDir, "worlds", "Bedrock level", "db")
+	if err := os.MkdirAll(worldDBDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	levelDatPath := filepath.Join(serverDir, "worlds", "Bedrock level", "level.dat")
+	_ = os.WriteFile(levelDatPath, []byte("old-world-level-dat"), 0644)
+	_ = os.WriteFile(filepath.Join(worldDBDir, "00001.ldb"), []byte("chunk-data"), 0644)
+
+	// Install & activate a behavior pack before reset
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+	fw, _ := zw.Create("manifest.json")
+	_, _ = fw.Write([]byte(`{
+		"format_version": 2,
+		"header": {
+			"name": "Survive Reset BP",
+			"description": "Should stay active after world reset",
+			"uuid": "99999999-1111-2222-3333-444444444444",
+			"version": [1, 0, 0]
+		},
+		"modules": [{"type": "data", "uuid": "88888888-1111-2222-3333-444444444444"}]
+	}`))
+	_ = zw.Close()
+
+	installed, err := addon.InstallAllPacks(serverDir, bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil || len(installed) != 1 {
+		t.Fatalf("InstallAllPacks failed: %v", err)
+	}
+	_, _ = addon.SetPackActive(serverDir, installed[0].Type, installed[0].Folder, true)
+
+	// Trigger POST /api/servers/srv-reset-1/world/reset
+	resetBody := `{"create_backup": true, "keep_addons": true, "seed": "new-fresh-seed"}`
+	req := httptest.NewRequest("POST", "/api/servers/srv-reset-1/world/reset", strings.NewReader(resetBody))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("ResetWorld failed: %d %s", w.Code, w.Body.String())
+	}
+
+	var resetRes map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resetRes)
+	if resetRes["success"] != true || resetRes["restarted"] != true || resetRes["seed"] != "new-fresh-seed" {
+		t.Fatalf("unexpected reset response: %+v", resetRes)
+	}
+	if resetRes["backup"] == nil {
+		t.Errorf("expected pre-reset backup to be created when create_backup=true")
+	}
+
+	// Verify old level.dat and db/ chunk files are gone
+	if _, err := os.Stat(levelDatPath); !os.IsNotExist(err) {
+		t.Errorf("expected old level.dat to be removed after world reset")
+	}
+	if _, err := os.Stat(filepath.Join(worldDBDir, "00001.ldb")); !os.IsNotExist(err) {
+		t.Errorf("expected old LevelDB chunk files to be removed after world reset")
+	}
+
+	// Verify active addon pack was preserved in the fresh world directory
+	packsAfter, err := addon.ListInstalledPacks(serverDir)
+	if err != nil || len(packsAfter) != 1 || !packsAfter[0].Active {
+		t.Errorf("expected active addon pack to remain active after world reset, got %+v", packsAfter)
+	}
+	mirroredManifest := filepath.Join(serverDir, "worlds", "Bedrock level", "behavior_packs", installed[0].Folder, "manifest.json")
+	if _, err := os.Stat(mirroredManifest); err != nil {
+		t.Errorf("expected active addon pack to be mirrored in clean world directory: %v", err)
+	}
+
+	// Verify seed updated in DB
+	updatedSrv, _ := db.GetServer(ctx, "srv-reset-1")
+	if updatedSrv.Seed != "new-fresh-seed" {
+		t.Errorf("expected server seed 'new-fresh-seed', got %q", updatedSrv.Seed)
+	}
+}
+
 
 
 

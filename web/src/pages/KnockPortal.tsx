@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2, Copy, Check, Timer, Plus } from 'lucide-react';
+import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2, Copy, Check, Timer, Plus, Power, Server as ServerIcon } from 'lucide-react';
 import { api } from '../api/client';
 import { KnockConfig } from '../types';
 
 export const KnockPortal: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const [config, setConfig] = useState<KnockConfig | null>(null);
+  const [serverStatus, setServerStatus] = useState<string>('running');
+  const [autoStarted, setAutoStarted] = useState<boolean>(false);
+  const [startingServer, setStartingServer] = useState<boolean>(false);
   const [gamertag, setGamertag] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [loading, setLoading] = useState(true);
@@ -71,6 +74,25 @@ export const KnockPortal: React.FC = () => {
     return `${mins} minute${mins > 1 ? 's' : ''}`;
   };
 
+  const handleWakeServer = async () => {
+    if (!id || startingServer) return;
+    setStartingServer(true);
+    setError(null);
+    try {
+      const res = await api.startServerFromKnock(id);
+      if (res.server_status) {
+        setServerStatus(res.server_status);
+      }
+      if (res.auto_started) {
+        setAutoStarted(true);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to start server instance');
+    } finally {
+      setStartingServer(false);
+    }
+  };
+
   useEffect(() => {
     if (!id) return;
 
@@ -78,6 +100,11 @@ export const KnockPortal: React.FC = () => {
       try {
         const conf = await api.getKnockConfig(id);
         setConfig(conf);
+        let currentStatus = conf.server_status || 'stopped';
+        setServerStatus(currentStatus);
+        if (conf.auto_started) {
+          setAutoStarted(true);
+        }
 
         if (conf.is_banned) {
           setLoading(false);
@@ -87,7 +114,14 @@ export const KnockPortal: React.FC = () => {
         // Check if caller already has an active lease or is permanently allowed
         try {
           const status = await api.getKnockStatus(id);
-          if (status.active || conf.always_allowed) {
+          if (status.server_status) {
+            currentStatus = status.server_status;
+            setServerStatus(status.server_status);
+          }
+          if (status.auto_started) {
+            setAutoStarted(true);
+          }
+          if (status.active || conf.always_allowed || !conf.port_gate_enabled) {
             const effectiveHost = status.game_server_address || conf.game_server_address || window.location.hostname;
             setActiveLease({
               ip_address: status.ip_address || conf.client_ip || '',
@@ -97,12 +131,30 @@ export const KnockPortal: React.FC = () => {
               server_name: conf.server_name,
               server_port: conf.port,
               game_server_address: effectiveHost,
-              always_allowed: status.always_allowed || conf.always_allowed,
+              always_allowed: status.always_allowed || conf.always_allowed || !conf.port_gate_enabled,
               rule_comment: status.rule_comment || conf.rule_comment,
             });
           }
         } catch (statusErr: any) {
           // If status returned banned or error, ignore if config already handled it
+        }
+
+        // Automatically start the server instance if it is stopped when visiting the Knock Portal
+        if (currentStatus === 'stopped') {
+          setStartingServer(true);
+          try {
+            const wakeRes = await api.startServerFromKnock(id);
+            if (wakeRes.server_status) {
+              setServerStatus(wakeRes.server_status);
+            }
+            if (wakeRes.auto_started) {
+              setAutoStarted(true);
+            }
+          } catch {
+            // Ignore auto-start failure on initial load; user can retry or knock
+          } finally {
+            setStartingServer(false);
+          }
         }
       } catch (err: any) {
         setError(err.message || 'Failed to connect to Knock Portal');
@@ -113,6 +165,22 @@ export const KnockPortal: React.FC = () => {
 
     init();
   }, [id]);
+
+  // Periodically poll server status so visitor sees real-time instance status transitions
+  useEffect(() => {
+    if (!id || config?.is_banned) return;
+    const poll = setInterval(async () => {
+      try {
+        const st = await api.getKnockStatus(id);
+        if (st.server_status) {
+          setServerStatus(st.server_status);
+        }
+      } catch {
+        // Ignore transient status poll errors
+      }
+    }, 4000);
+    return () => clearInterval(poll);
+  }, [id, config?.is_banned]);
 
   // Live Timer Countdown Effect (ticks every second for temporary leases)
   useEffect(() => {
@@ -147,6 +215,9 @@ export const KnockPortal: React.FC = () => {
     const interval = setInterval(async () => {
       try {
         const hb = await api.sendHeartbeat(id, activeLease.session_token);
+        if (hb.server_status) {
+          setServerStatus(hb.server_status);
+        }
         setActiveLease((prev) => {
           if (!prev) return null;
           return {
@@ -181,6 +252,13 @@ export const KnockPortal: React.FC = () => {
         passphrase: passphrase.trim(),
       });
 
+      if (res.server_status) {
+        setServerStatus(res.server_status);
+      }
+      if (res.auto_started) {
+        setAutoStarted(true);
+      }
+
       const effectiveHost = res.game_server_address || config?.game_server_address || window.location.hostname;
       setActiveLease({
         ip_address: res.ip_address,
@@ -207,6 +285,9 @@ export const KnockPortal: React.FC = () => {
     setError(null);
     try {
       const hb = await api.sendHeartbeat(id, activeLease?.session_token);
+      if (hb.server_status) {
+        setServerStatus(hb.server_status);
+      }
       setActiveLease((prev) => prev ? {
         ...prev,
         ip_address: hb.ip_address,
@@ -241,7 +322,7 @@ export const KnockPortal: React.FC = () => {
 
       <div className="w-full max-w-md bg-obsidian-900 border border-obsidian-700/80 rounded-2xl p-6 sm:p-8 shadow-2xl relative backdrop-blur-xl">
         {/* Header */}
-        <div className="text-center mb-6">
+        <div className="text-center mb-5">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-400 mb-3 shadow-[0_0_25px_rgba(16,185,129,0.25)]">
             <Shield className="w-7 h-7" />
           </div>
@@ -252,6 +333,67 @@ export const KnockPortal: React.FC = () => {
             Dynamic Port Gate Access Portal ({gameServerHost}:{gameServerPort})
           </p>
         </div>
+
+        {/* Live Server / Instance Status Card */}
+        {!config?.is_banned && (
+          <div className={`mb-5 p-3.5 rounded-xl border font-mono text-xs transition-all ${
+            serverStatus === 'running' && !startingServer
+              ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-300'
+              : serverStatus === 'starting' || startingServer
+              ? 'bg-amber-950/30 border-amber-500/40 text-amber-300'
+              : 'bg-obsidian-950 border-obsidian-700 text-slate-300'
+          }`}>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center space-x-2">
+                <ServerIcon className="w-4 h-4 shrink-0" />
+                <span className="font-bold uppercase tracking-wider text-[11px]">Instance Status:</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                {startingServer || serverStatus === 'starting' ? (
+                  <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-[10px] uppercase">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span>Starting Instance...</span>
+                  </span>
+                ) : serverStatus === 'running' ? (
+                  <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-bold text-[10px] uppercase">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Online & Ready</span>
+                  </span>
+                ) : (
+                  <div className="flex items-center space-x-2">
+                    <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-bold text-[10px] uppercase">
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      <span>Stopped / Idle</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleWakeServer}
+                      disabled={startingServer}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-[10px] uppercase flex items-center space-x-1 transition-colors"
+                    >
+                      <Power className="w-3 h-3" />
+                      <span>Start Server</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {autoStarted && (
+              <div className="mt-2 pt-2 border-t border-emerald-500/20 text-[11px] text-emerald-300/90 flex items-center space-x-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>Instance was idle and has been automatically started for you!</span>
+              </div>
+            )}
+
+            {config?.idle_timeout_minutes && config.idle_timeout_minutes > 0 ? (
+              <div className="mt-1.5 text-[10px] text-slate-400 flex items-center justify-between">
+                <span>Idle Auto-Stop Policy:</span>
+                <span className="text-slate-300">Stops after {config.idle_timeout_minutes}m with 0 players</span>
+              </div>
+            ) : null}
+          </div>
+        )}
 
         {error && (
           <div className="mb-6 p-3 rounded-xl bg-rose-950/40 border border-rose-500/50 flex items-start space-x-3 text-rose-300 text-xs">

@@ -543,5 +543,71 @@ func TestAddonInstallMultiFolderMCAddonAndActivation(t *testing.T) {
 	if !cfg.TexturePackRequired {
 		t.Errorf("expected texturepack-required to be automatically enabled")
 	}
+
+	// Verify active packs are mirrored into worlds/Bedrock level/{behavior_packs,resource_packs}
+	worldBPManifest := filepath.Join(serverDir, "worlds", levelName, "behavior_packs", "Super_Dragon_BP", "manifest.json")
+	if _, err := os.Stat(worldBPManifest); err != nil {
+		t.Errorf("expected active BP mirrored into world folder %s: %v", worldBPManifest, err)
+	}
+	worldRPManifest := filepath.Join(serverDir, "worlds", levelName, "resource_packs", "Super_Dragon_RP", "manifest.json")
+	if _, err := os.Stat(worldRPManifest); err != nil {
+		t.Errorf("expected active RP mirrored into world folder %s: %v", worldRPManifest, err)
+	}
+	worldRPHistory := filepath.Join(serverDir, "worlds", levelName, "world_resource_pack_history.json")
+	if _, err := os.Stat(worldRPHistory); err != nil {
+		t.Errorf("expected world_resource_pack_history.json to be written: %v", err)
+	}
+}
+
+func TestTolerantManifestAndForcePropertiesSync(t *testing.T) {
+	serverDir := t.TempDir()
+
+	// Create a zip with comments, trailing commas, string version, and "script" module
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	scriptManifest := "\xef\xbb\xbf" + `{
+		// Comment inside manifest.json
+		"format_version": 2,
+		"header": {
+			"name": "Scripted RPG BP",
+			"description": "Uses script module and string version",
+			"uuid": "12345678-1111-2222-3333-444444444444",
+			"version": "1.4.2",
+		},
+		"modules": [
+			{
+				"type": "script",
+				"uuid": "87654321-1111-2222-3333-444444444444",
+				"version": "1.4.2",
+			},
+		],
+	}`
+	w, _ := zw.Create("manifest.json")
+	_, _ = w.Write([]byte(scriptManifest))
+	_ = zw.Close()
+
+	packs, err := InstallAllPacks(serverDir, bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("InstallAllPacks with comments/script/string-version failed: %v", err)
+	}
+	if len(packs) != 1 {
+		t.Fatalf("expected 1 pack, got %d", len(packs))
+	}
+	if packs[0].Type != "behavior" {
+		t.Errorf("expected script module pack to be detected as behavior, got %s", packs[0].Type)
+	}
+	if packs[0].Version != "1.4.2" {
+		t.Errorf("expected version 1.4.2, got %s", packs[0].Version)
+	}
+
+	// Test UpdateAddonConfig(texturepack-required=true) auto-activates installed packs when none are active
+	if err := UpdateAddonConfig(serverDir, true); err != nil {
+		t.Fatalf("UpdateAddonConfig failed: %v", err)
+	}
+	listed, err := ListInstalledPacks(serverDir)
+	if err != nil || len(listed) != 1 || !listed[0].Active {
+		t.Fatalf("expected installed pack to be auto-activated when enabling texturepack-required, got %+v", listed)
+	}
 }
 

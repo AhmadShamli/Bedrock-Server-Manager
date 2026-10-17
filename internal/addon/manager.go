@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,8 +38,9 @@ type PackManifest struct {
 		UUID string `json:"uuid"`
 	} `json:"modules"`
 	Dependencies []struct {
-		UUID    string      `json:"uuid"`
-		Version interface{} `json:"version,omitempty"`
+		UUID       string      `json:"uuid"`
+		ModuleName string      `json:"module_name,omitempty"`
+		Version    interface{} `json:"version,omitempty"`
 	} `json:"dependencies,omitempty"`
 }
 
@@ -66,6 +68,215 @@ type AddonConfig struct {
 	TexturePackRequired bool   `json:"texturepack_required"`
 }
 
+// parseVersionSlice converts a Bedrock manifest version ([1,0,0] or "1.0.0") into a 3-int slice.
+func parseVersionSlice(raw interface{}) []int {
+	switch v := raw.(type) {
+	case []int:
+		res := append([]int(nil), v...)
+		for len(res) < 3 {
+			res = append(res, 0)
+		}
+		return res[:3]
+	case []interface{}:
+		res := make([]int, 0, 3)
+		for _, item := range v {
+			switch n := item.(type) {
+			case float64:
+				res = append(res, int(n))
+			case int:
+				res = append(res, n)
+			case string:
+				iv, _ := strconv.Atoi(strings.TrimSpace(n))
+				res = append(res, iv)
+			}
+		}
+		if len(res) == 0 {
+			return []int{1, 0, 0}
+		}
+		for len(res) < 3 {
+			res = append(res, 0)
+		}
+		return res[:3]
+	case string:
+		clean := strings.TrimSpace(strings.TrimPrefix(v, "v"))
+		if idx := strings.IndexAny(clean, "-+"); idx != -1 {
+			clean = clean[:idx]
+		}
+		parts := strings.Split(clean, ".")
+		res := make([]int, 0, 3)
+		for _, p := range parts {
+			iv, err := strconv.Atoi(strings.TrimSpace(p))
+			if err != nil {
+				iv = 0
+			}
+			res = append(res, iv)
+		}
+		if len(res) == 0 {
+			return []int{1, 0, 0}
+		}
+		for len(res) < 3 {
+			res = append(res, 0)
+		}
+		return res[:3]
+	default:
+		return []int{1, 0, 0}
+	}
+}
+
+// sanitizeJSONBytes removes UTF-8 BOM, // and /* */ comments, and trailing commas outside strings.
+func sanitizeJSONBytes(data []byte) []byte {
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	var out bytes.Buffer
+	inString := false
+	escaped := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if inString {
+			out.WriteByte(c)
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			out.WriteByte(c)
+			continue
+		}
+		if c == '/' && i+1 < len(data) {
+			if data[i+1] == '/' {
+				i += 2
+				for i < len(data) && data[i] != '\n' {
+					i++
+				}
+				if i < len(data) {
+					out.WriteByte('\n')
+				}
+				continue
+			}
+			if data[i+1] == '*' {
+				i += 2
+				for i+1 < len(data) && !(data[i] == '*' && data[i+1] == '/') {
+					i++
+				}
+				i++
+				continue
+			}
+		}
+		out.WriteByte(c)
+	}
+
+	cleaned := out.Bytes()
+	var finalOut bytes.Buffer
+	inString = false
+	escaped = false
+	for i := 0; i < len(cleaned); i++ {
+		c := cleaned[i]
+		if inString {
+			finalOut.WriteByte(c)
+			if escaped {
+				escaped = false
+			} else if c == '\\' {
+				escaped = true
+			} else if c == '"' {
+				inString = false
+			}
+			continue
+		}
+		if c == '"' {
+			inString = true
+			finalOut.WriteByte(c)
+			continue
+		}
+		if c == ',' {
+			j := i + 1
+			for j < len(cleaned) && (cleaned[j] == ' ' || cleaned[j] == '\t' || cleaned[j] == '\r' || cleaned[j] == '\n') {
+				j++
+			}
+			if j < len(cleaned) && (cleaned[j] == '}' || cleaned[j] == ']') {
+				continue
+			}
+		}
+		finalOut.WriteByte(c)
+	}
+	return finalOut.Bytes()
+}
+
+// parseManifest tolerantly parses a Bedrock manifest.json.
+func parseManifest(data []byte) (*PackManifest, bool, error) {
+	clean := sanitizeJSONBytes(data)
+	var raw struct {
+		FormatVersion int `json:"format_version"`
+		Header        struct {
+			Name        string      `json:"name"`
+			Description string      `json:"description"`
+			UUID        string      `json:"uuid"`
+			Version     interface{} `json:"version"`
+		} `json:"header"`
+		Modules []struct {
+			Type string `json:"type"`
+			UUID string `json:"uuid"`
+		} `json:"modules"`
+		Dependencies []struct {
+			UUID       string      `json:"uuid"`
+			ModuleName string      `json:"module_name,omitempty"`
+			Version    interface{} `json:"version,omitempty"`
+		} `json:"dependencies,omitempty"`
+	}
+	if err := json.Unmarshal(clean, &raw); err != nil {
+		return nil, false, err
+	}
+
+	mf := &PackManifest{
+		FormatVersion: raw.FormatVersion,
+	}
+	mf.Header.Name = strings.TrimSpace(raw.Header.Name)
+	mf.Header.Description = strings.TrimSpace(raw.Header.Description)
+	mf.Header.UUID = strings.TrimSpace(raw.Header.UUID)
+	mf.Header.Version = parseVersionSlice(raw.Header.Version)
+
+	isWorldTemplate := false
+	for _, m := range raw.Modules {
+		if strings.EqualFold(strings.TrimSpace(m.Type), "world_template") {
+			isWorldTemplate = true
+		}
+		mf.Modules = append(mf.Modules, struct {
+			Type string `json:"type"`
+			UUID string `json:"uuid"`
+		}{
+			Type: strings.ToLower(strings.TrimSpace(m.Type)),
+			UUID: strings.TrimSpace(m.UUID),
+		})
+	}
+	for _, d := range raw.Dependencies {
+		mf.Dependencies = append(mf.Dependencies, struct {
+			UUID       string      `json:"uuid"`
+			ModuleName string      `json:"module_name,omitempty"`
+			Version    interface{} `json:"version,omitempty"`
+		}{
+			UUID:       strings.TrimSpace(d.UUID),
+			ModuleName: strings.TrimSpace(d.ModuleName),
+			Version:    d.Version,
+		})
+	}
+	return mf, isWorldTemplate, nil
+}
+
+// detectPackType determines whether a parsed manifest is a "behavior" or "resource" pack.
+func detectPackType(mf *PackManifest) string {
+	for _, mod := range mf.Modules {
+		t := strings.ToLower(strings.TrimSpace(mod.Type))
+		if t == "data" || t == "script" || t == "javascript" || t == "server_data" {
+			return "behavior"
+		}
+	}
+	return "resource"
+}
+
 // GetActiveLevelName determines the active world folder name from server.properties or defaults to "Bedrock level".
 func GetActiveLevelName(serverDir string) string {
 	propPath := filepath.Join(serverDir, "server.properties")
@@ -86,6 +297,77 @@ func GetActiveLevelName(serverDir string) string {
 	return "Bedrock level"
 }
 
+// getTargetWorldDirs returns the active world directory plus any other existing world directories under worlds/.
+func getTargetWorldDirs(serverDir, levelName string) []string {
+	primary := filepath.Join(serverDir, "worlds", levelName)
+	dirs := []string{primary}
+	seen := map[string]bool{filepath.Clean(primary): true}
+
+	worldsRoot := filepath.Join(serverDir, "worlds")
+	if entries, err := os.ReadDir(worldsRoot); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				d := filepath.Join(worldsRoot, e.Name())
+				clean := filepath.Clean(d)
+				if !seen[clean] {
+					seen[clean] = true
+					dirs = append(dirs, d)
+				}
+			}
+		}
+	}
+	return dirs
+}
+
+// invalidateKnownPacksCache removes valid_known_packs.json so BDS regenerates it on start.
+func invalidateKnownPacksCache(serverDir string) {
+	_ = os.Remove(filepath.Join(serverDir, "valid_known_packs.json"))
+}
+
+// copyDirRecursive copies all files and subdirectories from src to dst with 0755/0644 permissions.
+func copyDirRecursive(src, dst string) error {
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDirRecursive(srcPath, dstPath); err != nil {
+				return err
+			}
+			continue
+		}
+		data, err := os.ReadFile(srcPath)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(dstPath, data, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncPackFolderToWorlds mirrors or removes a pack directory inside worlds/<world>/<type>_packs/<folder>.
+func syncPackFolderToWorlds(serverDir, levelName, packType, folder string, active bool) {
+	srcDir := filepath.Join(serverDir, packType+"_packs", folder)
+	for _, worldDir := range getTargetWorldDirs(serverDir, levelName) {
+		worldPackDir := filepath.Join(worldDir, packType+"_packs", folder)
+		if active {
+			if st, err := os.Stat(srcDir); err == nil && st.IsDir() {
+				_ = copyDirRecursive(srcDir, worldPackDir)
+			}
+		} else {
+			_ = os.RemoveAll(worldPackDir)
+		}
+	}
+}
+
 // GetWorldPackPath returns the path to world_behavior_packs.json or world_resource_packs.json.
 func GetWorldPackPath(serverDir, levelName, packType string) string {
 	return filepath.Join(serverDir, "worlds", levelName, fmt.Sprintf("world_%s_packs.json", packType))
@@ -103,26 +385,64 @@ func GetWorldPackRefs(serverDir, levelName, packType string) ([]WorldPackRef, er
 	}
 
 	var refs []WorldPackRef
-	if err := json.Unmarshal(data, &refs); err != nil {
+	if err := json.Unmarshal(sanitizeJSONBytes(data), &refs); err != nil {
 		return []WorldPackRef{}, nil
 	}
 	return refs, nil
 }
 
-// SaveWorldPackRefs writes the active pack list for a world and pack type.
+// SaveWorldPackRefs writes the active pack list for a world and pack type,
+// and also writes world_<type>_pack_history.json across all world directories.
 func SaveWorldPackRefs(serverDir, levelName, packType string, refs []WorldPackRef) error {
-	worldDir := filepath.Join(serverDir, "worlds", levelName)
-	if err := os.MkdirAll(worldDir, 0755); err != nil {
-		return fmt.Errorf("failed to create world directory: %w", err)
+	if refs == nil {
+		refs = []WorldPackRef{}
 	}
 
-	filePath := GetWorldPackPath(serverDir, levelName, packType)
 	data, err := json.MarshalIndent(refs, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to encode pack refs: %w", err)
 	}
 
-	return os.WriteFile(filePath, append(data, '\n'), 0644)
+	type historyEntry struct {
+		CanBeRedownloaded bool      `json:"can_be_redownloaded"`
+		Name              string    `json:"name,omitempty"`
+		UUID              string    `json:"uuid"`
+		Version           []int     `json:"version"`
+	}
+	historyPacks := make([]historyEntry, 0, len(refs))
+	for _, r := range refs {
+		ver := r.Version
+		if len(ver) < 3 {
+			ver = parseVersionSlice(ver)
+		}
+		historyPacks = append(historyPacks, historyEntry{
+			CanBeRedownloaded: true,
+			UUID:              r.PackID,
+			Version:           ver,
+		})
+	}
+	historyData, _ := json.MarshalIndent(map[string]interface{}{
+		"packs": historyPacks,
+	}, "", "  ")
+
+	worldDirs := getTargetWorldDirs(serverDir, levelName)
+	for i, worldDir := range worldDirs {
+		if err := os.MkdirAll(worldDir, 0755); err != nil {
+			if i == 0 {
+				return fmt.Errorf("failed to create world directory: %w", err)
+			}
+			continue
+		}
+		packFile := filepath.Join(worldDir, fmt.Sprintf("world_%s_packs.json", packType))
+		if err := os.WriteFile(packFile, append(data, '\n'), 0644); err != nil && i == 0 {
+			return err
+		}
+		historyFile := filepath.Join(worldDir, fmt.Sprintf("world_%s_pack_history.json", packType))
+		_ = os.WriteFile(historyFile, append(historyData, '\n'), 0644)
+	}
+
+	invalidateKnownPacksCache(serverDir)
+	return nil
 }
 
 // ListInstalledPacks inspects behavior_packs and resource_packs folders for a server,
@@ -167,13 +487,9 @@ func ListInstalledPacks(serverDir string) ([]InstalledPack, error) {
 				continue
 			}
 
-			var mf PackManifest
-			if err := json.Unmarshal(data, &mf); err == nil {
-				verStr := "1.0.0"
+			if mf, _, err := parseManifest(data); err == nil && mf.Header.UUID != "" {
 				verInts := mf.Header.Version
-				if len(verInts) >= 3 {
-					verStr = fmt.Sprintf("%d.%d.%d", verInts[0], verInts[1], verInts[2])
-				}
+				verStr := fmt.Sprintf("%d.%d.%d", verInts[0], verInts[1], verInts[2])
 				name := mf.Header.Name
 				if name == "" {
 					name = entry.Name()
@@ -214,28 +530,38 @@ func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPa
 	}
 
 	type manifestEntry struct {
-		data   []byte
-		prefix string
+		data            []byte
+		prefix          string
+		mf              *PackManifest
+		isWorldTemplate bool
 	}
 
 	var manifests []manifestEntry
 	for _, f := range zipReader.File {
-		if strings.EqualFold(filepath.Base(f.Name), "manifest.json") {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+		if strings.EqualFold(filepath.Base(normName), "manifest.json") {
 			rc, err := f.Open()
 			if err == nil {
 				data, _ := io.ReadAll(rc)
 				rc.Close()
 				if len(data) > 0 {
-					cleaned := filepath.Clean(f.Name)
+					cleaned := filepath.Clean(normName)
 					dir := filepath.Dir(cleaned)
 					prefix := ""
 					if dir != "." && dir != "/" && dir != "" {
 						prefix = dir + "/"
 					}
-					manifests = append(manifests, manifestEntry{
-						data:   data,
-						prefix: prefix,
-					})
+					if mf, isWT, err := parseManifest(data); err == nil && mf.Header.UUID != "" {
+						manifests = append(manifests, manifestEntry{
+							data:            data,
+							prefix:          prefix,
+							mf:              mf,
+							isWorldTemplate: isWT,
+						})
+					}
 				}
 			}
 		}
@@ -243,26 +569,31 @@ func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPa
 
 	var installedPacks []InstalledPack
 
-	// If no manifest.json found at all, search for nested .mcpack or .zip files
-	if len(manifests) == 0 {
-		for _, f := range zipReader.File {
-			lowerName := strings.ToLower(f.Name)
-			if strings.HasSuffix(lowerName, ".mcpack") || strings.HasSuffix(lowerName, ".zip") {
-				rc, err := f.Open()
-				if err != nil {
-					continue
-				}
-				packBytes, err := io.ReadAll(rc)
-				rc.Close()
-				if err != nil || len(packBytes) == 0 {
-					continue
-				}
-				subPacks, err := InstallAllPacks(serverDir, bytes.NewReader(packBytes), int64(len(packBytes)))
-				if err == nil && len(subPacks) > 0 {
-					installedPacks = append(installedPacks, subPacks...)
-				}
+	// Also extract any nested .mcpack, .mcaddon, or .zip archives contained inside the archive
+	for _, f := range zipReader.File {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+		lowerName := strings.ToLower(normName)
+		if strings.HasSuffix(lowerName, ".mcpack") || strings.HasSuffix(lowerName, ".mcaddon") || strings.HasSuffix(lowerName, ".zip") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			packBytes, err := io.ReadAll(rc)
+			rc.Close()
+			if err != nil || len(packBytes) == 0 {
+				continue
+			}
+			subPacks, err := InstallAllPacks(serverDir, bytes.NewReader(packBytes), int64(len(packBytes)))
+			if err == nil && len(subPacks) > 0 {
+				installedPacks = append(installedPacks, subPacks...)
 			}
 		}
+	}
+
+	if len(manifests) == 0 {
 		if len(installedPacks) > 0 {
 			return installedPacks, nil
 		}
@@ -271,18 +602,11 @@ func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPa
 
 	// Process each manifest found in the archive
 	for _, m := range manifests {
-		var mf PackManifest
-		if err := json.Unmarshal(m.data, &mf); err != nil {
-			continue // Skip malformed manifest
+		if m.isWorldTemplate && (len(manifests) > 1 || len(installedPacks) > 0) {
+			continue
 		}
-
-		packType := "resource"
-		for _, mod := range mf.Modules {
-			if mod.Type == "data" {
-				packType = "behavior"
-				break
-			}
-		}
+		mf := m.mf
+		packType := detectPackType(mf)
 
 		folderName := mf.Header.Name
 		if folderName == "" {
@@ -308,19 +632,35 @@ func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPa
 		}
 
 		for _, f := range zipReader.File {
-			cleaned := filepath.Clean(f.Name)
+			normName := strings.ReplaceAll(f.Name, "\\", "/")
+			if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+				continue
+			}
+			cleaned := filepath.Clean(normName)
 			if strings.HasPrefix(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
 				continue
 			}
 
 			if m.prefix != "" {
-				if strings.HasPrefix(f.Name, m.prefix) {
-					cleaned = filepath.Clean(strings.TrimPrefix(f.Name, m.prefix))
+				if strings.HasPrefix(normName, m.prefix) {
+					cleaned = filepath.Clean(strings.TrimPrefix(normName, m.prefix))
 				} else {
 					continue
 				}
 			}
 			if cleaned == "" || cleaned == "." {
+				continue
+			}
+
+			// Skip other sub-pack prefixes when a root manifest coexists with sub-packs
+			skipOtherPack := false
+			for _, other := range manifests {
+				if other.prefix != "" && other.prefix != m.prefix && strings.HasPrefix(normName, other.prefix) {
+					skipOtherPack = true
+					break
+				}
+			}
+			if skipOtherPack {
 				continue
 			}
 
@@ -331,12 +671,12 @@ func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPa
 			}
 
 			if f.FileInfo().IsDir() {
-				_ = os.MkdirAll(destPath, f.Mode())
+				_ = os.MkdirAll(destPath, 0755)
 				continue
 			}
 
 			_ = os.MkdirAll(filepath.Dir(destPath), 0755)
-			outFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			outFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 			if err != nil {
 				continue
 			}
@@ -353,10 +693,7 @@ func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPa
 
 		_ = os.WriteFile(filepath.Join(targetDir, bsmInstalledMarker), []byte("installed-by-bsm\n"), 0644)
 
-		verStr := "1.0.0"
-		if len(mf.Header.Version) >= 3 {
-			verStr = fmt.Sprintf("%d.%d.%d", mf.Header.Version[0], mf.Header.Version[1], mf.Header.Version[2])
-		}
+		verStr := fmt.Sprintf("%d.%d.%d", mf.Header.Version[0], mf.Header.Version[1], mf.Header.Version[2])
 
 		installedPacks = append(installedPacks, InstalledPack{
 			Type:        packType,
@@ -373,6 +710,7 @@ func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPa
 		return nil, fmt.Errorf("failed to extract any valid packs from archive")
 	}
 
+	invalidateKnownPacksCache(serverDir)
 	return installedPacks, nil
 }
 
@@ -409,11 +747,16 @@ func DeletePack(serverDir, packType, folder string) error {
 		return fmt.Errorf("path traversal attempt detected")
 	}
 
+	invalidateKnownPacksCache(serverDir)
 	return os.RemoveAll(targetDir)
 }
 
 // SetPackActive activates or deactivates an installed pack in the active world's configuration file.
 func SetPackActive(serverDir, packType, folder string, active bool) (*InstalledPack, error) {
+	return setPackActiveInternal(serverDir, packType, folder, active, true)
+}
+
+func setPackActiveInternal(serverDir, packType, folder string, active bool, followDeps bool) (*InstalledPack, error) {
 	if packType != "behavior" && packType != "resource" {
 		return nil, fmt.Errorf("invalid pack type: must be 'behavior' or 'resource'")
 	}
@@ -429,8 +772,8 @@ func SetPackActive(serverDir, packType, folder string, active bool) (*InstalledP
 		return nil, fmt.Errorf("failed to read pack manifest: %w", err)
 	}
 
-	var mf PackManifest
-	if err := json.Unmarshal(data, &mf); err != nil {
+	mf, _, err := parseManifest(data)
+	if err != nil {
 		return nil, fmt.Errorf("invalid pack manifest: %w", err)
 	}
 
@@ -440,13 +783,6 @@ func SetPackActive(serverDir, packType, folder string, active bool) (*InstalledP
 	}
 
 	verInts := mf.Header.Version
-	if len(verInts) == 0 {
-		verInts = []int{1, 0, 0}
-	} else if len(verInts) < 3 {
-		for len(verInts) < 3 {
-			verInts = append(verInts, 0)
-		}
-	}
 
 	levelName := GetActiveLevelName(serverDir)
 	refs, err := GetWorldPackRefs(serverDir, levelName, packType)
@@ -483,25 +819,44 @@ func SetPackActive(serverDir, packType, folder string, active bool) (*InstalledP
 		return nil, err
 	}
 
+	// Mirror or remove the pack inside worlds/<levelName>/<type>_packs/<folder>
+	syncPackFolderToWorlds(serverDir, levelName, packType, cleanFolder, active)
+
 	if active {
 		if packType == "resource" {
-			_ = UpdateAddonConfig(serverDir, true)
-		} else if packType == "behavior" && len(mf.Dependencies) > 0 {
-			// Auto-activate companion resource pack if referenced in dependencies
-			if rpEntries, err := os.ReadDir(filepath.Join(serverDir, "resource_packs")); err == nil {
-				for _, entry := range rpEntries {
+			_ = updateTexturePackRequiredProp(serverDir, true)
+		}
+		if followDeps {
+			companionType := "resource"
+			if packType == "resource" {
+				companionType = "behavior"
+			}
+			companionDir := filepath.Join(serverDir, companionType+"_packs")
+			if entries, err := os.ReadDir(companionDir); err == nil {
+				for _, entry := range entries {
 					if !entry.IsDir() {
 						continue
 					}
-					rpManifestPath := filepath.Join(serverDir, "resource_packs", entry.Name(), "manifest.json")
-					if rpData, err := os.ReadFile(rpManifestPath); err == nil {
-						var rpMf PackManifest
-						if err := json.Unmarshal(rpData, &rpMf); err == nil {
+					compManifestPath := filepath.Join(companionDir, entry.Name(), "manifest.json")
+					if compData, err := os.ReadFile(compManifestPath); err == nil {
+						if compMf, _, err := parseManifest(compData); err == nil {
+							matched := false
 							for _, dep := range mf.Dependencies {
-								if strings.EqualFold(dep.UUID, rpMf.Header.UUID) {
-									_, _ = SetPackActive(serverDir, "resource", entry.Name(), true)
+								if dep.UUID != "" && strings.EqualFold(dep.UUID, compMf.Header.UUID) {
+									matched = true
 									break
 								}
+							}
+							if !matched {
+								for _, dep := range compMf.Dependencies {
+									if dep.UUID != "" && strings.EqualFold(dep.UUID, packUUID) {
+										matched = true
+										break
+									}
+								}
+							}
+							if matched {
+								_, _ = setPackActiveInternal(serverDir, companionType, entry.Name(), true, false)
 							}
 						}
 					}
@@ -595,8 +950,7 @@ func GetAddonConfig(serverDir string) AddonConfig {
 	}
 }
 
-// UpdateAddonConfig updates addon-related settings in server.properties or pending properties.
-func UpdateAddonConfig(serverDir string, texturePackRequired bool) error {
+func updateTexturePackRequiredProp(serverDir string, texturePackRequired bool) error {
 	valStr := "false"
 	if texturePackRequired {
 		valStr = "true"
@@ -626,12 +980,59 @@ func UpdateAddonConfig(serverDir string, texturePackRequired bool) error {
 			return fmt.Errorf("failed to save pending properties: %w", err)
 		}
 	}
-
 	return nil
 }
 
-// InstallFromURL downloads a pack archive from a direct URL and installs it.
-func InstallFromURL(ctx context.Context, serverDir, downloadURL string) (*InstalledPack, error) {
+// SyncActivePacksToWorlds ensures all active packs have their world_<type>_packs.json and world folders synced.
+func SyncActivePacksToWorlds(serverDir string) {
+	levelName := GetActiveLevelName(serverDir)
+	packs, err := ListInstalledPacks(serverDir)
+	if err != nil {
+		return
+	}
+	for _, p := range packs {
+		if p.Active {
+			_, _ = setPackActiveInternal(serverDir, p.Type, p.Folder, true, false)
+		}
+	}
+	for _, pt := range []string{"behavior", "resource"} {
+		if refs, err := GetWorldPackRefs(serverDir, levelName, pt); err == nil && len(refs) > 0 {
+			_ = SaveWorldPackRefs(serverDir, levelName, pt, refs)
+		}
+	}
+}
+
+// UpdateAddonConfig updates addon-related settings in server.properties or pending properties,
+// and ensures installed packs are synced to the active world.
+func UpdateAddonConfig(serverDir string, texturePackRequired bool) error {
+	if err := updateTexturePackRequiredProp(serverDir, texturePackRequired); err != nil {
+		return err
+	}
+
+	if texturePackRequired {
+		packs, err := ListInstalledPacks(serverDir)
+		if err == nil && len(packs) > 0 {
+			anyActive := false
+			for _, p := range packs {
+				if p.Active {
+					anyActive = true
+					break
+				}
+			}
+			for _, p := range packs {
+				if !anyActive || p.Active {
+					_, _ = setPackActiveInternal(serverDir, p.Type, p.Folder, true, true)
+				}
+			}
+		}
+	}
+
+	SyncActivePacksToWorlds(serverDir)
+	return nil
+}
+
+// InstallAllFromURL downloads a pack archive from a direct URL and installs all packs inside it.
+func InstallAllFromURL(ctx context.Context, serverDir, downloadURL string) ([]InstalledPack, error) {
 	parsed, err := url.Parse(downloadURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return nil, fmt.Errorf("invalid URL: must be http or https")
@@ -673,5 +1074,17 @@ func InstallFromURL(ctx context.Context, serverDir, downloadURL string) (*Instal
 		return nil, fmt.Errorf("downloaded file is empty")
 	}
 
-	return InstallPack(serverDir, tempFile, size)
+	return InstallAllPacks(serverDir, tempFile, size)
+}
+
+// InstallFromURL downloads a pack archive from a direct URL and installs it.
+func InstallFromURL(ctx context.Context, serverDir, downloadURL string) (*InstalledPack, error) {
+	packs, err := InstallAllFromURL(ctx, serverDir, downloadURL)
+	if err != nil {
+		return nil, err
+	}
+	if len(packs) == 0 {
+		return nil, fmt.Errorf("no packs found in archive")
+	}
+	return &packs[0], nil
 }

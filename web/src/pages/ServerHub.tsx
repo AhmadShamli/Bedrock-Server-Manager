@@ -231,7 +231,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [editServerPortGateTimeout, setEditServerPortGateTimeout] = useState(7200);
   const [editGameServerAddress, setEditGameServerAddress] = useState('');
   const [editServerNetworkMode, setEditServerNetworkMode] = useState('host');
-  const [availableNetworks, setAvailableNetworks] = useState<string[]>(['bridge', 'host']);
+  const [editIdleTimeoutMinutes, setEditIdleTimeoutMinutes] = useState(0);
+  const [availableNetworks, setAvailableNetworks] = useState<string[]>(['host', 'bridge']);
   const [serverUpdating, setServerUpdating] = useState(false);
   const [serverUpdatedMsg, setServerUpdatedMsg] = useState<string | null>(null);
   const [propertyFilter, setPropertyFilter] = useState('');
@@ -240,6 +241,14 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [showDeleteServerModal, setShowDeleteServerModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [serverDeleting, setServerDeleting] = useState(false);
+
+  // World Reset state
+  const [showResetWorldModal, setShowResetWorldModal] = useState(false);
+  const [resetCreateBackup, setResetCreateBackup] = useState(true);
+  const [resetKeepAddons, setResetKeepAddons] = useState(true);
+  const [resetSeed, setResetSeed] = useState('');
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resettingWorld, setResettingWorld] = useState(false);
 
   // Backups state
   const [backupsList, setBackupsList] = useState<Backup[]>([]);
@@ -591,6 +600,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       setEditServerPortGateTimeout(server.port_gate_timeout);
       setEditGameServerAddress(server.game_server_address || '');
       setEditServerNetworkMode(server.network_mode || 'host');
+      setEditIdleTimeoutMinutes(server.idle_timeout_minutes || 0);
     }
   }, [server]);
 
@@ -708,6 +718,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         memory_limit: editServerMemLimit,
         cpu_limit: Number(editServerCpuLimit),
         autostart_on_boot: editServerAutostart,
+        idle_timeout_minutes: Math.max(0, Number(editIdleTimeoutMinutes) || 0),
         port_gate_enabled: editServerPortGate,
         port_gate_mode: editServerPortGateMode,
         port_gate_timeout: Number(editServerPortGateTimeout),
@@ -1291,6 +1302,46 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     }
   };
 
+  const handleOpenResetWorldModal = () => {
+    setResetCreateBackup(true);
+    setResetKeepAddons(true);
+    setResetSeed(server?.seed || '');
+    setResetConfirmText('');
+    setShowResetWorldModal(true);
+  };
+
+  const handleResetWorld = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!id || !server) return;
+    if (resetConfirmText.trim().toLowerCase() !== 'reset') {
+      alert('Please type "reset" to confirm wiping the world data.');
+      return;
+    }
+    setResettingWorld(true);
+    try {
+      const res = await api.resetWorld(id, {
+        create_backup: resetCreateBackup,
+        keep_addons: resetKeepAddons,
+        seed: resetSeed.trim(),
+      });
+      setShowResetWorldModal(false);
+      await fetchServer();
+      if (activeTab === 'backups') {
+        const updatedBackups = await api.listBackups(id).catch(() => null);
+        if (Array.isArray(updatedBackups)) setBackupsList(updatedBackups);
+      }
+      alert(
+        res.restarted
+          ? `World "${res.world_name}" has been wiped and the server was restarted to generate a clean new world!`
+          : `World "${res.world_name}" has been wiped! A clean new world will be generated the next time you start the server.`
+      );
+    } catch (err: any) {
+      alert(err.message || 'Failed to reset world data');
+    } finally {
+      setResettingWorld(false);
+    }
+  };
+
   // Addon handlers
   const handleInstallAddon = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!id || !e.target.files || e.target.files.length === 0) return;
@@ -1298,9 +1349,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     setAddonLoading(true);
     try {
       await api.installAddon(id, file);
-      const updated = await api.listAddons(id);
-      setAddonsList(updated);
-      alert('Addon installed successfully!');
+      const [updated, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
+      setAddonsList(Array.isArray(updated) ? updated : []);
+      if (cfg) setAddonConfig(cfg);
+      setPackActivationChanged(true);
+      alert('Addon installed and activated! Restart the server for changes to take effect.');
     } catch (err: any) {
       alert(err.message || 'Failed to install addon');
     } finally {
@@ -1325,10 +1378,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     const key = `${pack.type}-${pack.folder}`;
     setTogglingPackKey(key);
     try {
-      const updated = await api.toggleAddonActive(id, pack.type, pack.folder, !pack.active);
-      setAddonsList((prev) =>
-        prev.map((p) => (p.type === pack.type && p.folder === pack.folder ? { ...p, active: updated.active } : p))
-      );
+      await api.toggleAddonActive(id, pack.type, pack.folder, !pack.active);
+      const [updatedList, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
+      setAddonsList(Array.isArray(updatedList) ? updatedList : []);
+      if (cfg) setAddonConfig(cfg);
       setPackActivationChanged(true);
     } catch (err: any) {
       alert(err.message || 'Failed to toggle addon status');
@@ -1345,6 +1398,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         texturepack_required: !addonConfig.texturepack_required,
       });
       setAddonConfig(updated);
+      const updatedList = await api.listAddons(id).catch(() => null);
+      if (Array.isArray(updatedList)) setAddonsList(updatedList);
+      setPackActivationChanged(true);
     } catch (err: any) {
       alert(err.message || 'Failed to update texture pack setting');
     } finally {
@@ -1382,11 +1438,13 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     setInstallingUrl(true);
     try {
       await api.installAddonFromURL(id, addonUrlInput.trim());
-      const updated = await api.listAddons(id);
-      setAddonsList(updated);
+      const [updated, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
+      setAddonsList(Array.isArray(updated) ? updated : []);
+      if (cfg) setAddonConfig(cfg);
+      setPackActivationChanged(true);
       setUrlModalOpen(false);
       setAddonUrlInput('');
-      alert('Addon installed successfully from URL!');
+      alert('Addon installed and activated from URL! Restart the server for changes to take effect.');
     } catch (err: any) {
       alert(err.message || 'Failed to install addon from URL');
     } finally {
@@ -1425,9 +1483,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         file_id: item.file_id,
         download_url: item.download_url,
       });
-      const updated = await api.listAddons(id);
-      setAddonsList(updated);
-      alert(`Successfully installed "${item.name}"!`);
+      const [updated, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
+      setAddonsList(Array.isArray(updated) ? updated : []);
+      if (cfg) setAddonConfig(cfg);
+      setPackActivationChanged(true);
+      alert(`Successfully installed and activated "${item.name}"!`);
     } catch (err: any) {
       alert(err.message || 'Failed to install addon from marketplace');
     } finally {
@@ -1464,9 +1524,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         file_id: file.id,
         download_url: file.download_url,
       });
-      const updated = await api.listAddons(id);
-      setAddonsList(updated);
-      alert(`Successfully installed "${item.name}" (${file.display_name || file.file_name})!`);
+      const [updated, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
+      setAddonsList(Array.isArray(updated) ? updated : []);
+      if (cfg) setAddonConfig(cfg);
+      setPackActivationChanged(true);
+      alert(`Successfully installed and activated "${item.name}" (${file.display_name || file.file_name})!`);
     } catch (err: any) {
       alert(err.message || 'Failed to install file from marketplace');
     } finally {
@@ -1526,6 +1588,12 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               <span className="text-cyan-400 font-medium">net: {server.network_mode || 'host'}</span>
               <span>•</span>
               <span>v{server.version}</span>
+              {(server.idle_timeout_minutes || 0) > 0 && (
+                <>
+                  <span>•</span>
+                  <span className="text-amber-400 font-medium">Idle Stop: {server.idle_timeout_minutes}m</span>
+                </>
+              )}
               {server.seed && (
                 <>
                   <span>•</span>
@@ -1537,17 +1605,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {server.port_gate_enabled && (
-            <Link
-              to={`/knock/${server.id}`}
-              target="_blank"
-              className="px-3 py-2 rounded-lg bg-emerald-950 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-900/50 font-mono text-xs flex items-center space-x-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.15)]"
-            >
-              <Shield className="w-3.5 h-3.5" />
-              <span>Knock Portal</span>
-              <ExternalLink className="w-3 h-3 ml-0.5" />
-            </Link>
-          )}
+          <Link
+            to={`/knock/${server.id}`}
+            target="_blank"
+            className="px-3 py-2 rounded-lg bg-emerald-950 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-900/50 font-mono text-xs flex items-center space-x-1.5 transition-all shadow-[0_0_10px_rgba(16,185,129,0.15)]"
+          >
+            <Shield className="w-3.5 h-3.5" />
+            <span>Knock Portal</span>
+            <ExternalLink className="w-3 h-3 ml-0.5" />
+          </Link>
 
           {server.status === 'running' ? (
             <>
@@ -2852,6 +2918,15 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               </div>
 
               <div className="flex items-center flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenResetWorldModal}
+                  className="px-3 py-1.5 rounded-lg bg-amber-950/40 hover:bg-amber-900/50 text-amber-300 border border-amber-500/40 font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Reset World</span>
+                </button>
+
                 <label className="cursor-pointer px-3 py-1.5 rounded-lg bg-obsidian-800 hover:bg-obsidian-700 text-slate-200 border border-obsidian-600 font-mono text-xs font-bold flex items-center space-x-1.5">
                   <Upload className="w-3.5 h-3.5 text-emerald-400" />
                   <span>Import World</span>
@@ -3990,7 +4065,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       {activeTab === 'settings' && (
         <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 max-w-4xl space-y-8">
           {/* SERVER INSTANCE CONFIGURATION */}
-          {user.role === 'admin' && (
+          {(user.role === 'admin' || server.owner_user_id === user.id) && (
             <div className="border-b border-obsidian-800 pb-8">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -3999,7 +4074,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   <span>Server Instance Configuration</span>
                 </h3>
                 <p className="text-xs text-slate-400 font-mono mt-0.5">
-                  Update server metadata, memory limits, autostart, and port gating policy.
+                  Update server metadata, memory limits, auto-stop on idle, autostart, and port gating policy.
                 </p>
               </div>
 
@@ -4159,6 +4234,51 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   placeholder={`Optional (defaults to ${window.location.hostname})`}
                   className="w-full px-3 py-2 rounded bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500 font-mono"
                 />
+              </div>
+
+              <div className="p-3 bg-obsidian-900/60 border border-obsidian-800 rounded-lg space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <label className="text-slate-200 font-bold block">Auto-Stop on Idle (0 Players)</label>
+                    <span className="text-[10px] text-slate-400">
+                      Automatically stop this instance when no players are online for the configured duration. Visitors to <code className="text-emerald-400">/knock/{server.id}</code> will see server status and automatically wake the instance.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <select
+                      value={[0, 5, 10, 15, 30, 60].includes(editIdleTimeoutMinutes) ? String(editIdleTimeoutMinutes) : 'custom'}
+                      onChange={(e) => {
+                        if (e.target.value === 'custom') {
+                          if ([0, 5, 10, 15, 30, 60].includes(editIdleTimeoutMinutes)) {
+                            setEditIdleTimeoutMinutes(20);
+                          }
+                        } else {
+                          setEditIdleTimeoutMinutes(parseInt(e.target.value) || 0);
+                        }
+                      }}
+                      className="px-2.5 py-1.5 rounded bg-obsidian-950 border border-obsidian-700 text-slate-200 text-xs"
+                    >
+                      <option value="0">Disabled (Run 24/7)</option>
+                      <option value="5">After 5 minutes</option>
+                      <option value="10">After 10 minutes</option>
+                      <option value="15">After 15 minutes</option>
+                      <option value="30">After 30 minutes</option>
+                      <option value="60">After 60 minutes</option>
+                      <option value="custom">Custom minutes...</option>
+                    </select>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min="0"
+                        max="10080"
+                        value={editIdleTimeoutMinutes}
+                        onChange={(e) => setEditIdleTimeoutMinutes(Math.max(0, parseInt(e.target.value) || 0))}
+                        className="w-20 px-2.5 py-1.5 rounded bg-obsidian-950 border border-obsidian-700 text-slate-200 text-xs text-right"
+                      />
+                      <span className="text-[10px] text-slate-400">min</span>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="pt-2 border-t border-obsidian-800/60 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
@@ -4920,6 +5040,27 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             </div>
           )}
 
+          {/* RESET INSTANCE WORLD DATA */}
+          <div className="pt-6 border-t border-amber-900/40">
+            <div className="bg-amber-950/20 border border-amber-700/40 rounded-xl p-5 space-y-3">
+              <h3 className="font-mono text-base font-bold text-amber-300 flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-amber-400" />
+                <span>Reset Instance World Data (Clean New World)</span>
+              </h3>
+              <p className="text-xs text-slate-400 font-mono">
+                Wipes the current world LevelDB files (<code className="text-amber-300">worlds/</code>) so Bedrock Dedicated Server generates a brand new world from scratch. Server settings, allowlist, permissions, and active addons are preserved.
+              </p>
+              <button
+                type="button"
+                onClick={handleOpenResetWorldModal}
+                className="px-4 py-2 rounded-lg bg-amber-500/20 hover:bg-amber-500 text-amber-300 hover:text-slate-950 font-bold font-mono text-xs border border-amber-500/40 flex items-center space-x-1.5 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Reset World Data</span>
+              </button>
+            </div>
+          </div>
+
           {/* DANGER ZONE - DELETE SERVER */}
           {(user.role === 'admin' || (server && server.owner_user_id === user.id)) && (
             <div className="pt-6 border-t border-rose-900/40">
@@ -4987,6 +5128,110 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* RESET WORLD CONFIRMATION MODAL */}
+      {showResetWorldModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-obsidian-900 border border-amber-600/70 rounded-xl max-w-lg w-full p-6 shadow-2xl font-mono text-xs">
+            <h3 className="text-base font-bold text-amber-400 mb-2 flex items-center gap-2">
+              <RefreshCw className="w-5 h-5" />
+              <span>Reset Instance World Data</span>
+            </h3>
+            <p className="text-slate-300 mb-4 leading-relaxed">
+              This will permanently wipe the world data directory for <strong className="text-white">{server.name}</strong> so that Bedrock Dedicated Server generates a clean new world.
+              {server.status === 'running' && (
+                <span className="block mt-1.5 text-amber-300">
+                  Note: The server is currently running — it will automatically stop, clean the world data, and restart into the new world.
+                </span>
+              )}
+            </p>
+
+            <form onSubmit={handleResetWorld} className="space-y-4">
+              <div className="p-3.5 rounded-lg bg-obsidian-950 border border-obsidian-800 space-y-3">
+                <label className="flex items-start space-x-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetCreateBackup}
+                    onChange={(e) => setResetCreateBackup(e.target.checked)}
+                    className="mt-0.5 rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <span className="text-slate-200 font-bold block">Create Backup Before Resetting</span>
+                    <span className="text-[11px] text-slate-400">Save a snapshot of the current world in Backups before wiping</span>
+                  </div>
+                </label>
+
+                <label className="flex items-start space-x-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetKeepAddons}
+                    onChange={(e) => setResetKeepAddons(e.target.checked)}
+                    className="mt-0.5 rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <div>
+                    <span className="text-slate-200 font-bold block">Keep Active Addons & Resource Packs</span>
+                    <span className="text-[11px] text-slate-400">Automatically bind your currently active behavior and resource packs to the new world</span>
+                  </div>
+                </label>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-slate-300 font-bold">New World Seed (Optional)</label>
+                  {resetSeed && (
+                    <button
+                      type="button"
+                      onClick={() => setResetSeed('')}
+                      className="text-[10px] text-emerald-400 hover:underline"
+                    >
+                      Clear for Random Seed
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={resetSeed}
+                  onChange={(e) => setResetSeed(e.target.value)}
+                  placeholder="Leave empty for a random new world seed"
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-100 focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 mb-1">
+                  Type <code className="text-amber-400 font-bold">reset</code> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={resetConfirmText}
+                  onChange={(e) => setResetConfirmText(e.target.value)}
+                  placeholder='Type "reset" to confirm'
+                  className="w-full px-3 py-2 bg-obsidian-950 border border-amber-800/80 rounded-lg text-amber-200 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowResetWorldModal(false)}
+                  disabled={resettingWorld}
+                  className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={resetConfirmText.trim().toLowerCase() !== 'reset' || resettingWorld}
+                  className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold flex items-center space-x-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {resettingWorld ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  <span>Reset World Now</span>
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

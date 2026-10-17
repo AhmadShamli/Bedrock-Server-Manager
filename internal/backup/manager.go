@@ -151,3 +151,28 @@ func ImportWorld(serverDir, worldName string, fileReader io.ReaderAt, size int64
 
 	return nil
 }
+
+// ResetWorld deletes all existing world data (the worlds/ directory and any pre-restore world backups)
+// so that Bedrock Dedicated Server generates a clean new world on next start.
+func ResetWorld(serverDir string) error {
+	worldsDir := filepath.Join(serverDir, "worlds")
+	if err := os.RemoveAll(worldsDir); err != nil {
+		return fmt.Errorf("failed to remove worlds directory: %w", err)
+	}
+
+	// Clean up any rotated worlds_pre_restore_* folders in serverDir
+	if entries, err := os.ReadDir(serverDir); err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() && strings.HasPrefix(entry.Name(), "worlds_pre_restore_") {
+				_ = os.RemoveAll(filepath.Join(serverDir, entry.Name()))
+			}
+		}
+	}
+
+	if err := os.MkdirAll(worldsDir, 0755); err != nil {
+		return fmt.Errorf("failed to recreate clean worlds directory: %w", err)
+	}
+
+	return nil
+}
+

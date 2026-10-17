@@ -92,11 +92,12 @@ type Server struct {
 	CPULimit        float64   `json:"cpu_limit"`         // e.g. 2.0
 	ContainerID     string    `json:"container_id"`
 	Seed              string    `json:"seed"`
-	GameServerAddress string    `json:"game_server_address"`
-	NetworkMode       string    `json:"network_mode"` // "host" (default), "bridge", or custom network
-	OwnerUserID     *int64    `json:"owner_user_id,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	GameServerAddress  string    `json:"game_server_address"`
+	NetworkMode        string    `json:"network_mode"`         // "host" (default), "bridge", or custom network
+	IdleTimeoutMinutes int       `json:"idle_timeout_minutes"` // 0 = disabled (24/7), >0 = stop server after N minutes with 0 players
+	OwnerUserID        *int64    `json:"owner_user_id,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // PortGateKey represents an access passphrase/key for unlocking the port gate.

@@ -81,6 +81,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
   const [difficulty, setDifficulty] = useState('normal');
   const [memLimit, setMemLimit] = useState('2G');
   const [cpuLimit, setCpuLimit] = useState<number>(2.0);
+  const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState<number>(0);
   const [autostartOnBoot, setAutostartOnBoot] = useState(true);
   const [portGate, setPortGate] = useState(false);
   const [portGateMode, setPortGateMode] = useState<'gamertag' | 'passphrase' | 'combined'>('passphrase');
@@ -131,6 +132,9 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
       }
       if (cpuLimit > maxCpu) {
         setCpuLimit(cpuOptions[cpuOptions.length - 1].value);
+      }
+      if (userPlan.plan.idle_timeout_minutes > 0 && (idleTimeoutMinutes === 0 || idleTimeoutMinutes > userPlan.plan.idle_timeout_minutes)) {
+        setIdleTimeoutMinutes(userPlan.plan.idle_timeout_minutes);
       }
       if (!allowPortGate) {
         setPortGate(false);
@@ -192,6 +196,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
         difficulty,
         memory_limit: memLimit,
         cpu_limit: Number(cpuLimit),
+        idle_timeout_minutes: Math.max(0, Number(idleTimeoutMinutes) || 0),
         autostart_on_boot: autostartOnBoot,
         port_gate_enabled: portGate,
         port_gate_mode: portGateMode,
@@ -703,6 +708,50 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                         </label>
                       </div>
 
+                      <div className="col-span-full p-3 rounded-lg bg-obsidian-900 border border-obsidian-800 space-y-2">
+                        <label className="block text-xs font-mono text-slate-300 flex items-center justify-between">
+                          <span className="font-bold">Auto-Stop on Idle (0 Players)</span>
+                          <span className="text-[10px] text-emerald-400">
+                            {idleTimeoutMinutes > 0 ? `Stops after ${idleTimeoutMinutes}m idle • Wakes via Knock Portal` : 'Disabled (24/7 Always On)'}
+                          </span>
+                        </label>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {[
+                            { val: 0, label: 'Disabled (24/7)' },
+                            { val: 10, label: '10m' },
+                            { val: 15, label: '15m' },
+                            { val: 30, label: '30m' },
+                            { val: 60, label: '60m' },
+                          ].map((preset) => (
+                            <button
+                              key={preset.val}
+                              type="button"
+                              onClick={() => setIdleTimeoutMinutes(preset.val)}
+                              className={`px-2.5 py-1.5 rounded-lg text-xs font-mono border transition-colors ${
+                                idleTimeoutMinutes === preset.val
+                                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 font-bold'
+                                  : 'bg-obsidian-950 border-obsidian-700 text-slate-400 hover:text-slate-200'
+                              }`}
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                          <div className="flex items-center space-x-1.5 ml-auto">
+                            <input
+                              type="number"
+                              min={0}
+                              value={idleTimeoutMinutes}
+                              onChange={(e) => setIdleTimeoutMinutes(Math.max(0, Number(e.target.value) || 0))}
+                              className="w-20 px-2.5 py-1.5 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-xs focus:border-emerald-500"
+                            />
+                            <span className="text-[11px] font-mono text-slate-400">min</span>
+                          </div>
+                        </div>
+                        <p className="text-[10px] text-slate-400 leading-relaxed">
+                          Automatically stops the server when no players are online for the configured duration. Visiting the Knock Portal will show the server status and automatically start the server.
+                        </p>
+                      </div>
+
                       {isAdmin && (
                         <div className="p-3 rounded-lg bg-obsidian-900 border border-obsidian-800 space-y-1.5">
                           <label className="block text-xs font-mono text-slate-300 flex items-center justify-between">
@@ -857,6 +906,13 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                         <span className="text-slate-500 block mb-0.5">Port Gate Security:</span>
                         <span className={`font-bold ${portGate ? 'text-emerald-400' : 'text-slate-400'}`}>
                           {portGate ? `Enabled (${portGateMode})` : 'Disabled (Public Open)'}
+                        </span>
+                      </div>
+
+                      <div className="col-span-full p-3 rounded-lg bg-obsidian-900 border border-obsidian-800 flex items-center justify-between">
+                        <span className="text-slate-500">Auto-Stop on Idle:</span>
+                        <span className={`font-bold ${idleTimeoutMinutes > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
+                          {idleTimeoutMinutes > 0 ? `Enabled (${idleTimeoutMinutes} min idle timeout)` : 'Disabled (24/7 Always On)'}
                         </span>
                       </div>
 
@@ -1110,7 +1166,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
                     <span>RAM Capping</span>
@@ -1144,6 +1200,20 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                       </option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                    <span>Idle Auto-Stop</span>
+                    <span className="text-[10px] text-emerald-400">{idleTimeoutMinutes > 0 ? `${idleTimeoutMinutes}m` : '24/7'}</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={idleTimeoutMinutes}
+                    onChange={(e) => setIdleTimeoutMinutes(Math.max(0, Number(e.target.value) || 0))}
+                    placeholder="0 = Disabled (24/7)"
+                    className="w-full px-3 py-2 rounded-lg bg-obsidian-950 border border-obsidian-700 text-slate-100 font-mono text-sm focus:border-emerald-500"
+                  />
                 </div>
               </div>
 

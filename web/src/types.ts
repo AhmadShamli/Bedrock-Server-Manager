@@ -67,6 +67,7 @@ export interface Server {
   port_gate_timeout: number;
   memory_limit: string;
   cpu_limit: number;
+  idle_timeout_minutes?: number;
   container_id?: string;
   seed?: string;
   game_server_address?: string;
@@ -133,6 +134,9 @@ export interface BannedPlayer {
 export interface KnockConfig {
   server_id: string;
   server_name: string;
+  server_status?: string;
+  idle_timeout_minutes?: number;
+  auto_started?: boolean;
   port: number;
   game_server_address?: string;
   port_gate_enabled: boolean;

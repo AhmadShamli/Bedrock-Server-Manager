@@ -145,10 +145,6 @@ func MergeDefaultProperties(existingProps map[string]string, existingKeys []stri
 					if server.PortV6 > 0 {
 						val = strconv.Itoa(server.PortV6)
 					}
-				case "level-name":
-					if server.Name != "" {
-						val = server.Name
-					}
 				case "level-seed":
 					if server.Seed != "" {
 						val = server.Seed

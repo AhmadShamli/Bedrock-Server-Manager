@@ -87,32 +87,37 @@ func CloneServer(
 		return nil, fmt.Errorf("failed to copy server data: %w", err)
 	}
 
-	// Adjust server.properties in new clone
+	// Adjust server.properties in new clone if it already exists on disk
 	propPath := filepath.Join(dstDir, "server.properties")
-	props, keys, err := configfile.ReadProperties(propPath)
-	if err == nil && props != nil {
-		props["server-name"] = newName
-		props["server-port"] = fmt.Sprint(p4)
-		props["server-portv6"] = fmt.Sprint(p6)
-		_ = configfile.WriteProperties(propPath, props, keys)
+	if _, statErr := os.Stat(propPath); statErr == nil {
+		props, keys, err := configfile.ReadProperties(propPath)
+		if err == nil && props != nil {
+			props["server-name"] = newName
+			props["server-port"] = fmt.Sprint(p4)
+			props["server-portv6"] = fmt.Sprint(p6)
+			_ = configfile.WriteProperties(propPath, props, keys)
+		}
 	}
 
 	clonedServer := &models.Server{
-		ID:              newServerID,
-		Name:            newName,
-		Version:         srcServer.Version,
-		Port:            p4,
-		PortV6:          p6,
-		Status:          models.ServerStatusStopped,
-		Mode:            srcServer.Mode,
-		Difficulty:      srcServer.Difficulty,
-		AutostartOnBoot: false,
-		PortGateEnabled: srcServer.PortGateEnabled,
-		PortGateMode:    srcServer.PortGateMode,
-		PortGateTimeout: srcServer.PortGateTimeout,
-		MemoryLimit:     srcServer.MemoryLimit,
-		CPULimit:        srcServer.CPULimit,
-		Seed:            srcServer.Seed,
+		ID:                 newServerID,
+		Name:               newName,
+		Version:            srcServer.Version,
+		Port:               p4,
+		PortV6:             p6,
+		Status:             models.ServerStatusStopped,
+		Mode:               srcServer.Mode,
+		Difficulty:         srcServer.Difficulty,
+		AutostartOnBoot:    false,
+		PortGateEnabled:    srcServer.PortGateEnabled,
+		PortGateMode:       srcServer.PortGateMode,
+		PortGateTimeout:    srcServer.PortGateTimeout,
+		MemoryLimit:        srcServer.MemoryLimit,
+		CPULimit:           srcServer.CPULimit,
+		Seed:               srcServer.Seed,
+		GameServerAddress:  srcServer.GameServerAddress,
+		NetworkMode:        srcServer.NetworkMode,
+		IdleTimeoutMinutes: srcServer.IdleTimeoutMinutes,
 	}
 
 	// Create container in engine

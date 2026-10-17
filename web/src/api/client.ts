@@ -363,6 +363,9 @@ class APIClient {
     add_server_url?: string;
     server_name: string;
     server_port: number;
+    server_status?: string;
+    auto_started?: boolean;
+    idle_timeout_minutes?: number;
     game_server_address?: string;
     always_allowed?: boolean;
     rule_comment?: string;
@@ -373,8 +376,22 @@ class APIClient {
     });
   }
 
+  async startServerFromKnock(serverId: string): Promise<{
+    success: boolean;
+    server_id: string;
+    server_name: string;
+    server_status: string;
+    auto_started: boolean;
+    idle_timeout_minutes?: number;
+  }> {
+    return this.request(`/api/knock/${serverId}/start`, {
+      method: 'POST',
+    });
+  }
+
   async sendHeartbeat(serverId: string, token?: string): Promise<{
     status: string;
+    server_status?: string;
     ip_address: string;
     ip_updated: boolean;
     expires_in_seconds: number;
@@ -396,6 +413,11 @@ class APIClient {
     expires_in_seconds?: number;
     direct_launch_url?: string;
     add_server_url?: string;
+    server_name?: string;
+    server_port?: number;
+    server_status?: string;
+    auto_started?: boolean;
+    idle_timeout_minutes?: number;
     game_server_address?: string;
     always_allowed?: boolean;
     rule_comment?: string;
@@ -580,6 +602,23 @@ class APIClient {
       throw new Error(err.error || 'Upload failed');
     }
     return res.json();
+  }
+
+  async resetWorld(
+    serverId: string,
+    options?: { create_backup?: boolean; keep_addons?: boolean; seed?: string }
+  ): Promise<{
+    success: boolean;
+    world_name: string;
+    keep_addons: boolean;
+    restarted: boolean;
+    seed: string;
+    backup?: Backup;
+  }> {
+    return this.request(`/api/servers/${serverId}/world/reset`, {
+      method: 'POST',
+      body: JSON.stringify(options || {}),
+    });
   }
 
   // --- Addon / Pack Manager ---
