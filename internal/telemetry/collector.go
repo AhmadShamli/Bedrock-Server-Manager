@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -44,6 +45,13 @@ func NewTelemetryCollector(db *database.MetricsDB) *TelemetryCollector {
 
 // Ingest pushes a sample into the in-memory buffer and updates the latest sample map.
 func (tc *TelemetryCollector) Ingest(serverID string, cpuPercent float64, ramBytes int64, playerCount int) {
+	if math.IsNaN(cpuPercent) || math.IsInf(cpuPercent, 0) || cpuPercent < 0 || cpuPercent > 10000 {
+		cpuPercent = 0
+	}
+	if ramBytes < 0 {
+		ramBytes = 0
+	}
+
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 

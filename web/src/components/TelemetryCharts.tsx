@@ -346,14 +346,23 @@ export const TelemetryCharts: React.FC<TelemetryChartsProps> = ({
 }) => {
   const series: MetricPoint[] = metrics?.series || [];
 
+  const sanitizeCpu = (val: number | undefined | null): number => {
+    if (typeof val !== 'number' || !Number.isFinite(val) || val < 0 || val > 10000) {
+      return 0;
+    }
+    return val;
+  };
+
   // Extract data arrays
   const timestamps = series.map((s) => s.timestamp);
-  const cpuData = series.map((s) => s.cpu_percent);
+  const cpuData = series.map((s) => sanitizeCpu(s.cpu_percent));
   const ramData = series.map((s) => s.ram_bytes);
   const playersData = series.map((s) => s.active_players);
 
   // CPU Stats
-  const currentCpu = metrics?.current ? metrics.current.cpu_percent : cpuData[cpuData.length - 1] || 0;
+  const currentCpu = metrics?.current
+    ? sanitizeCpu(metrics.current.cpu_percent)
+    : cpuData[cpuData.length - 1] || 0;
   const peakCpu = cpuData.length > 0 ? Math.max(...cpuData) : 0;
   const avgCpu = cpuData.length > 0 ? cpuData.reduce((a, b) => a + b, 0) / cpuData.length : 0;
 

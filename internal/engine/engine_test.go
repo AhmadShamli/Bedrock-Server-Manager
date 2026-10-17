@@ -2,11 +2,13 @@ package engine
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/docker/docker/api/types"
 )
 
 func TestParseMemoryBytes(t *testing.T) {
@@ -193,3 +195,63 @@ func TestBootManager(t *testing.T) {
 		t.Errorf("expected s2 stopped, got %s", status2)
 	}
 }
+
+func TestComputeContainerCPUPercent(t *testing.T) {
+	now := time.Now()
+
+	// Case 1: Container just restarted — PreCPUStats has higher TotalUsage than current cgroup TotalUsage.
+	// Previously this caused a uint64 underflow producing ~1,853,944,127,530.3% CPU!
+	var underflowStats types.StatsJSON
+	underflowStats.ID = "cid-1"
+	underflowStats.CPUStats.OnlineCPUs = 4
+	underflowStats.CPUStats.CPUUsage.TotalUsage = 10_000_000        // 10ms in new container lifecycle
+	underflowStats.PreCPUStats.CPUUsage.TotalUsage = 50_000_000_000 // 50s from previous run
+	underflowStats.CPUStats.SystemUsage = 1_000_000_000_000
+	underflowStats.PreCPUStats.SystemUsage = 999_000_000_000
+
+	cpu, sample, update := computeContainerCPUPercent(underflowStats, containerCPUSample{}, false, now)
+	if !update {
+		t.Fatalf("expected initial sample to be stored")
+	}
+	if cpu < 0 || cpu > 400.0 || math.IsNaN(cpu) || math.IsInf(cpu, 0) {
+		t.Fatalf("expected safe fallback CPU on counter reset (got %f%%)", cpu)
+	}
+	if cpu != 0.0 {
+		t.Fatalf("expected 0.0%% on initial baseline after counter reset, got %f%%", cpu)
+	}
+
+	// Case 2: Normal Strategy 1 calculation (valid PreCPUStats and CPUStats)
+	var normalStats types.StatsJSON
+	normalStats.ID = "cid-1"
+	normalStats.CPUStats.OnlineCPUs = 4
+	normalStats.PreCPUStats.CPUUsage.TotalUsage = 100_000_000
+	normalStats.CPUStats.CPUUsage.TotalUsage = 150_000_000 // +50ms container CPU
+	normalStats.PreCPUStats.SystemUsage = 1_000_000_000
+	normalStats.CPUStats.SystemUsage = 5_000_000_000 // +4s system usage across 4 CPUs (1s wall clock)
+
+	t2 := now.Add(2 * time.Second)
+	cpu, sample, update = computeContainerCPUPercent(normalStats, sample, true, t2)
+	if !update {
+		t.Fatalf("expected sample update on normal calculation")
+	}
+	// (50,000,000 / 4,000,000,000) * 4 * 100 = 5.0%
+	if math.Abs(cpu-5.0) > 0.001 {
+		t.Fatalf("expected 5.0%% CPU, got %f%%", cpu)
+	}
+
+	// Case 3: Sub-250ms concurrent poll when PreCPUStats is zero should reuse cached percentage
+	// without overwriting baseline or dividing by tiny elapsed time.
+	var zeroPreStats types.StatsJSON
+	zeroPreStats.ID = "cid-1"
+	zeroPreStats.CPUStats.OnlineCPUs = 4
+	zeroPreStats.CPUStats.CPUUsage.TotalUsage = 151_000_000
+	t3 := t2.Add(10 * time.Millisecond)
+	cpuConcurrent, _, updateConcurrent := computeContainerCPUPercent(zeroPreStats, sample, true, t3)
+	if updateConcurrent {
+		t.Fatalf("expected sub-250ms concurrent poll not to overwrite baseline sample")
+	}
+	if math.Abs(cpuConcurrent-5.0) > 0.001 {
+		t.Fatalf("expected cached 5.0%% CPU on rapid concurrent poll, got %f%%", cpuConcurrent)
+	}
+}
+

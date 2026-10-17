@@ -158,8 +158,14 @@ func OpenMetricsDB(dbPath string) (*MetricsDB, error) {
 
 // Migrate executes telemetry schema migrations.
 func (db *MetricsDB) Migrate(ctx context.Context) error {
-	_, err := db.ExecContext(ctx, MetricsSchemaSQL)
-	return err
+	if _, err := db.ExecContext(ctx, MetricsSchemaSQL); err != nil {
+		return err
+	}
+	// Sanitize any historical corrupted CPU samples caused by uint64 counter reset underflow
+	_, _ = db.ExecContext(ctx, `UPDATE metrics_raw SET cpu_percent = 0 WHERE cpu_percent < 0 OR cpu_percent > 10000`)
+	_, _ = db.ExecContext(ctx, `UPDATE metrics_5m SET avg_cpu = 0, max_cpu = 0, min_cpu = 0 WHERE max_cpu > 10000 OR avg_cpu < 0`)
+	_, _ = db.ExecContext(ctx, `UPDATE metrics_1h SET avg_cpu = 0, max_cpu = 0, min_cpu = 0 WHERE max_cpu > 10000 OR avg_cpu < 0`)
+	return nil
 }
 
 // --- Users & Access ---
@@ -2395,6 +2401,9 @@ func (db *MetricsDB) QueryRaw(ctx context.Context, serverID string, since time.T
 		var tsStr string
 		if err := rows.Scan(&m.ID, &m.ServerID, &tsStr, &m.CPUPercent, &m.RAMBytes, &m.PlayerCount); err != nil {
 			return nil, err
+		}
+		if m.CPUPercent < 0 || m.CPUPercent > 10000 {
+			m.CPUPercent = 0
 		}
 		if t, err := ParseTime(tsStr); err == nil {
 			m.Timestamp = t

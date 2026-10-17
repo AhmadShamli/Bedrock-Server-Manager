@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,9 +27,11 @@ const DefaultImage = "itzg/minecraft-bedrock-server:latest"
 
 // containerCPUSample holds previous sample ticks for delta calculation.
 type containerCPUSample struct {
+	containerID    string
 	containerUsage uint64
 	systemUsage    uint64
 	timestamp      time.Time
+	lastCPUPercent float64
 }
 
 // DockerEngine orchestrates Minecraft Bedrock instances via Docker Engine API.
@@ -190,6 +193,12 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 	return resp.ID, nil
 }
 
+func (e *DockerEngine) clearCPUSample(serverID string) {
+	e.prevCPUMu.Lock()
+	delete(e.prevCPUSamples, serverID)
+	e.prevCPUMu.Unlock()
+}
+
 // StartServer launches the container and initiates console log capture.
 func (e *DockerEngine) StartServer(ctx context.Context, server *models.Server) error {
 	if e.circuitBreaker.IsTripped(server.ID) {
@@ -200,6 +209,8 @@ func (e *DockerEngine) StartServer(ctx context.Context, server *models.Server) e
 	if containerID == "" {
 		containerID = fmt.Sprintf("bsm-%s", server.ID)
 	}
+
+	e.clearCPUSample(server.ID)
 
 	if err := e.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("failed to start container: %w", err)
@@ -224,6 +235,8 @@ func (e *DockerEngine) StopServer(ctx context.Context, server *models.Server, ti
 		containerID = fmt.Sprintf("bsm-%s", server.ID)
 	}
 
+	e.clearCPUSample(server.ID)
+
 	stopTimeout := timeoutSeconds
 	return e.cli.ContainerStop(ctx, containerID, container.StopOptions{
 		Timeout: &stopTimeout,
@@ -236,6 +249,7 @@ func (e *DockerEngine) RestartServer(ctx context.Context, server *models.Server)
 	if containerID == "" {
 		containerID = fmt.Sprintf("bsm-%s", server.ID)
 	}
+	e.clearCPUSample(server.ID)
 	stopTimeout := 15
 	if err := e.cli.ContainerRestart(ctx, containerID, container.StopOptions{
 		Timeout: &stopTimeout,
@@ -252,6 +266,8 @@ func (e *DockerEngine) RemoveServer(ctx context.Context, server *models.Server, 
 	if containerID == "" {
 		containerID = fmt.Sprintf("bsm-%s", server.ID)
 	}
+
+	e.clearCPUSample(server.ID)
 
 	_ = e.cli.ContainerStop(ctx, containerID, container.StopOptions{})
 	return e.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{
@@ -303,6 +319,92 @@ func (e *DockerEngine) GetServerStatus(ctx context.Context, server *models.Serve
 	return models.ServerStatusStopped, nil
 }
 
+// computeContainerCPUPercent calculates container CPU utilization percentage safely,
+// preventing uint64 underflow on container start/restart and sub-interval division spikes.
+func computeContainerCPUPercent(
+	stats types.StatsJSON,
+	prev containerCPUSample,
+	hasPrev bool,
+	now time.Time,
+) (cpuPercent float64, nextSample containerCPUSample, updateSample bool) {
+	curContainerUsage := stats.CPUStats.CPUUsage.TotalUsage
+	curSystemUsage := stats.CPUStats.SystemUsage
+
+	onlineCPUs := float64(stats.CPUStats.OnlineCPUs)
+	if onlineCPUs <= 0.0 {
+		onlineCPUs = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
+	}
+	if onlineCPUs <= 0.0 {
+		onlineCPUs = 1.0
+	}
+
+	// If container was recreated or restarted (usage counter reset), discard stale previous sample
+	if hasPrev {
+		if (stats.ID != "" && prev.containerID != "" && stats.ID != prev.containerID) ||
+			curContainerUsage < prev.containerUsage ||
+			(curSystemUsage > 0 && prev.systemUsage > 0 && curSystemUsage < prev.systemUsage) {
+			hasPrev = false
+		}
+	}
+
+	var computed bool
+
+	// Strategy 1: Check if Docker daemon returned valid non-zero PreCPUStats without uint64 underflow
+	preContainerUsage := stats.PreCPUStats.CPUUsage.TotalUsage
+	preSystemUsage := stats.PreCPUStats.SystemUsage
+	if preContainerUsage > 0 &&
+		preSystemUsage > 0 &&
+		curContainerUsage >= preContainerUsage &&
+		curSystemUsage > preSystemUsage {
+		cpuDelta := float64(curContainerUsage - preContainerUsage)
+		systemDelta := float64(curSystemUsage - preSystemUsage)
+		// Require at least 50ms of system CPU ticks and physically valid ratio (cpuDelta <= systemDelta)
+		if systemDelta >= 50_000_000 && cpuDelta >= 0.0 && cpuDelta <= systemDelta {
+			cpuPercent = (cpuDelta / systemDelta) * onlineCPUs * 100.0
+			computed = true
+		}
+	}
+
+	// Strategy 2: Use in-memory delta from previous sample
+	if !computed && hasPrev {
+		elapsed := now.Sub(prev.timestamp)
+		if elapsed < 250*time.Millisecond {
+			// Sampled too recently by a concurrent poller; return last computed value and keep baseline sample
+			return prev.lastCPUPercent, prev, false
+		}
+		if curContainerUsage >= prev.containerUsage {
+			cpuDelta := float64(curContainerUsage - prev.containerUsage)
+			wallSystemDelta := float64(elapsed.Nanoseconds()) * onlineCPUs
+			var systemDelta float64
+			if curSystemUsage > prev.systemUsage {
+				systemDelta = float64(curSystemUsage - prev.systemUsage)
+				if wallSystemDelta > 0 && systemDelta < wallSystemDelta*0.5 {
+					systemDelta = wallSystemDelta
+				}
+			} else if wallSystemDelta > 0 {
+				systemDelta = wallSystemDelta
+			}
+			if systemDelta >= 50_000_000 && cpuDelta >= 0.0 && cpuDelta <= systemDelta {
+				cpuPercent = (cpuDelta / systemDelta) * onlineCPUs * 100.0
+			}
+		}
+	}
+
+	maxValidPercent := onlineCPUs * 100.0
+	if math.IsNaN(cpuPercent) || math.IsInf(cpuPercent, 0) || cpuPercent < 0.0 || cpuPercent > maxValidPercent {
+		cpuPercent = 0.0
+	}
+
+	nextSample = containerCPUSample{
+		containerID:    stats.ID,
+		containerUsage: curContainerUsage,
+		systemUsage:    curSystemUsage,
+		timestamp:      now,
+		lastCPUPercent: cpuPercent,
+	}
+	return cpuPercent, nextSample, true
+}
+
 // GetContainerStats samples real-time CPU % and RAM usage from Docker.
 func (e *DockerEngine) GetContainerStats(ctx context.Context, server *models.Server) (*models.MetricRaw, error) {
 	containerID := server.ContainerID
@@ -329,51 +431,14 @@ func (e *DockerEngine) GetContainerStats(ctx context.Context, server *models.Ser
 	}
 
 	now := time.Now()
-	curContainerUsage := stats.CPUStats.CPUUsage.TotalUsage
-	curSystemUsage := stats.CPUStats.SystemUsage
-
-	onlineCPUs := float64(stats.CPUStats.OnlineCPUs)
-	if onlineCPUs == 0.0 {
-		onlineCPUs = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
-	}
-	if onlineCPUs == 0.0 {
-		onlineCPUs = 1.0
-	}
 
 	e.prevCPUMu.Lock()
 	prev, hasPrev := e.prevCPUSamples[server.ID]
-	e.prevCPUSamples[server.ID] = containerCPUSample{
-		containerUsage: curContainerUsage,
-		systemUsage:    curSystemUsage,
-		timestamp:      now,
+	cpuPercent, nextSample, updateSample := computeContainerCPUPercent(stats, prev, hasPrev, now)
+	if updateSample {
+		e.prevCPUSamples[server.ID] = nextSample
 	}
 	e.prevCPUMu.Unlock()
-
-	var cpuPercent float64
-
-	// Strategy 1: Check if Docker daemon returned valid non-zero PreCPUStats
-	if stats.PreCPUStats.CPUUsage.TotalUsage > 0 && stats.PreCPUStats.SystemUsage > 0 && stats.CPUStats.SystemUsage > stats.PreCPUStats.SystemUsage {
-		cpuDelta := float64(curContainerUsage - stats.PreCPUStats.CPUUsage.TotalUsage)
-		systemDelta := float64(curSystemUsage - stats.PreCPUStats.SystemUsage)
-		if systemDelta > 0.0 && cpuDelta >= 0.0 {
-			cpuPercent = (cpuDelta / systemDelta) * onlineCPUs * 100.0
-		}
-	} else if hasPrev && curContainerUsage >= prev.containerUsage {
-		// Strategy 2: Use in-memory delta from previous sample
-		cpuDelta := float64(curContainerUsage - prev.containerUsage)
-		var systemDelta float64
-		if curSystemUsage > prev.systemUsage {
-			systemDelta = float64(curSystemUsage - prev.systemUsage)
-		} else {
-			elapsedNs := float64(now.Sub(prev.timestamp).Nanoseconds())
-			if elapsedNs > 0 {
-				systemDelta = elapsedNs * onlineCPUs
-			}
-		}
-		if systemDelta > 0.0 && cpuDelta >= 0.0 {
-			cpuPercent = (cpuDelta / systemDelta) * onlineCPUs * 100.0
-		}
-	}
 
 	ramBytes := int64(stats.MemoryStats.Usage)
 	// Subtract inactive_file or cache if present (matching standard docker stats)
