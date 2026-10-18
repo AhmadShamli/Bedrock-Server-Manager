@@ -9,7 +9,7 @@ import {
   Network, Search, Clock, History, Eye, Image, FileText, MessageCircle, ArrowUp, ArrowDown, MapPin
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, AddonServerConfig, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer, BDSStatus } from '../types';
+import { Server, User, Backup, AddonPack, AddonServerConfig, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, MetricsTimeRange, PortGateAllowRule, BannedPlayer, ServerPlayer, BDSStatus } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
@@ -312,7 +312,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   // Historical Telemetry Metrics state
   const [metrics, setMetrics] = useState<MetricsData | null>(null);
-  const [metricsRange, setMetricsRange] = useState<'15m' | '1h' | '6h' | '24h'>('1h');
+  const [metricsRange, setMetricsRange] = useState<MetricsTimeRange>('1h');
   const [metricsLoading, setMetricsLoading] = useState(false);
 
   // Player Hub & Chat state
@@ -508,7 +508,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     return () => clearInterval(interval);
   }, [id, server?.status]);
 
-  const fetchMetrics = async (range: '15m' | '1h' | '6h' | '24h' = metricsRange, silent = false) => {
+  const fetchMetrics = async (range: MetricsTimeRange = metricsRange, silent = false) => {
     if (!id) return;
     if (!silent) setMetricsLoading(true);
     try {

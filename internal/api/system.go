@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,14 +12,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/bds"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/bds"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/mail"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/turnstile"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/webhook"
@@ -31,10 +33,11 @@ type SystemHandler struct {
 	bdsResolver *bds.Resolver
 	firewall    firewall.FirewallDriver
 	ipResolver  *ipresolver.Resolver
-	rateLimiter       *auth.RateLimiter
-	turnstileVerifier *turnstile.Verifier
-	mailer            *mail.Mailer
-	startTime         time.Time
+	rateLimiter        *auth.RateLimiter
+	turnstileVerifier  *turnstile.Verifier
+	mailer             *mail.Mailer
+	telemetryCollector *telemetry.TelemetryCollector
+	startTime          time.Time
 }
 
 func (h *SystemHandler) SetTurnstileVerifier(tv *turnstile.Verifier) {
@@ -43,6 +46,10 @@ func (h *SystemHandler) SetTurnstileVerifier(tv *turnstile.Verifier) {
 
 func (h *SystemHandler) SetMailer(m *mail.Mailer) {
 	h.mailer = m
+}
+
+func (h *SystemHandler) SetTelemetryCollector(tc *telemetry.TelemetryCollector) {
+	h.telemetryCollector = tc
 }
 
 func NewSystemHandler(db *database.ManagerDB, dataDir string, bdsCache *bds.CacheManager, bdsResolver *bds.Resolver, fw firewall.FirewallDriver, ipRes *ipresolver.Resolver, rl *auth.RateLimiter) *SystemHandler {
@@ -211,8 +218,54 @@ func (h *SystemHandler) UpdateSetting(w http.ResponseWriter, r *http.Request) {
 		h.rateLimiter.UpdateConfig(maxAtt, distThresh, distLock)
 	}
 
+	if h.telemetryCollector != nil && strings.HasPrefix(payload.Key, "metrics_retention_") {
+		rawH, m5H, h1D := h.telemetryCollector.GetRetention()
+		if payload.Key == "metrics_retention_preset" {
+			switch payload.Value {
+			case "ultra_compact":
+				rawH, m5H, h1D = 1, 12, 3
+			case "compact":
+				rawH, m5H, h1D = 2, 24, 7
+			}
+		} else if payload.Key == "metrics_retention_raw_hours" {
+			if v, err := strconv.Atoi(payload.Value); err == nil && v > 0 {
+				rawH = v
+			}
+		} else if payload.Key == "metrics_retention_5m_hours" {
+			if v, err := strconv.Atoi(payload.Value); err == nil && v > 0 {
+				m5H = v
+			}
+		} else if payload.Key == "metrics_retention_1h_days" {
+			if v, err := strconv.Atoi(payload.Value); err == nil && v > 0 {
+				h1D = v
+			}
+		}
+		h.telemetryCollector.SetRetention(rawH, m5H, h1D)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
+}
+
+// VacuumMetricsDB triggers an immediate prune and SQLite vacuum on metrics.db.
+func (h *SystemHandler) VacuumMetricsDB(w http.ResponseWriter, r *http.Request) {
+	if h.telemetryCollector == nil {
+		http.Error(w, `{"error": "Telemetry collector not available"}`, http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	if err := h.telemetryCollector.PruneAndVacuum(ctx); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Vacuum failed: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Metrics database successfully pruned and vacuumed.",
+	})
 }
 
 // GetBDSStatus returns EULA status, VC++ runtime status, BDS cache stats, and platform capabilities.

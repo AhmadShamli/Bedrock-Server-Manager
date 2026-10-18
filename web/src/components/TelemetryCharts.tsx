@@ -1,12 +1,12 @@
 import React, { useState, useId } from 'react';
 import { Cpu, HardDrive, Users, Activity, Clock } from 'lucide-react';
-import { MetricsData, MetricPoint } from '../types';
+import { MetricsData, MetricPoint, MetricsTimeRange } from '../types';
 
 interface TelemetryChartsProps {
   metrics: MetricsData | null;
   loading: boolean;
-  timeRange: '15m' | '1h' | '6h' | '24h';
-  onTimeRangeChange: (range: '15m' | '1h' | '6h' | '24h') => void;
+  timeRange: MetricsTimeRange;
+  onTimeRangeChange: (range: MetricsTimeRange) => void;
   serverStatus: string;
 }
 
@@ -23,6 +23,7 @@ interface MiniChartProps {
   currentLabel?: string;
   peakVal: number;
   avgVal: number;
+  timeRange?: MetricsTimeRange;
   formatValue?: (val: number) => string;
   formatTooltip?: (val: number, idx: number) => string;
 }
@@ -36,10 +37,16 @@ const formatBytes = (bytes: number): string => {
   return `${mb.toFixed(0)} MB`;
 };
 
-const formatTimeLabel = (isoString: string): string => {
+const formatTimeLabel = (isoString: string, range?: MetricsTimeRange): string => {
   try {
     const d = new Date(isoString);
     if (isNaN(d.getTime())) return '';
+    if (range === '3d' || range === '7d') {
+      return `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+    if (range === '6h' || range === '24h') {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   } catch {
     return '';
@@ -58,6 +65,7 @@ const SingleChart: React.FC<MiniChartProps> = ({
   currentLabel,
   peakVal,
   avgVal,
+  timeRange,
   formatValue = (v) => `${v.toFixed(1)}`,
   formatTooltip,
 }) => {
@@ -275,7 +283,7 @@ const SingleChart: React.FC<MiniChartProps> = ({
                   fontSize="8.5"
                   fontFamily="monospace"
                 >
-                  {formatTimeLabel(timestampsData[0])}
+                  {formatTimeLabel(timestampsData[0], timeRange)}
                 </text>
                 <text
                   x={width - padRight}
@@ -285,7 +293,7 @@ const SingleChart: React.FC<MiniChartProps> = ({
                   fontSize="8.5"
                   fontFamily="monospace"
                 >
-                  {formatTimeLabel(timestampsData[timestampsData.length - 1])}
+                  {formatTimeLabel(timestampsData[timestampsData.length - 1], timeRange)}
                 </text>
               </>
             )}
@@ -324,7 +332,7 @@ const SingleChart: React.FC<MiniChartProps> = ({
             }}
           >
             <div className="text-slate-400 text-[9px] mb-0.5">
-              {formatTimeLabel(timestampsData[hoverIdx])}
+              {formatTimeLabel(timestampsData[hoverIdx], timeRange)}
             </div>
             <div className={`font-bold ${colorMap.text}`}>
               {formatTooltip
@@ -405,9 +413,9 @@ export const TelemetryCharts: React.FC<TelemetryChartsProps> = ({
         </div>
 
         {/* Time Range Selector */}
-        <div className="flex items-center space-x-1 bg-obsidian-900 border border-obsidian-750 p-1 rounded-lg shrink-0 font-mono text-xs">
+        <div className="flex items-center space-x-1 bg-obsidian-900 border border-obsidian-750 p-1 rounded-lg shrink-0 font-mono text-xs flex-wrap gap-y-1">
           <Clock className="w-3.5 h-3.5 text-slate-500 ml-1.5 mr-1" />
-          {(['15m', '1h', '6h', '24h'] as const).map((r) => (
+          {(['15m', '1h', '6h', '24h', '3d', '7d'] as const).map((r) => (
             <button
               key={r}
               onClick={() => onTimeRangeChange(r)}
@@ -437,6 +445,7 @@ export const TelemetryCharts: React.FC<TelemetryChartsProps> = ({
           currentLabel={`${currentCpu.toFixed(1)}%`}
           peakVal={peakCpu}
           avgVal={avgCpu}
+          timeRange={timeRange}
           formatValue={(v) => `${v.toFixed(1)}%`}
           formatTooltip={(v) => `CPU: ${v.toFixed(1)}% (${metrics?.cpu_limit || 2.0} Cores)`}
         />
@@ -455,6 +464,7 @@ export const TelemetryCharts: React.FC<TelemetryChartsProps> = ({
           currentLabel={formatBytes(currentRam)}
           peakVal={peakRam}
           avgVal={avgRam}
+          timeRange={timeRange}
           formatValue={formatBytes}
           formatTooltip={(v) => `RAM: ${formatBytes(v)} / ${formatBytes(memoryLimitBytes)}`}
         />
@@ -473,6 +483,7 @@ export const TelemetryCharts: React.FC<TelemetryChartsProps> = ({
           currentLabel={`${currentPlayers} / ${maxPlayers} Online`}
           peakVal={peakPlayers}
           avgVal={avgPlayers}
+          timeRange={timeRange}
           formatValue={(v) => `${Math.round(v)}`}
           formatTooltip={(v) =>
             `Active: ${v} / ${maxPlayers} Capacity (${totalAllowlist} Allowed)`

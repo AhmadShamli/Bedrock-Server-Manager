@@ -268,6 +268,33 @@ func main() {
 
 	// 10. Initialize Telemetry Collector & Poller
 	telemetryCollector := telemetry.NewTelemetryCollector(metricsDB)
+	{
+		rawH, m5H, h1D := 2, 24, 7
+		if preset, err := mgrDB.GetSetting(context.Background(), "metrics_retention_preset"); err == nil && preset != "" {
+			switch preset {
+			case "ultra_compact":
+				rawH, m5H, h1D = 1, 12, 3
+			case "compact":
+				rawH, m5H, h1D = 2, 24, 7
+			}
+		}
+		if val, err := mgrDB.GetSetting(context.Background(), "metrics_retention_raw_hours"); err == nil && val != "" {
+			if h, err := strconv.Atoi(val); err == nil && h > 0 {
+				rawH = h
+			}
+		}
+		if val, err := mgrDB.GetSetting(context.Background(), "metrics_retention_5m_hours"); err == nil && val != "" {
+			if h, err := strconv.Atoi(val); err == nil && h > 0 {
+				m5H = h
+			}
+		}
+		if val, err := mgrDB.GetSetting(context.Background(), "metrics_retention_1h_days"); err == nil && val != "" {
+			if d, err := strconv.Atoi(val); err == nil && d > 0 {
+				h1D = d
+			}
+		}
+		telemetryCollector.SetRetention(rawH, m5H, h1D)
+	}
 	telemetryCollector.Start(30*time.Second, 5*time.Minute, 1*time.Hour)
 	defer telemetryCollector.Stop()
 

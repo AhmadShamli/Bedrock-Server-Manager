@@ -249,7 +249,7 @@ CREATE TABLE IF NOT EXISTS metrics_5m (
     max_players INTEGER NOT NULL,
     sample_count INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_metrics_5m_server_ts ON metrics_5m(server_id, timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_5m_server_ts ON metrics_5m(server_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS metrics_1h (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -265,7 +265,7 @@ CREATE TABLE IF NOT EXISTS metrics_1h (
     max_players INTEGER NOT NULL,
     sample_count INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_metrics_1h_server_ts ON metrics_1h(server_id, timestamp);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_1h_server_ts ON metrics_1h(server_id, timestamp);
 
 CREATE TABLE IF NOT EXISTS auth_tokens (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

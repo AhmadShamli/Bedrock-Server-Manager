@@ -61,6 +61,9 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	mw := NewMiddleware(opts.DB, opts.IPResolver, opts.RateLimiter, opts.JWTSecret)
 	authHandler := NewAuthHandler(opts.DB, opts.RateLimiter, opts.JWTSecret)
 	systemHandler := NewSystemHandler(opts.DB, opts.DataDir, opts.BDSCache, opts.BDSResolver, opts.Firewall, opts.IPResolver, opts.RateLimiter)
+	if opts.TelemetryCollector != nil {
+		systemHandler.SetTelemetryCollector(opts.TelemetryCollector)
+	}
 
 	if opts.Mailer != nil {
 		authHandler.SetMailer(opts.Mailer)
@@ -288,6 +291,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Get("/system/audit", systemHandler.ListAuditLogs)
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)
 				adminGroup.Post("/system/settings", systemHandler.UpdateSetting)
+				adminGroup.Post("/system/metrics/vacuum", systemHandler.VacuumMetricsDB)
 				adminGroup.Post("/system/webhook/test", systemHandler.TestDiscordWebhook)
 				adminGroup.Post("/system/smtp/test", systemHandler.TestSMTP)
 				adminGroup.Post("/system/turnstile/test", systemHandler.TestTurnstile)

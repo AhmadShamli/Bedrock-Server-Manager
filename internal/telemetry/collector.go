@@ -26,7 +26,7 @@ type TelemetryCollector struct {
 	stopOnce     sync.Once
 
 	RawRetainHours int
-	Rollup5mDays   int
+	Rollup5mHours  int
 	Rollup1hDays   int
 }
 
@@ -37,9 +37,9 @@ func NewTelemetryCollector(db *database.MetricsDB) *TelemetryCollector {
 		buffer:         make([]models.MetricRaw, 0, 200),
 		latest:         make(map[string]models.MetricRaw),
 		stopChan:       make(chan struct{}),
-		RawRetainHours: 6,
-		Rollup5mDays:   7,
-		Rollup1hDays:   30,
+		RawRetainHours: 2,
+		Rollup5mHours:  24,
+		Rollup1hDays:   7,
 	}
 }
 
@@ -135,6 +135,137 @@ func (tc *TelemetryCollector) Flush(ctx context.Context) error {
 	return nil
 }
 
+// SetRetention updates in-memory retention thresholds.
+func (tc *TelemetryCollector) SetRetention(rawHours, rollup5mHours, rollup1hDays int) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	if rawHours > 0 {
+		tc.RawRetainHours = rawHours
+	}
+	if rollup5mHours > 0 {
+		tc.Rollup5mHours = rollup5mHours
+	}
+	if rollup1hDays > 0 {
+		tc.Rollup1hDays = rollup1hDays
+	}
+}
+
+// GetRetention returns current retention thresholds.
+func (tc *TelemetryCollector) GetRetention() (int, int, int) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	return tc.RawRetainHours, tc.Rollup5mHours, tc.Rollup1hDays
+}
+
+// PruneAndVacuum flushes pending samples, prunes old data per current retention, and runs SQLite VACUUM.
+func (tc *TelemetryCollector) PruneAndVacuum(ctx context.Context) error {
+	tc.mu.Lock()
+	rawHours := tc.RawRetainHours
+	m5Hours := tc.Rollup5mHours
+	h1Days := tc.Rollup1hDays
+	tc.mu.Unlock()
+
+	_ = tc.Flush(ctx)
+
+	if tc.metricsDB != nil {
+		if err := tc.metricsDB.PruneOldMetrics(ctx, rawHours, m5Hours, h1Days); err != nil {
+			return err
+		}
+		return tc.metricsDB.Vacuum(ctx)
+	}
+	return nil
+}
+
+// QueryMetrics returns the appropriate telemetry series based on time range:
+// - "15m", "1h": Raw telemetry samples + unflushed in-memory buffer
+// - "6h", "24h": 5-minute rollup points + recent raw/buffer tail
+// - "3d", "7d": 1-hour rollup points + recent 5m/raw/buffer tail
+func (tc *TelemetryCollector) QueryMetrics(ctx context.Context, serverID string, timeRange string, since time.Time) ([]models.MetricRaw, error) {
+	switch timeRange {
+	case "15m", "1h":
+		return tc.QueryRaw(ctx, serverID, since)
+
+	case "6h", "24h":
+		var m5 []models.MetricRaw
+		var err error
+		if tc.metricsDB != nil {
+			m5, err = tc.metricsDB.QueryRollup5m(ctx, serverID, since)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		rawSince := since
+		if len(m5) > 0 {
+			rawSince = m5[len(m5)-1].Timestamp
+		}
+
+		rawTail, _ := tc.QueryRaw(ctx, serverID, rawSince)
+		if len(m5) == 0 {
+			return rawTail, nil
+		}
+
+		lastTs := m5[len(m5)-1].Timestamp
+		for _, r := range rawTail {
+			if r.Timestamp.After(lastTs) {
+				m5 = append(m5, r)
+			}
+		}
+		return m5, nil
+
+	case "3d", "7d":
+		var h1 []models.MetricRaw
+		var err error
+		if tc.metricsDB != nil {
+			h1, err = tc.metricsDB.QueryRollup1h(ctx, serverID, since)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		m5Since := since
+		if len(h1) > 0 {
+			m5Since = h1[len(h1)-1].Timestamp
+		}
+
+		var m5Tail []models.MetricRaw
+		if tc.metricsDB != nil {
+			m5Tail, _ = tc.metricsDB.QueryRollup5m(ctx, serverID, m5Since)
+		}
+
+		rawSince := m5Since
+		if len(m5Tail) > 0 {
+			rawSince = m5Tail[len(m5Tail)-1].Timestamp
+		}
+		rawTail, _ := tc.QueryRaw(ctx, serverID, rawSince)
+
+		combined := h1
+		lastH1Ts := time.Time{}
+		if len(combined) > 0 {
+			lastH1Ts = combined[len(combined)-1].Timestamp
+		}
+		for _, m := range m5Tail {
+			if m.Timestamp.After(lastH1Ts) {
+				combined = append(combined, m)
+			}
+		}
+
+		lastCombinedTs := time.Time{}
+		if len(combined) > 0 {
+			lastCombinedTs = combined[len(combined)-1].Timestamp
+		}
+		for _, r := range rawTail {
+			if r.Timestamp.After(lastCombinedTs) {
+				combined = append(combined, r)
+			}
+		}
+		return combined, nil
+
+	default:
+		return tc.QueryRaw(ctx, serverID, since)
+	}
+}
+
 // Start launches the background flush, rollup, and prune loops.
 func (tc *TelemetryCollector) Start(flushInterval, rollupInterval, pruneInterval time.Duration) {
 	tc.flushTicker = time.NewTicker(flushInterval)
@@ -164,7 +295,12 @@ func (tc *TelemetryCollector) Start(flushInterval, rollupInterval, pruneInterval
 				cancel()
 			case <-tc.pruneTicker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				if err := tc.metricsDB.PruneOldMetrics(ctx, tc.RawRetainHours, tc.Rollup5mDays, tc.Rollup1hDays); err != nil {
+				tc.mu.Lock()
+				rawHours := tc.RawRetainHours
+				m5Hours := tc.Rollup5mHours
+				h1Days := tc.Rollup1hDays
+				tc.mu.Unlock()
+				if err := tc.metricsDB.PruneOldMetrics(ctx, rawHours, m5Hours, h1Days); err != nil {
 					log.Printf("[Telemetry] Error pruning old metrics: %v", err)
 				}
 				cancel()

@@ -62,3 +62,56 @@ func TestTelemetryCollector(t *testing.T) {
 		t.Errorf("expected nil for non-existent server, got %+v", none)
 	}
 }
+
+func TestTelemetryQueryMetricsAndRetention(t *testing.T) {
+	metricsDB, err := database.OpenMetricsDB(":memory:")
+	if err != nil {
+		t.Fatalf("OpenMetricsDB failed: %v", err)
+	}
+	defer metricsDB.Close()
+
+	col := NewTelemetryCollector(metricsDB)
+	col.SetRetention(1, 12, 3)
+	rawH, m5H, h1D := col.GetRetention()
+	if rawH != 1 || m5H != 12 || h1D != 3 {
+		t.Fatalf("unexpected retention values: %d, %d, %d", rawH, m5H, h1D)
+	}
+
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// Ingest samples across time
+	col.Ingest("srv-2", 12.0, 1024*1024*400, 2)
+	col.Ingest("srv-2", 18.0, 1024*1024*450, 4)
+	if err := col.Flush(ctx); err != nil {
+		t.Fatalf("Flush failed: %v", err)
+	}
+
+	if err := metricsDB.Rollup5Min(ctx, now); err != nil {
+		t.Fatalf("Rollup5Min failed: %v", err)
+	}
+	if err := metricsDB.Rollup1Hour(ctx, now); err != nil {
+		t.Fatalf("Rollup1Hour failed: %v", err)
+	}
+
+	// Query ranges
+	res15m, err := col.QueryMetrics(ctx, "srv-2", "15m", now.Add(-15*time.Minute))
+	if err != nil || len(res15m) != 2 {
+		t.Errorf("expected 2 samples for 15m, got %d (err: %v)", len(res15m), err)
+	}
+
+	res24h, err := col.QueryMetrics(ctx, "srv-2", "24h", now.Add(-24*time.Hour))
+	if err != nil || len(res24h) == 0 {
+		t.Errorf("expected rollup samples for 24h, got %d (err: %v)", len(res24h), err)
+	}
+
+	res7d, err := col.QueryMetrics(ctx, "srv-2", "7d", now.Add(-7*24*time.Hour))
+	if err != nil || len(res7d) == 0 {
+		t.Errorf("expected rollup samples for 7d, got %d (err: %v)", len(res7d), err)
+	}
+
+	// Test PruneAndVacuum
+	if err := col.PruneAndVacuum(ctx); err != nil {
+		t.Fatalf("PruneAndVacuum failed: %v", err)
+	}
+}

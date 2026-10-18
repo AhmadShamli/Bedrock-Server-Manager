@@ -883,6 +883,10 @@ func (h *ServerHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 		duration = 6 * time.Hour
 	case "24h":
 		duration = 24 * time.Hour
+	case "3d":
+		duration = 72 * time.Hour
+	case "7d":
+		duration = 7 * 24 * time.Hour
 	default:
 		rangeParam = "1h"
 		duration = 1 * time.Hour
@@ -892,7 +896,7 @@ func (h *ServerHandler) Metrics(w http.ResponseWriter, r *http.Request) {
 
 	var raw []models.MetricRaw
 	if h.telemetry != nil {
-		raw, _ = h.telemetry.QueryRaw(r.Context(), server.ID, since)
+		raw, _ = h.telemetry.QueryMetrics(r.Context(), server.ID, rangeParam, since)
 	} else if h.metricsDB != nil {
 		raw, _ = h.metricsDB.QueryRaw(r.Context(), server.ID, since)
 	}

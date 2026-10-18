@@ -137,6 +137,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
   const [backupRetentionMaxDays, setBackupRetentionMaxDays] = useState(14);
   const [backupRetentionMaxGB, setBackupRetentionMaxGB] = useState(5);
 
+  // Form State: Telemetry Metrics Retention
+  const [metricsRawHours, setMetricsRawHours] = useState(2);
+  const [metrics5mHours, setMetrics5mHours] = useState(24);
+  const [metrics1hDays, setMetrics1hDays] = useState(7);
+  const [vacuumingMetrics, setVacuumingMetrics] = useState(false);
+  const [vacuumMessage, setVacuumMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
   // BDS & Windows Host State
   const [bdsStatus, setBdsStatus] = useState<BDSStatus | null>(null);
   const [bdsVersions, setBdsVersions] = useState<BDSVersionsResponse | null>(null);
@@ -341,6 +348,20 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
         const val = parseFloat(settingsRes['backup_retention_max_gb']);
         if (!isNaN(val) && val > 0) setBackupRetentionMaxGB(val);
       }
+
+      // Populate Telemetry Metrics Retention
+      if (settingsRes['metrics_retention_raw_hours']) {
+        const val = parseInt(settingsRes['metrics_retention_raw_hours'], 10);
+        if (!isNaN(val) && val > 0) setMetricsRawHours(val);
+      }
+      if (settingsRes['metrics_retention_5m_hours']) {
+        const val = parseInt(settingsRes['metrics_retention_5m_hours'], 10);
+        if (!isNaN(val) && val > 0) setMetrics5mHours(val);
+      }
+      if (settingsRes['metrics_retention_1h_days']) {
+        const val = parseInt(settingsRes['metrics_retention_1h_days'], 10);
+        if (!isNaN(val) && val > 0) setMetrics1hDays(val);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load system settings');
     } finally {
@@ -376,6 +397,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
         api.updateSetting('backup_retention_max_count', backupRetentionMaxCount.toString()),
         api.updateSetting('backup_retention_max_days', backupRetentionMaxDays.toString()),
         api.updateSetting('backup_retention_max_gb', backupRetentionMaxGB.toString()),
+        api.updateSetting('metrics_retention_raw_hours', metricsRawHours.toString()),
+        api.updateSetting('metrics_retention_5m_hours', metrics5mHours.toString()),
+        api.updateSetting('metrics_retention_1h_days', metrics1hDays.toString()),
       ];
 
       // Turnstile validation & updates
@@ -676,6 +700,25 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
       });
     } finally {
       setTestingSMTP(false);
+    }
+  };
+
+  const handleVacuumMetrics = async () => {
+    setVacuumingMetrics(true);
+    setVacuumMessage(null);
+    try {
+      const res = await api.vacuumMetricsDB();
+      setVacuumMessage({
+        text: res.message || 'Metrics database successfully pruned and vacuumed.',
+        type: 'success',
+      });
+    } catch (err: any) {
+      setVacuumMessage({
+        text: err.message || 'Failed to prune and vacuum metrics database.',
+        type: 'error',
+      });
+    } finally {
+      setVacuumingMetrics(false);
     }
   };
 
@@ -2513,7 +2556,163 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
           </div>
         </div>
 
-        {/* 9. BDS ENGINE & WINDOWS HOST SETTINGS CARD */}
+        {/* 10. TELEMETRY & PERFORMANCE METRICS RETENTION */}
+        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="font-mono text-base font-bold text-slate-100 mb-1 flex items-center gap-2">
+                <Activity className="w-4 h-4 text-emerald-400" />
+                <span>Telemetry &amp; Performance Metrics Retention</span>
+              </h3>
+              <p className="text-xs text-slate-400 font-mono">
+                Configure tiered retention policies across raw high-frequency samples, 5-minute rollups, and 1-hour rollups to optimize database size.
+              </p>
+            </div>
+
+            {/* Quick Retention Presets */}
+            <div className="flex items-center space-x-1.5 bg-obsidian-950 border border-obsidian-800 p-1 rounded-lg shrink-0 font-mono text-xs">
+              <span className="text-[10px] text-slate-500 uppercase font-bold px-2">Presets:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setMetricsRawHours(2);
+                  setMetrics5mHours(24);
+                  setMetrics1hDays(7);
+                }}
+                className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all ${
+                  metricsRawHours === 2 && metrics5mHours === 24 && metrics1hDays === 7
+                    ? 'bg-emerald-600 text-slate-950 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-obsidian-850'
+                }`}
+              >
+                Compact (Default)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMetricsRawHours(1);
+                  setMetrics5mHours(12);
+                  setMetrics1hDays(3);
+                }}
+                className={`px-2.5 py-1 rounded text-[11px] font-bold transition-all ${
+                  metricsRawHours === 1 && metrics5mHours === 12 && metrics1hDays === 3
+                    ? 'bg-emerald-600 text-slate-950 shadow-[0_0_8px_rgba(16,185,129,0.3)]'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-obsidian-850'
+                }`}
+              >
+                Ultra-Compact
+              </button>
+              <span
+                className={`px-2 py-1 rounded text-[11px] font-bold ${
+                  (metricsRawHours !== 2 || metrics5mHours !== 24 || metrics1hDays !== 7) &&
+                  (metricsRawHours !== 1 || metrics5mHours !== 12 || metrics1hDays !== 3)
+                    ? 'text-cyan-400 border border-cyan-500/40 bg-cyan-950/30'
+                    : 'text-slate-600'
+                }`}
+              >
+                Custom
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 font-mono text-xs">
+            <div>
+              <label className="block text-slate-200 font-bold mb-1.5">
+                Raw Telemetry Window (hours)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="72"
+                value={metricsRawHours}
+                onChange={(e) => setMetricsRawHours(Math.max(1, parseInt(e.target.value) || 2))}
+                className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Keep raw high-frequency (2s) samples for recent charting (default: 2h).
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-slate-200 font-bold mb-1.5">
+                5-Minute Rollups Window (hours)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="720"
+                value={metrics5mHours}
+                onChange={(e) => setMetrics5mHours(Math.max(1, parseInt(e.target.value) || 24))}
+                className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Intermediate rollups for 6h and 24h ranges (default: 24h).
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-slate-200 font-bold mb-1.5">
+                1-Hour Rollups Window (days)
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="365"
+                value={metrics1hDays}
+                onChange={(e) => setMetrics1hDays(Math.max(1, parseInt(e.target.value) || 7))}
+                className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Long-term hourly rollups for 3d and 7d historical trends (default: 7d).
+              </p>
+            </div>
+          </div>
+
+          {/* Database Maintenance Actions */}
+          <div className="pt-2 border-t border-obsidian-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 font-mono text-xs">
+            <div className="space-y-0.5">
+              <span className="font-bold text-slate-300">Metrics Database Maintenance</span>
+              <p className="text-[11px] text-slate-500">
+                Prune expired metric samples immediately and run SQLite VACUUM to defragment and shrink the metrics database file.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleVacuumMetrics}
+              disabled={vacuumingMetrics}
+              className="px-3.5 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 hover:text-slate-100 font-bold text-xs flex items-center gap-2 transition-colors disabled:opacity-40 shrink-0"
+            >
+              {vacuumingMetrics ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+              ) : (
+                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+              )}
+              <span>{vacuumingMetrics ? 'Pruning & Vacuuming...' : 'Prune & Vacuum Metrics DB'}</span>
+            </button>
+          </div>
+
+          {vacuumMessage && (
+            <div
+              className={`p-3 rounded-lg border font-mono text-xs flex items-center justify-between ${
+                vacuumMessage.type === 'success'
+                  ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                  : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+              }`}
+            >
+              <span>{vacuumMessage.text}</span>
+              <button
+                type="button"
+                onClick={() => setVacuumMessage(null)}
+                className="opacity-70 hover:opacity-100 font-bold ml-2"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 11. BDS ENGINE & WINDOWS HOST SETTINGS CARD */}
         {bdsStatus && (
           <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 space-y-6">
             <div>

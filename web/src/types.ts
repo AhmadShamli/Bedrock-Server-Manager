@@ -306,6 +306,8 @@ export interface GlobalPlayer {
   updated_at: string;
 }
 
+export type MetricsTimeRange = '15m' | '1h' | '6h' | '24h' | '3d' | '7d';
+
 export interface MetricPoint {
   timestamp: string;
   cpu_percent: number;

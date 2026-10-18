@@ -185,6 +185,21 @@ func (db *MetricsDB) Migrate(ctx context.Context) error {
 	_, _ = db.ExecContext(ctx, `UPDATE metrics_raw SET cpu_percent = 0 WHERE cpu_percent < 0 OR cpu_percent > 10000`)
 	_, _ = db.ExecContext(ctx, `UPDATE metrics_5m SET avg_cpu = 0, max_cpu = 0, min_cpu = 0 WHERE max_cpu > 10000 OR avg_cpu < 0`)
 	_, _ = db.ExecContext(ctx, `UPDATE metrics_1h SET avg_cpu = 0, max_cpu = 0, min_cpu = 0 WHERE max_cpu > 10000 OR avg_cpu < 0`)
+
+	// Clean up any historical duplicate rollup rows and ensure unique indexes exist
+	_, _ = db.ExecContext(ctx, `
+		DELETE FROM metrics_5m WHERE id NOT IN (
+			SELECT MIN(id) FROM metrics_5m GROUP BY server_id, timestamp
+		);
+		DROP INDEX IF EXISTS idx_metrics_5m_server_ts;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_5m_server_ts ON metrics_5m(server_id, timestamp);
+
+		DELETE FROM metrics_1h WHERE id NOT IN (
+			SELECT MIN(id) FROM metrics_1h GROUP BY server_id, timestamp
+		);
+		DROP INDEX IF EXISTS idx_metrics_1h_server_ts;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_1h_server_ts ON metrics_1h(server_id, timestamp);
+	`)
 	return nil
 }
 
@@ -2696,10 +2711,10 @@ func (db *MetricsDB) QueryRaw(ctx context.Context, serverID string, since time.T
 func (db *MetricsDB) Rollup5Min(ctx context.Context, before time.Time) error {
 	beforeStr := FormatTime(before)
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO metrics_5m (server_id, timestamp, avg_cpu, max_cpu, min_cpu, avg_ram, max_ram, min_ram, avg_players, max_players, sample_count)
+		INSERT OR REPLACE INTO metrics_5m (server_id, timestamp, avg_cpu, max_cpu, min_cpu, avg_ram, max_ram, min_ram, avg_players, max_players, sample_count)
 		SELECT 
 			server_id,
-			strftime('%Y-%m-%dT%H:%M:00Z', timestamp) as ts_bucket,
+			printf('%s:%02d:00Z', strftime('%Y-%m-%dT%H', timestamp), (CAST(strftime('%M', timestamp) AS INTEGER) / 5) * 5) as ts_bucket,
 			AVG(cpu_percent),
 			MAX(cpu_percent),
 			MIN(cpu_percent),
@@ -2711,7 +2726,7 @@ func (db *MetricsDB) Rollup5Min(ctx context.Context, before time.Time) error {
 			COUNT(*)
 		FROM metrics_raw
 		WHERE timestamp <= ?
-		GROUP BY server_id, strftime('%Y-%m-%dT%H:', timestamp), (strftime('%M', timestamp) / 5)
+		GROUP BY server_id, ts_bucket
 	`, beforeStr)
 	return err
 }
@@ -2719,7 +2734,7 @@ func (db *MetricsDB) Rollup5Min(ctx context.Context, before time.Time) error {
 func (db *MetricsDB) Rollup1Hour(ctx context.Context, before time.Time) error {
 	beforeStr := FormatTime(before)
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO metrics_1h (server_id, timestamp, avg_cpu, max_cpu, min_cpu, avg_ram, max_ram, min_ram, avg_players, max_players, sample_count)
+		INSERT OR REPLACE INTO metrics_1h (server_id, timestamp, avg_cpu, max_cpu, min_cpu, avg_ram, max_ram, min_ram, avg_players, max_players, sample_count)
 		SELECT 
 			server_id,
 			strftime('%Y-%m-%dT%H:00:00Z', timestamp) as ts_bucket,
@@ -2734,15 +2749,90 @@ func (db *MetricsDB) Rollup1Hour(ctx context.Context, before time.Time) error {
 			SUM(sample_count)
 		FROM metrics_5m
 		WHERE timestamp <= ?
-		GROUP BY server_id, strftime('%Y-%m-%dT%H:00:00Z', timestamp)
+		GROUP BY server_id, ts_bucket
 	`, beforeStr)
 	return err
 }
 
-func (db *MetricsDB) PruneOldMetrics(ctx context.Context, rawRetainHours, rollup5mDays, rollup1hDays int) error {
+// QueryRollup5m retrieves 5-minute aggregated metrics for a server since a given timestamp.
+func (db *MetricsDB) QueryRollup5m(ctx context.Context, serverID string, since time.Time) ([]models.MetricRaw, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT timestamp, avg_cpu, avg_ram, max_players
+		FROM metrics_5m
+		WHERE server_id = ? AND timestamp >= ?
+		ORDER BY timestamp ASC`, serverID, FormatTime(since),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []models.MetricRaw
+	for rows.Next() {
+		var m models.MetricRaw
+		var tsStr string
+		if err := rows.Scan(&tsStr, &m.CPUPercent, &m.RAMBytes, &m.PlayerCount); err != nil {
+			return nil, err
+		}
+		if m.CPUPercent < 0 || m.CPUPercent > 10000 {
+			m.CPUPercent = 0
+		}
+		if t, err := ParseTime(tsStr); err == nil {
+			m.Timestamp = t
+		}
+		m.ServerID = serverID
+		list = append(list, m)
+	}
+	return list, rows.Err()
+}
+
+// QueryRollup1h retrieves 1-hour aggregated metrics for a server since a given timestamp.
+func (db *MetricsDB) QueryRollup1h(ctx context.Context, serverID string, since time.Time) ([]models.MetricRaw, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT timestamp, avg_cpu, avg_ram, max_players
+		FROM metrics_1h
+		WHERE server_id = ? AND timestamp >= ?
+		ORDER BY timestamp ASC`, serverID, FormatTime(since),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var list []models.MetricRaw
+	for rows.Next() {
+		var m models.MetricRaw
+		var tsStr string
+		if err := rows.Scan(&tsStr, &m.CPUPercent, &m.RAMBytes, &m.PlayerCount); err != nil {
+			return nil, err
+		}
+		if m.CPUPercent < 0 || m.CPUPercent > 10000 {
+			m.CPUPercent = 0
+		}
+		if t, err := ParseTime(tsStr); err == nil {
+			m.Timestamp = t
+		}
+		m.ServerID = serverID
+		list = append(list, m)
+	}
+	return list, rows.Err()
+}
+
+// PruneOldMetrics deletes records older than their respective retention windows.
+func (db *MetricsDB) PruneOldMetrics(ctx context.Context, rawRetainHours, rollup5mHours, rollup1hDays int) error {
 	now := time.Now().UTC()
+	if rawRetainHours <= 0 {
+		rawRetainHours = 2
+	}
+	if rollup5mHours <= 0 {
+		rollup5mHours = 24
+	}
+	if rollup1hDays <= 0 {
+		rollup1hDays = 7
+	}
+
 	rawCutoff := FormatTime(now.Add(-time.Duration(rawRetainHours) * time.Hour))
-	m5Cutoff := FormatTime(now.AddDate(0, 0, -rollup5mDays))
+	m5Cutoff := FormatTime(now.Add(-time.Duration(rollup5mHours) * time.Hour))
 	h1Cutoff := FormatTime(now.AddDate(0, 0, -rollup1hDays))
 
 	if _, err := db.ExecContext(ctx, "DELETE FROM metrics_raw WHERE timestamp < ?", rawCutoff); err != nil {
@@ -2755,4 +2845,10 @@ func (db *MetricsDB) PruneOldMetrics(ctx context.Context, rawRetainHours, rollup
 		return err
 	}
 	return nil
+}
+
+// Vacuum executes SQLite VACUUM to reclaim disk space from pruned records.
+func (db *MetricsDB) Vacuum(ctx context.Context) error {
+	_, err := db.ExecContext(ctx, "VACUUM")
+	return err
 }

@@ -1,4 +1,4 @@
-import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AddonServerConfig, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary, BDSStatus, BDSVersionsResponse, SystemInfo, TurnstileConfig, TurnstileTestResult, DDNSConfig, DDNSStatus, DDNSSyncResponse } from '../types';
+import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AddonServerConfig, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, MetricsTimeRange, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary, BDSStatus, BDSVersionsResponse, SystemInfo, TurnstileConfig, TurnstileTestResult, DDNSConfig, DDNSStatus, DDNSSyncResponse } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -184,7 +184,7 @@ class APIClient {
     return this.request(`/api/servers/${id}/stats`);
   }
 
-  async getMetrics(id: string, range: string = '1h'): Promise<MetricsData> {
+  async getMetrics(id: string, range: MetricsTimeRange | string = '1h'): Promise<MetricsData> {
     return this.request(`/api/servers/${id}/metrics?range=${encodeURIComponent(range)}`);
   }
 
@@ -844,6 +844,12 @@ class APIClient {
     return this.request('/api/system/settings', {
       method: 'POST',
       body: JSON.stringify({ key, value }),
+    });
+  }
+
+  async vacuumMetricsDB(): Promise<{ success: boolean; message: string }> {
+    return this.request('/api/system/metrics/vacuum', {
+      method: 'POST',
     });
   }
 
