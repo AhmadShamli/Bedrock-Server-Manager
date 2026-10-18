@@ -94,7 +94,6 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 	// Global Middlewares
 	r.Use(chimiddleware.RequestID)
-	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(mw.ResolveIPMiddleware)
 

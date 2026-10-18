@@ -114,7 +114,7 @@ func (h *AuthHandler) Setup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clientIP := GetClientIP(r).String()
-	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "setup", req.TurnstileToken, clientIP); !ok {
+	if ok, reason, _ := turnstile.CheckRequest(r, h.db, h.turnstileVerifier, "setup", req.TurnstileToken); !ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
@@ -213,7 +213,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "register", req.TurnstileToken, clientIP); !ok {
+	if ok, reason, _ := turnstile.CheckRequest(r, h.db, h.turnstileVerifier, "register", req.TurnstileToken); !ok {
 		lockedOut := h.rateLimiter.RecordLoginFailure(clientIP, req.Username, now)
 		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 			ActorType: "user",
@@ -375,7 +375,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "login", req.TurnstileToken, clientIP); !ok {
+	if ok, reason, _ := turnstile.CheckRequest(r, h.db, h.turnstileVerifier, "login", req.TurnstileToken); !ok {
 		lockedOut := h.rateLimiter.RecordLoginFailure(clientIP, req.Username, now)
 		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 			ActorType: "user",
@@ -598,7 +598,7 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "password_reset", req.TurnstileToken, clientIP); !ok {
+	if ok, reason, _ := turnstile.CheckRequest(r, h.db, h.turnstileVerifier, "password_reset", req.TurnstileToken); !ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
@@ -790,7 +790,7 @@ func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "resend_verification", req.TurnstileToken, clientIP); !ok {
+	if ok, reason, _ := turnstile.CheckRequest(r, h.db, h.turnstileVerifier, "resend_verification", req.TurnstileToken); !ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusForbidden)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})

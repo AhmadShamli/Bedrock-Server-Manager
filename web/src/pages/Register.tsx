@@ -31,7 +31,8 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
       .catch(() => null);
   }, []);
 
-  const isTurnstileRequired = !!(turnstileConfig?.enabled && turnstileConfig.register_enabled && turnstileConfig.site_key);
+  const isTurnstileBypassed = !!(turnstileConfig?.bypass_local && turnstileConfig?.is_local);
+  const isTurnstileRequired = !!(turnstileConfig?.enabled && !isTurnstileBypassed && turnstileConfig.register_enabled && turnstileConfig.site_key);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

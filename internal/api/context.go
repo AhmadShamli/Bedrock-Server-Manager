@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/netip"
 
@@ -21,10 +22,22 @@ func WithClientIP(r *http.Request, ip netip.Addr) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), clientIPKey, ip))
 }
 
-// GetClientIP retrieves the resolved client IP from request context.
+// GetClientIP retrieves the resolved client IP from request context with fallback to RemoteAddr.
 func GetClientIP(r *http.Request) netip.Addr {
-	if val, ok := r.Context().Value(clientIPKey).(netip.Addr); ok {
+	if r == nil {
+		return netip.Addr{}
+	}
+	if val, ok := r.Context().Value(clientIPKey).(netip.Addr); ok && val.IsValid() {
 		return val
+	}
+	if r.RemoteAddr != "" {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		if addr, err := netip.ParseAddr(host); err == nil && addr.IsValid() {
+			return addr
+		}
 	}
 	return netip.Addr{}
 }

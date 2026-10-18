@@ -28,7 +28,8 @@ export const Setup: React.FC<SetupProps> = ({ onSetupSuccess }) => {
       .catch(() => null);
   }, []);
 
-  const isTurnstileRequired = !!(turnstileConfig?.enabled && turnstileConfig.setup_enabled && turnstileConfig.site_key);
+  const isTurnstileBypassed = !!(turnstileConfig?.bypass_local && turnstileConfig?.is_local);
+  const isTurnstileRequired = !!(turnstileConfig?.enabled && !isTurnstileBypassed && turnstileConfig.setup_enabled && turnstileConfig.site_key);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

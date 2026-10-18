@@ -284,7 +284,7 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "knock", req.TurnstileToken, clientIP); !ok {
+	if ok, reason, _ := turnstile.CheckRequest(r, h.db, h.turnstileVerifier, "knock", req.TurnstileToken); !ok {
 		lockedOut, tripped := h.rateLimiter.RecordKnockFailureEx(clientIP, now)
 		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 			ActorType: "portal",

@@ -261,8 +261,10 @@ export const KnockPortal: React.FC = () => {
     return () => clearInterval(interval);
   }, [id, activeLease?.session_token, activeLease?.always_allowed, config?.heartbeat_interval_seconds]);
 
+  const isTurnstileBypassed = !!(turnstileConfig?.bypass_local && turnstileConfig?.is_local);
   const isTurnstileRequired = !!(
     turnstileConfig?.enabled &&
+    !isTurnstileBypassed &&
     turnstileConfig.knock_enabled &&
     turnstileConfig.site_key &&
     !config?.always_allowed &&

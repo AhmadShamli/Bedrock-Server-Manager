@@ -539,6 +539,13 @@ func (h *SystemHandler) GetTurnstilePublicConfig(w http.ResponseWriter, r *http.
 		return
 	}
 
+	isLocal := turnstile.IsRequestLocalOrLAN(r)
+	cfg.IsLocal = isLocal
+
+	if cfg.Enabled && cfg.BypassLocal && isLocal {
+		cfg.Enabled = false
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(cfg)
 }

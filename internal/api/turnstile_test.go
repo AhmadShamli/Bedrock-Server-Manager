@@ -170,4 +170,127 @@ func TestTurnstileAPIProtection(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Errorf("expected 200 OK on knock with valid token, got %d (body: %s)", rr.Code, rr.Body.String())
 	}
+
+	// 7. Test Local / LAN Bypass
+	// Enable turnstile_bypass_local
+	_ = db.SetSetting(ctx, turnstile.SettingTurnstileBypassLocal, "true")
+
+	// 7a. GET /api/system/turnstile-config from local IP (127.0.0.1) -> Should return enabled: false!
+	req = httptest.NewRequest(http.MethodGet, "/api/system/turnstile-config", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	var localConf turnstile.Config
+	if err := json.Unmarshal(rr.Body.Bytes(), &localConf); err != nil {
+		t.Fatalf("failed to decode local config: %v", err)
+	}
+	if localConf.Enabled {
+		t.Errorf("expected Turnstile config to be disabled for local IP when bypass_local is true")
+	}
+	if !localConf.IsLocal {
+		t.Errorf("expected is_local=true for 127.0.0.1")
+	}
+	if !localConf.BypassLocal {
+		t.Errorf("expected bypass_local=true")
+	}
+
+	// 7b. GET /api/system/turnstile-config from public IP (203.0.113.1) -> Should return enabled: true!
+	req = httptest.NewRequest(http.MethodGet, "/api/system/turnstile-config", nil)
+	req.RemoteAddr = "203.0.113.1:12345"
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	var pubConf turnstile.Config
+	if err := json.Unmarshal(rr.Body.Bytes(), &pubConf); err != nil {
+		t.Fatalf("failed to decode public config: %v", err)
+	}
+	if !pubConf.Enabled {
+		t.Errorf("expected Turnstile config to remain enabled for public IP")
+	}
+	if pubConf.IsLocal {
+		t.Errorf("expected is_local=false for 203.0.113.1")
+	}
+
+	// 7c. Login without token from local IP (192.168.1.50) -> Should succeed (200 OK)!
+	loginPayloadNoToken := map[string]interface{}{
+		"username": "testuser",
+		"password": "password123",
+	}
+	bodyNoToken, _ := json.Marshal(loginPayloadNoToken)
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(bodyNoToken))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.168.1.50:54321"
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 OK on login without token from LAN IP (192.168.1.50), got %d (body: %s)", rr.Code, rr.Body.String())
+	}
+
+	// 7d. Login without token from public IP -> Must fail with 403 Forbidden!
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(bodyNoToken))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.1:54321"
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden on login without token from public IP, got %d", rr.Code)
+	}
+
+	// 7e. GET /api/system/turnstile-config from local IP (127.0.0.1) behind reverse proxy forwarding external client (X-Forwarded-For: 203.0.113.1)
+	// -> Should detect reverse proxy and return Enabled: true, IsLocal: false!
+	req = httptest.NewRequest(http.MethodGet, "/api/system/turnstile-config", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.1")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	var proxyConf turnstile.Config
+	if err := json.Unmarshal(rr.Body.Bytes(), &proxyConf); err != nil {
+		t.Fatalf("failed to decode proxy config: %v", err)
+	}
+	if !proxyConf.Enabled {
+		t.Errorf("expected Turnstile to remain enabled when local IP is reverse proxying external client")
+	}
+	if proxyConf.IsLocal {
+		t.Errorf("expected is_local=false when local IP is reverse proxying external client")
+	}
+
+	// 7f. Login without token from local IP (127.0.0.1) behind reverse proxy forwarding external client -> Must fail with 403 Forbidden!
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(bodyNoToken))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.Header.Set("X-Forwarded-For", "203.0.113.1")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden on login without token through reverse proxy forwarding external IP, got %d", rr.Code)
+	}
+
+	// 7g. Login without token through internal reverse proxy (X-Forwarded-For is internal LAN IP) -> Should succeed (200 OK)!
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(bodyNoToken))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.Header.Set("X-Forwarded-For", "192.168.1.100")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 OK on login without token through internal proxy forwarding LAN client, got %d", rr.Code)
+	}
+
+	// 7h. Public direct client attempting to spoof X-Forwarded-For: 127.0.0.1 -> Must fail with 403 Forbidden!
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewReader(bodyNoToken))
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "203.0.113.1:54321"
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	rr = httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("expected 403 Forbidden on spoofed public connection without token, got %d", rr.Code)
+	}
 }

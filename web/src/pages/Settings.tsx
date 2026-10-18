@@ -83,6 +83,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
   const [turnstileSetupEnabled, setTurnstileSetupEnabled] = useState(true);
   const [turnstileKnockEnabled, setTurnstileKnockEnabled] = useState(true);
   const [turnstileFailOpen, setTurnstileFailOpen] = useState(false);
+  const [turnstileBypassLocal, setTurnstileBypassLocal] = useState(false);
 
   // Turnstile Interactive Testing State
   const [testingTurnstile, setTestingTurnstile] = useState(false);
@@ -253,6 +254,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
       if (settingsRes['turnstile_fail_open'] !== undefined) {
         setTurnstileFailOpen(settingsRes['turnstile_fail_open'] === 'true' || settingsRes['turnstile_fail_open'] === '1');
       }
+      if (settingsRes['turnstile_bypass_local'] !== undefined) {
+        setTurnstileBypassLocal(settingsRes['turnstile_bypass_local'] === 'true' || settingsRes['turnstile_bypass_local'] === '1');
+      }
 
       // Populate Resource Alerts
       if (settingsRes['resource_alert_threshold']) {
@@ -391,7 +395,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
         api.updateSetting('turnstile_register_enabled', turnstileRegisterEnabled ? 'true' : 'false'),
         api.updateSetting('turnstile_setup_enabled', turnstileSetupEnabled ? 'true' : 'false'),
         api.updateSetting('turnstile_knock_enabled', turnstileKnockEnabled ? 'true' : 'false'),
-        api.updateSetting('turnstile_fail_open', turnstileFailOpen ? 'true' : 'false')
+        api.updateSetting('turnstile_fail_open', turnstileFailOpen ? 'true' : 'false'),
+        api.updateSetting('turnstile_bypass_local', turnstileBypassLocal ? 'true' : 'false')
       );
 
       if (turnstileSecretKey.trim() && turnstileSecretKey !== '******') {
@@ -1810,6 +1815,29 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
                   className="text-emerald-400 focus:outline-none flex-shrink-0"
                 >
                   {turnstileFailOpen ? (
+                    <ToggleRight className="w-6 h-6 text-emerald-400" />
+                  ) : (
+                    <ToggleLeft className="w-6 h-6 text-slate-600" />
+                  )}
+                </button>
+              </div>
+
+              {/* Bypass Local / LAN Toggle */}
+              <div className="border-t border-obsidian-800/80 pt-3 flex items-start justify-between gap-4">
+                <div>
+                  <span className="font-bold text-slate-200 block">Disable on Local / LAN Networks</span>
+                  <span className="text-[11px] text-slate-400 block mt-0.5">
+                    {turnstileBypassLocal
+                      ? 'Enabled: Turnstile challenge is bypassed when accessed via localhost (127.0.0.1, ::1) or private LAN subnets (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, link-local). Prevents challenge errors on local or self-hosted IPs.'
+                      : 'Disabled: Turnstile verification is enforced on all client connections regardless of network origin.'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTurnstileBypassLocal(!turnstileBypassLocal)}
+                  className="text-emerald-400 focus:outline-none flex-shrink-0"
+                >
+                  {turnstileBypassLocal ? (
                     <ToggleRight className="w-6 h-6 text-emerald-400" />
                   ) : (
                     <ToggleLeft className="w-6 h-6 text-slate-600" />

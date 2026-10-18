@@ -1132,6 +1132,7 @@ func TestPortGateBansAndCentralizedEndpoints(t *testing.T) {
 
 	// 4. Knock Portal Config for banned IP: should return is_banned: true
 	req = httptest.NewRequest("GET", "/api/knock/srv-pg-test/config", nil)
+	req.RemoteAddr = "198.51.100.77:1234"
 	req.Header.Set("X-Forwarded-For", "198.51.100.77")
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1148,6 +1149,7 @@ func TestPortGateBansAndCentralizedEndpoints(t *testing.T) {
 	// 5. Knock attempt from banned IP: should be 403 Forbidden
 	knockBody := []byte(`{"passphrase": "any-secret"}`)
 	req = httptest.NewRequest("POST", "/api/knock/srv-pg-test/knock", bytes.NewReader(knockBody))
+	req.RemoteAddr = "198.51.100.77:1234"
 	req.Header.Set("X-Forwarded-For", "198.51.100.77")
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
@@ -1159,6 +1161,7 @@ func TestPortGateBansAndCentralizedEndpoints(t *testing.T) {
 
 	// 6. Status check from banned IP: should be 403 Forbidden
 	req = httptest.NewRequest("GET", "/api/knock/srv-pg-test/status", nil)
+	req.RemoteAddr = "198.51.100.77:1234"
 	req.Header.Set("X-Forwarded-For", "198.51.100.77")
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)
@@ -1187,6 +1190,7 @@ func TestPortGateBansAndCentralizedEndpoints(t *testing.T) {
 
 	// 9. Verify caller is no longer banned in config
 	req = httptest.NewRequest("GET", "/api/knock/srv-pg-test/config", nil)
+	req.RemoteAddr = "198.51.100.77:1234"
 	req.Header.Set("X-Forwarded-For", "198.51.100.77")
 	w = httptest.NewRecorder()
 	router.ServeHTTP(w, req)

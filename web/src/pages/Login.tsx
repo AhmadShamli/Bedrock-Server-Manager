@@ -31,7 +31,8 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       .catch(() => null);
   }, []);
 
-  const isTurnstileRequired = !!(turnstileConfig?.enabled && turnstileConfig.login_enabled && turnstileConfig.site_key);
+  const isTurnstileBypassed = !!(turnstileConfig?.bypass_local && turnstileConfig?.is_local);
+  const isTurnstileRequired = !!(turnstileConfig?.enabled && !isTurnstileBypassed && turnstileConfig.login_enabled && turnstileConfig.site_key);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

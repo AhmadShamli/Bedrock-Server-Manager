@@ -451,6 +451,8 @@ export interface TurnstileConfig {
   setup_enabled: boolean;
   knock_enabled: boolean;
   fail_open: boolean;
+  bypass_local?: boolean;
+  is_local?: boolean;
 }
 
 export interface TurnstileTestResult {
