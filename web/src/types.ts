@@ -210,7 +210,7 @@ export interface Task {
 }
 
 export interface AddonPack {
-  type: 'behavior' | 'resource';
+  type: 'behavior' | 'resource' | 'world';
   folder: string;
   name: string;
   description: string;
@@ -239,6 +239,7 @@ export interface MarketplaceItem {
   download_url?: string;
   categories?: string[];
   page_url?: string;
+  type?: string;
 }
 
 export interface MarketplaceScreenshot {

@@ -56,8 +56,8 @@ func (h *AddonHandler) Install(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	serverDir := filepath.Join(h.dataDir, "servers", serverID)
 
-	// 100MB max pack upload
-	if err := r.ParseMultipartForm(100 << 20); err != nil {
+	// 500MB max pack/world upload
+	if err := r.ParseMultipartForm(500 << 20); err != nil {
 		http.Error(w, `{"error": "Invalid multipart form or file too large"}`, http.StatusBadRequest)
 		return
 	}
@@ -100,8 +100,10 @@ func (h *AddonHandler) Install(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("no valid packs found in archive")
 		}
 		for i := range packs {
-			if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
-				packs[i] = *activePack
+			if packs[i].Type != "world" {
+				if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
+					packs[i] = *activePack
+				}
 			}
 		}
 		return nil
@@ -158,19 +160,40 @@ func (h *AddonHandler) InstallFromURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	packs, err := addon.InstallAllFromURL(r.Context(), serverDir, strings.TrimSpace(payload.URL))
-	if err != nil || len(packs) == 0 {
-		errMsg := "no packs found"
-		if err != nil {
-			errMsg = err.Error()
-		}
-		http.Error(w, fmt.Sprintf(`{"error": "Installation from URL failed: %s"}`, errMsg), http.StatusBadRequest)
-		return
+	actorName := "user"
+	if claims != nil {
+		actorName = claims.Username
 	}
 
-	for i := range packs {
-		if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
-			packs[i] = *activePack
+	var packs []addon.InstalledPack
+	installAction := func() error {
+		var err error
+		packs, err = addon.InstallAllFromURL(r.Context(), serverDir, strings.TrimSpace(payload.URL))
+		if err != nil || len(packs) == 0 {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("no packs found")
+		}
+		for i := range packs {
+			if packs[i].Type != "world" {
+				if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
+					packs[i] = *activePack
+				}
+			}
+		}
+		return nil
+	}
+
+	if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv != nil && h.serverHandler != nil {
+		if err := h.serverHandler.WithServerStopped(r.Context(), srv, "user", actorName, "addon_install_url", GetClientIP(r).String(), installAction); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Installation from URL failed: %s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := installAction(); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Installation from URL failed: %s"}`, err.Error()), http.StatusBadRequest)
+			return
 		}
 	}
 	pack := &packs[0]
@@ -262,6 +285,7 @@ func (h *AddonHandler) MarketplaceInstall(w http.ResponseWriter, r *http.Request
 		ItemID      string `json:"item_id"`
 		FileID      int64  `json:"file_id"`
 		DownloadURL string `json:"download_url"`
+		ItemName    string `json:"item_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, `{"error": "Invalid JSON payload"}`, http.StatusBadRequest)
@@ -287,32 +311,71 @@ func (h *AddonHandler) MarketplaceInstall(w http.ResponseWriter, r *http.Request
 			http.Error(w, `{"error": "Invalid CurseForge mod ID"}`, http.StatusBadRequest)
 			return
 		}
-		resolvedURL, err := marketplace.GetCurseForgeDownloadURL(r.Context(), nil, cfKey, modID, payload.FileID)
-		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
+		if payload.FileID <= 0 {
+			details, err := marketplace.GetCurseForgeModDetails(r.Context(), nil, cfKey, modID)
+			if err == nil && details != nil && len(details.Files) > 0 {
+				payload.FileID = details.Files[0].ID
+				if details.Files[0].DownloadURL != "" {
+					downloadURL = details.Files[0].DownloadURL
+				}
+				if payload.ItemName == "" {
+					payload.ItemName = details.Name
+				}
+			}
+		}
+		if downloadURL == "" && payload.FileID > 0 {
+			resolvedURL, err := marketplace.GetCurseForgeDownloadURL(r.Context(), nil, cfKey, modID, payload.FileID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
+				return
+			}
+			downloadURL = resolvedURL
+		}
+		if downloadURL == "" {
+			http.Error(w, `{"error": "Could not determine download URL for item"}`, http.StatusBadRequest)
 			return
 		}
-		downloadURL = resolvedURL
 	}
 
-	packs, err := addon.InstallAllFromURL(r.Context(), serverDir, downloadURL)
-	if err != nil || len(packs) == 0 {
-		errMsg := "no packs found"
-		if err != nil {
-			errMsg = err.Error()
+	actorName := "user"
+	claims := GetUserClaims(r)
+	if claims != nil {
+		actorName = claims.Username
+	}
+
+	var packs []addon.InstalledPack
+	installAction := func() error {
+		var err error
+		packs, err = addon.InstallAllFromURL(r.Context(), serverDir, downloadURL, payload.ItemName)
+		if err != nil || len(packs) == 0 {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("no packs found")
 		}
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to install addon: %s"}`, errMsg), http.StatusBadRequest)
-		return
+		for i := range packs {
+			if packs[i].Type != "world" {
+				if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
+					packs[i] = *activePack
+				}
+			}
+		}
+		return nil
 	}
 
-	for i := range packs {
-		if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
-			packs[i] = *activePack
+	if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv != nil && h.serverHandler != nil {
+		if err := h.serverHandler.WithServerStopped(r.Context(), srv, "user", actorName, "addon_marketplace_install", GetClientIP(r).String(), installAction); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Failed to install addon: %s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := installAction(); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Failed to install addon: %s"}`, err.Error()), http.StatusBadRequest)
+			return
 		}
 	}
 	pack := &packs[0]
 
-	claims := GetUserClaims(r)
 	if claims != nil {
 		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 			UserID:    &claims.UserID,

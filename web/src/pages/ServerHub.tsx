@@ -6,7 +6,7 @@ import {
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
   ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles,
-  Network, Search, Clock, History, Save, Eye, Image, FileText, MessageCircle, ArrowUp, ArrowDown
+  Network, Search, Clock, History, Save, Eye, Image, FileText, MessageCircle, ArrowUp, ArrowDown, MapPin
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User, Backup, AddonPack, AddonServerConfig, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
@@ -287,7 +287,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>([]);
   const [marketplaceQuery, setMarketplaceQuery] = useState('');
-  const [marketplaceCategory, setMarketplaceCategory] = useState<'' | 'behavior' | 'resource'>('');
+  const [marketplaceCategory, setMarketplaceCategory] = useState<'' | 'behavior' | 'resource' | 'world'>('');
   const [marketplaceLoading, setMarketplaceLoading] = useState(false);
   const [installingMarketplaceId, setInstallingMarketplaceId] = useState<string | null>(null);
 
@@ -1383,16 +1383,22 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     const file = e.target.files[0];
     setAddonLoading(true);
     try {
-      await api.installAddon(id, file);
+      const res = await api.installAddon(id, file);
       const [updated, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
       setAddonsList(Array.isArray(updated) ? updated : []);
       if (cfg) setAddonConfig(cfg);
+      await fetchServer();
       setPackActivationChanged(true);
-      alert('Addon installed and activated! Restart the server for changes to take effect.');
+      if (res?.type === 'world') {
+        alert(`Successfully installed world map "${res.name || file.name}"! The active server world is now set to "${res.name || res.folder}".`);
+      } else {
+        alert('Addon installed and activated! Restart the server for changes to take effect.');
+      }
     } catch (err: any) {
       alert(err.message || 'Failed to install addon');
     } finally {
       setAddonLoading(false);
+      e.target.value = '';
     }
   };
 
@@ -1409,7 +1415,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   };
 
   const handleToggleAddon = async (pack: AddonPack) => {
-    if (!id) return;
+    if (!id || pack.type === 'world') return;
     const key = `${pack.type}-${pack.folder}`;
     setTogglingPackKey(key);
     try {
@@ -1444,7 +1450,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   };
 
   const handleMovePack = async (pack: AddonPack, direction: 'up' | 'down') => {
-    if (!id) return;
+    if (!id || pack.type === 'world') return;
     const ofType = addonsList.filter((p) => p.type === pack.type && p.active);
     const index = ofType.findIndex((p) => p.folder === pack.folder);
     if (index === -1) return;
@@ -1472,14 +1478,19 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     if (!id || !addonUrlInput.trim()) return;
     setInstallingUrl(true);
     try {
-      await api.installAddonFromURL(id, addonUrlInput.trim());
+      const res = await api.installAddonFromURL(id, addonUrlInput.trim());
       const [updated, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
       setAddonsList(Array.isArray(updated) ? updated : []);
       if (cfg) setAddonConfig(cfg);
+      await fetchServer();
       setPackActivationChanged(true);
       setUrlModalOpen(false);
       setAddonUrlInput('');
-      alert('Addon installed and activated from URL! Restart the server for changes to take effect.');
+      if (res?.type === 'world') {
+        alert(`Successfully installed world map "${res.name}"! The active server world is now set to "${res.name || res.folder}".`);
+      } else {
+        alert('Addon installed and activated from URL! Restart the server for changes to take effect.');
+      }
     } catch (err: any) {
       alert(err.message || 'Failed to install addon from URL');
     } finally {
@@ -1489,7 +1500,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
   const handleSearchMarketplace = async (
     e?: React.FormEvent,
-    override?: { category?: '' | 'behavior' | 'resource' }
+    override?: { category?: '' | 'behavior' | 'resource' | 'world' }
   ) => {
     if (e) e.preventDefault();
     const categoryToUse = override?.category !== undefined ? override.category : marketplaceCategory;
@@ -1512,17 +1523,23 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     if (!id) return;
     setInstallingMarketplaceId(item.id);
     try {
-      await api.installAddonFromMarketplace(id, {
+      const res = await api.installAddonFromMarketplace(id, {
         provider: item.provider,
         item_id: item.id,
         file_id: item.file_id,
         download_url: item.download_url,
+        item_name: item.name,
       });
       const [updated, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
       setAddonsList(Array.isArray(updated) ? updated : []);
       if (cfg) setAddonConfig(cfg);
+      await fetchServer();
       setPackActivationChanged(true);
-      alert(`Successfully installed and activated "${item.name}"!`);
+      if (res?.type === 'world' || item.type === 'world') {
+        alert(`Successfully installed world map "${item.name}"! The active server world is now set to "${res.name || res.folder}".`);
+      } else {
+        alert(`Successfully installed and activated "${item.name}"!`);
+      }
     } catch (err: any) {
       alert(err.message || 'Failed to install addon from marketplace');
     } finally {
@@ -1553,17 +1570,24 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     if (!id) return;
     setInstallingMarketplaceId(item.id);
     try {
-      await api.installAddonFromMarketplace(id, {
+      const res = await api.installAddonFromMarketplace(id, {
         provider: 'curseforge',
         item_id: item.id,
         file_id: file.id,
         download_url: file.download_url,
+        item_name: item.name,
       });
       const [updated, cfg] = await Promise.all([api.listAddons(id), api.getAddonConfig(id).catch(() => null)]);
       setAddonsList(Array.isArray(updated) ? updated : []);
       if (cfg) setAddonConfig(cfg);
+      await fetchServer();
       setPackActivationChanged(true);
-      alert(`Successfully installed and activated "${item.name}" (${file.display_name || file.file_name})!`);
+      const isWorld = res?.type === 'world' || item.type === 'world' || (file.file_name && file.file_name.toLowerCase().endsWith('.mcworld'));
+      if (isWorld) {
+        alert(`Successfully installed world map "${item.name}" (${file.display_name || file.file_name})! The active server world is now set to "${res.name || res.folder}".`);
+      } else {
+        alert(`Successfully installed and activated "${item.name}" (${file.display_name || file.file_name})!`);
+      }
     } catch (err: any) {
       alert(err.message || 'Failed to install file from marketplace');
     } finally {
@@ -3195,10 +3219,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 {/* Upload Pack File */}
                 <label className="cursor-pointer px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-2 transition-colors">
                   {addonLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  <span>Upload .mcpack / .zip</span>
+                  <span>Upload Pack / Map</span>
                   <input
                     type="file"
-                    accept=".mcpack,.mcaddon,.zip"
+                    accept=".mcpack,.mcaddon,.zip,.mcworld"
                     onChange={handleInstallAddon}
                     disabled={addonLoading}
                     className="hidden"
@@ -3465,6 +3489,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     <option value="">All Categories</option>
                     <option value="behavior">Behavior / Addons</option>
                     <option value="resource">Resource / Textures</option>
+                    <option value="world">Worlds / Maps</option>
                   </select>
 
                   {/* Search query input */}
@@ -3472,7 +3497,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
-                      placeholder="Search Bedrock addons, textures, mods, biomes..."
+                      placeholder="Search Bedrock addons, maps, textures, mods, worlds..."
                       value={marketplaceQuery}
                       onChange={(e) => setMarketplaceQuery(e.target.value)}
                       className="w-full pl-9 pr-4 py-2 bg-obsidian-950 border border-obsidian-800 rounded-lg text-slate-200 font-mono text-xs focus:outline-none focus:border-emerald-500"
@@ -3523,6 +3548,10 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {marketplaceItems.map((item) => {
                       const isInstalling = installingMarketplaceId === item.id;
+                      const isWorldItem =
+                        item.type === 'world' ||
+                        (item.categories && item.categories.some((c) => /world|map/i.test(c))) ||
+                        (item.file_name && item.file_name.toLowerCase().endsWith('.mcworld'));
                       return (
                         <div
                           key={`${item.provider}-${item.id}`}
@@ -3534,9 +3563,16 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                                 <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-orange-500/10 text-orange-400 border-orange-500/30">
                                   CurseForge
                                 </span>
-                                <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
-                                  Bedrock
-                                </span>
+                                {isWorldItem ? (
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-sky-500/10 text-sky-400 border-sky-500/30 flex items-center gap-1">
+                                    <MapPin className="w-2.5 h-2.5" />
+                                    Map
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                                    Bedrock
+                                  </span>
+                                )}
                               </div>
 
                               <div className="flex items-center space-x-1 text-[11px] font-mono text-slate-400">
@@ -3631,7 +3667,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                                 ) : (
                                   <>
                                     <Download className="w-3.5 h-3.5" />
-                                    <span>Install</span>
+                                    <span>{isWorldItem ? 'Install Map' : 'Install'}</span>
                                   </>
                                 )}
                               </button>
@@ -3649,7 +3685,12 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       )}
 
       {/* ADDON DETAILS MODAL */}
-      {addonDetailsModalOpen && selectedAddonSummary && (
+      {addonDetailsModalOpen && selectedAddonSummary && (() => {
+        const isWorldSummary =
+          selectedAddonSummary.type === 'world' ||
+          (selectedAddonSummary.categories && selectedAddonSummary.categories.some((c) => /world|map/i.test(c))) ||
+          (selectedAddonSummary.file_name && selectedAddonSummary.file_name.toLowerCase().endsWith('.mcworld'));
+        return (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 md:p-6 overflow-y-auto">
           <div className="bg-obsidian-950 border border-obsidian-800 rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden my-auto">
             {/* Modal Header */}
@@ -3672,9 +3713,16 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-orange-500/10 text-orange-400 border-orange-500/30">
                       CurseForge
                     </span>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
-                      Bedrock Edition
-                    </span>
+                    {isWorldSummary ? (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-sky-500/10 text-sky-400 border-sky-500/30 flex items-center gap-1">
+                        <MapPin className="w-2.5 h-2.5" />
+                        Map
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase border bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
+                        Bedrock Edition
+                      </span>
+                    )}
                     {selectedAddonSummary.version && (
                       <span className="text-[10px] font-mono px-2 py-0.5 rounded border bg-obsidian-800 text-slate-300 border-obsidian-700">
                         {selectedAddonSummary.version}
@@ -3720,7 +3768,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   ) : (
                     <>
                       <Download className="w-4 h-4" />
-                      <span>Install Addon</span>
+                      <span>{isWorldSummary ? 'Install Map' : 'Install Addon'}</span>
                     </>
                   )}
                 </button>
@@ -3986,7 +4034,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                                 ) : (
                                   <Download className="w-3.5 h-3.5" />
                                 )}
-                                <span>Install File</span>
+                                <span>{isWorldSummary || (f.file_name && f.file_name.toLowerCase().endsWith('.mcworld')) ? 'Install Map' : 'Install File'}</span>
                               </button>
                             </div>
                           ))}
@@ -4034,7 +4082,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* LIGHTBOX FOR SCREENSHOT ZOOM */}
       {previewScreenshotUrl && (

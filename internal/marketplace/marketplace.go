@@ -86,6 +86,7 @@ type MarketplaceItem struct {
 	DownloadURL string   `json:"download_url,omitempty"`
 	Categories  []string `json:"categories,omitempty"`
 	PageURL     string   `json:"page_url,omitempty"`
+	Type        string   `json:"type,omitempty"` // "addon" or "world"
 }
 
 type MarketplaceScreenshot struct {
@@ -305,6 +306,13 @@ func SearchCurseForge(ctx context.Context, client *http.Client, apiKey, query, c
 					q.Set("categoryId", strconv.Itoa(c.ID))
 				}
 				break
+			} else if (category == "world" || category == "map" || category == "worlds" || category == "maps") && (strings.Contains(lowerSlug, "world") || strings.Contains(lowerSlug, "map") || strings.Contains(lowerName, "world") || strings.Contains(lowerName, "map")) {
+				if c.IsClass {
+					q.Set("classId", strconv.Itoa(c.ID))
+				} else {
+					q.Set("categoryId", strconv.Itoa(c.ID))
+				}
+				break
 			}
 		}
 	}
@@ -366,6 +374,11 @@ func SearchCurseForge(ctx context.Context, client *http.Client, apiKey, query, c
 			versionStr = f.DisplayName
 		}
 
+		itemType := "addon"
+		if IsCurseForgeWorldItem(cats, fileName) {
+			itemType = "world"
+		}
+
 		items = append(items, MarketplaceItem{
 			ID:          strconv.FormatInt(m.ID, 10),
 			Provider:    "curseforge",
@@ -380,6 +393,7 @@ func SearchCurseForge(ctx context.Context, client *http.Client, apiKey, query, c
 			DownloadURL: downloadURL,
 			Categories:  cats,
 			PageURL:     m.Links.WebsiteURL,
+			Type:        itemType,
 		})
 	}
 
@@ -388,6 +402,21 @@ func SearchCurseForge(ctx context.Context, client *http.Client, apiKey, query, c
 		Items:    items,
 		Total:    cfResp.Pagination.TotalCount,
 	}, nil
+}
+
+// IsCurseForgeWorldItem checks whether the categories or filename indicate a Bedrock world/map.
+func IsCurseForgeWorldItem(categories []string, fileName string) bool {
+	lowerFile := strings.ToLower(fileName)
+	if strings.HasSuffix(lowerFile, ".mcworld") || strings.HasSuffix(lowerFile, ".mctemplate") {
+		return true
+	}
+	for _, c := range categories {
+		lc := strings.ToLower(c)
+		if strings.Contains(lc, "world") || strings.Contains(lc, "map") {
+			return true
+		}
+	}
+	return false
 }
 
 // GetCurseForgeDownloadURL resolves direct download URL for a file if not populated.
@@ -581,6 +610,12 @@ func GetCurseForgeModDetails(ctx context.Context, client *http.Client, apiKey st
 			DownloadURL: latestDownloadURL,
 			Categories:  cats,
 			PageURL:     m.Links.WebsiteURL,
+			Type:        func() string {
+				if IsCurseForgeWorldItem(cats, latestFileName) {
+					return "world"
+				}
+				return "addon"
+			}(),
 		},
 		DescriptionHTML: descHTML,
 		Screenshots:     screenshots,

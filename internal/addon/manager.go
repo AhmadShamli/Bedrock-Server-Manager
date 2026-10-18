@@ -522,11 +522,472 @@ func ListInstalledPacks(serverDir string) ([]InstalledPack, error) {
 	return packs, nil
 }
 
-// InstallAllPacks unzips an archive and extracts all behavior and resource packs found within it.
-func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPack, error) {
+// SanitizeWorldName cleans world names for safe directory and server.properties use.
+func SanitizeWorldName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.Map(func(r rune) rune {
+		if r == '/' || r == '\\' || r == ':' || r == '=' || r == '#' || r == '?' || r == '*' || r == '<' || r == '>' || r == '|' || r == '"' || r < 32 {
+			return '_'
+		}
+		return r
+	}, name)
+	name = strings.TrimSpace(name)
+	name = strings.Trim(name, "._-")
+	if name == "" {
+		return "Bedrock level"
+	}
+	return name
+}
+
+func sanitizePackFolderName(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			return r
+		}
+		return '_'
+	}, name)
+	name = strings.Trim(name, "_-")
+	if name == "" {
+		return "pack"
+	}
+	return name
+}
+
+// UpdateActiveLevelNameProp sets level-name in server.properties or pending properties.
+func UpdateActiveLevelNameProp(serverDir, levelName string) error {
+	updates := map[string]string{
+		"level-name": levelName,
+	}
+
+	propPath := filepath.Join(serverDir, "server.properties")
+	updated, err := configfile.UpdateExistingPropertyFile(propPath, updates)
+	if err != nil {
+		return fmt.Errorf("failed to update server.properties: %w", err)
+	}
+
+	if !updated {
+		existingProps, existingKeys, ok, err := configfile.ReadPendingProperties(serverDir)
+		if err != nil {
+			return err
+		}
+		if !ok || existingProps == nil {
+			existingProps = make(map[string]string)
+			existingKeys = []string{}
+		}
+		mergedProps, mergedKeys := configfile.MergeProperties(existingProps, existingKeys, updates)
+		if err := configfile.WritePendingProperties(serverDir, mergedProps, mergedKeys); err != nil {
+			return fmt.Errorf("failed to save pending properties: %w", err)
+		}
+	}
+	return nil
+}
+
+// isWorldArchive checks whether a zip contains world data (.mcworld, level.dat, or world_template).
+func isWorldArchive(zipReader *zip.Reader) bool {
+	for _, f := range zipReader.File {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(normName))
+		if base == "level.dat" || base == "levelname.txt" || base == "world_icon.jpeg" || base == "world_icon.png" {
+			return true
+		}
+		if strings.HasSuffix(base, ".mcworld") || strings.HasSuffix(base, ".mctemplate") {
+			return true
+		}
+		if strings.Contains(strings.ToLower(normName), "/db/") || strings.HasPrefix(strings.ToLower(normName), "db/") {
+			return true
+		}
+		if base == "manifest.json" {
+			rc, err := f.Open()
+			if err == nil {
+				data, _ := io.ReadAll(io.LimitReader(rc, 64*1024))
+				rc.Close()
+				if _, isWT, err := parseManifest(data); err == nil && isWT {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// InstallWorldArchive unzips a Bedrock map archive (.mcworld, world template, or world zip),
+// extracts it to worlds/<cleanWorldName>, installs any bundled behavior/resource packs,
+// and configures server.properties level-name so the server boots into the new world.
+func InstallWorldArchive(serverDir string, r io.ReaderAt, size int64, defaultName string) ([]InstalledPack, error) {
+	zipReader, err := zip.NewReader(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("invalid world archive: %w", err)
+	}
+
+	// 1. Check for nested .mcworld or .mctemplate archives inside
+	for _, f := range zipReader.File {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+		lowerName := strings.ToLower(normName)
+		if strings.HasSuffix(lowerName, ".mcworld") || strings.HasSuffix(lowerName, ".mctemplate") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			innerBytes, err := io.ReadAll(rc)
+			rc.Close()
+			if err == nil && len(innerBytes) > 0 {
+				innerName := defaultName
+				if innerName == "" {
+					innerBase := filepath.Base(normName)
+					innerName = strings.TrimSuffix(innerBase, filepath.Ext(innerBase))
+				}
+				packs, err := InstallWorldArchive(serverDir, bytes.NewReader(innerBytes), int64(len(innerBytes)), innerName)
+				if err == nil && len(packs) > 0 {
+					return packs, nil
+				}
+			}
+		}
+	}
+
+	// 2. Identify world root prefix inside the archive
+	var worldPrefix string
+	var foundWorldData bool
+	var templateManifest *PackManifest
+
+	// Check manifest.json for world_template info
+	for _, f := range zipReader.File {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+		if strings.EqualFold(filepath.Base(normName), "manifest.json") {
+			rc, err := f.Open()
+			if err == nil {
+				data, _ := io.ReadAll(rc)
+				rc.Close()
+				if mf, isWT, err := parseManifest(data); err == nil && isWT {
+					templateManifest = mf
+					dir := filepath.Dir(normName)
+					if dir == "." || dir == "/" || dir == "" {
+						worldPrefix = ""
+					} else {
+						worldPrefix = strings.TrimSuffix(dir, "/") + "/"
+					}
+					foundWorldData = true
+					break
+				}
+			}
+		}
+	}
+
+	// Check level.dat
+	for _, f := range zipReader.File {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+		if strings.EqualFold(filepath.Base(normName), "level.dat") {
+			dir := filepath.Dir(normName)
+			if dir == "." || dir == "/" || dir == "" {
+				worldPrefix = ""
+			} else {
+				worldPrefix = strings.TrimSuffix(dir, "/") + "/"
+			}
+			foundWorldData = true
+			break
+		}
+	}
+
+	// Check db/, levelname.txt, or world_icon.jpeg
+	if !foundWorldData {
+		for _, f := range zipReader.File {
+			normName := strings.ReplaceAll(f.Name, "\\", "/")
+			if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+				continue
+			}
+			base := strings.ToLower(filepath.Base(normName))
+			if base == "levelname.txt" || base == "world_icon.jpeg" || base == "world_icon.png" || strings.Contains(strings.ToLower(normName), "/db/") || strings.HasPrefix(strings.ToLower(normName), "db/") {
+				dir := filepath.Dir(normName)
+				if strings.Contains(strings.ToLower(normName), "/db/") || strings.HasPrefix(strings.ToLower(normName), "db/") {
+					idx := strings.Index(strings.ToLower(normName), "db/")
+					dir = normName[:idx]
+				}
+				if dir == "." || dir == "/" || dir == "" {
+					worldPrefix = ""
+				} else {
+					worldPrefix = strings.TrimSuffix(dir, "/") + "/"
+				}
+				foundWorldData = true
+				break
+			}
+		}
+	}
+
+	if !foundWorldData {
+		return nil, fmt.Errorf("archive does not contain valid Bedrock world data (level.dat or world template)")
+	}
+
+	// 3. Determine world name
+	worldName := ""
+
+	// Check levelname.txt in the archive first
+	for _, f := range zipReader.File {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+		expectedName := worldPrefix + "levelname.txt"
+		if worldPrefix == "" && strings.EqualFold(filepath.Base(normName), "levelname.txt") {
+			expectedName = normName
+		}
+		if strings.EqualFold(normName, expectedName) {
+			rc, err := f.Open()
+			if err == nil {
+				txtData, _ := io.ReadAll(io.LimitReader(rc, 1024))
+				rc.Close()
+				cleanTxt := strings.TrimSpace(string(txtData))
+				if cleanTxt != "" {
+					worldName = cleanTxt
+					break
+				}
+			}
+		}
+	}
+
+	// If no levelname.txt, try template manifest header name
+	if worldName == "" && templateManifest != nil && templateManifest.Header.Name != "" {
+		worldName = templateManifest.Header.Name
+	}
+
+	// If no manifest header name, try defaultName
+	if worldName == "" && defaultName != "" {
+		worldName = defaultName
+	}
+
+	// If no defaultName, try enclosing folder name
+	if worldName == "" && worldPrefix != "" {
+		trimmedPrefix := strings.Trim(worldPrefix, "/")
+		baseDir := filepath.Base(trimmedPrefix)
+		if !strings.EqualFold(baseDir, "worlds") && !strings.EqualFold(baseDir, "world") && !strings.EqualFold(baseDir, "world_template") && baseDir != "." && baseDir != "" {
+			worldName = baseDir
+		}
+	}
+
+	if worldName == "" {
+		worldName = "Bedrock level"
+	}
+	cleanWorldName := SanitizeWorldName(worldName)
+
+	// 4. Target world directory
+	worldsDir := filepath.Join(serverDir, "worlds")
+	targetWorldDir := filepath.Join(worldsDir, cleanWorldName)
+	worldsDirClean := filepath.Clean(worldsDir) + string(filepath.Separator)
+	if !strings.HasPrefix(filepath.Clean(targetWorldDir)+string(filepath.Separator), worldsDirClean) {
+		return nil, fmt.Errorf("invalid world name: path traversal attempt detected")
+	}
+
+	// Remove any existing world files at target to prevent stale LevelDB database corruption
+	_ = os.RemoveAll(targetWorldDir)
+	if err := os.MkdirAll(targetWorldDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create world directory: %w", err)
+	}
+
+	// 5. Extract all files into targetWorldDir
+	for _, f := range zipReader.File {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+
+		var rel string
+		if worldPrefix != "" && strings.HasPrefix(normName, worldPrefix) {
+			rel = strings.TrimPrefix(normName, worldPrefix)
+		} else if strings.HasPrefix(normName, "behavior_packs/") || strings.HasPrefix(normName, "resource_packs/") {
+			rel = normName
+		} else if worldPrefix == "" {
+			rel = normName
+		} else {
+			continue
+		}
+
+		cleanedRel := filepath.Clean(rel)
+		if cleanedRel == "." || cleanedRel == "" || strings.HasPrefix(cleanedRel, "..") || filepath.IsAbs(cleanedRel) {
+			continue
+		}
+
+		destPath := filepath.Join(targetWorldDir, cleanedRel)
+		targetWorldClean := filepath.Clean(targetWorldDir) + string(filepath.Separator)
+		if !strings.HasPrefix(filepath.Clean(destPath)+string(filepath.Separator), targetWorldClean) && filepath.Clean(destPath) != filepath.Clean(targetWorldDir) {
+			continue
+		}
+
+		if f.FileInfo().IsDir() {
+			_ = os.MkdirAll(destPath, 0755)
+			continue
+		}
+
+		_ = os.MkdirAll(filepath.Dir(destPath), 0755)
+		outFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		if err != nil {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			continue
+		}
+		_, _ = io.Copy(outFile, rc)
+		rc.Close()
+		outFile.Close()
+	}
+
+	// Ensure levelname.txt exists
+	levelNameTxtPath := filepath.Join(targetWorldDir, "levelname.txt")
+	if _, err := os.Stat(levelNameTxtPath); os.IsNotExist(err) {
+		_ = os.WriteFile(levelNameTxtPath, []byte(cleanWorldName+"\n"), 0644)
+	}
+
+	// 6. Scan targetWorldDir for bundled behavior_packs and resource_packs
+	var bundledPacks []InstalledPack
+	hasResource := false
+	for _, packType := range []string{"behavior", "resource"} {
+		worldPacksDir := filepath.Join(targetWorldDir, packType+"_packs")
+		entries, err := os.ReadDir(worldPacksDir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			packSrcDir := filepath.Join(worldPacksDir, entry.Name())
+			mfPath := filepath.Join(packSrcDir, "manifest.json")
+			mfData, err := os.ReadFile(mfPath)
+			if err != nil {
+				continue
+			}
+			mf, _, err := parseManifest(mfData)
+			if err != nil || mf.Header.UUID == "" {
+				continue
+			}
+			detectedType := detectPackType(mf)
+			folderName := sanitizePackFolderName(mf.Header.Name)
+			if folderName == "" {
+				folderName = sanitizePackFolderName(entry.Name())
+			}
+
+			serverPackDir := filepath.Join(serverDir, detectedType+"_packs", folderName)
+			_ = copyDirRecursive(packSrcDir, serverPackDir)
+			_ = os.WriteFile(filepath.Join(serverPackDir, bsmInstalledMarker), []byte("installed-by-bsm\n"), 0644)
+
+			// Ensure active in world configuration
+			refs, _ := GetWorldPackRefs(serverDir, cleanWorldName, detectedType)
+			found := false
+			for _, r := range refs {
+				if strings.EqualFold(r.PackID, mf.Header.UUID) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				refs = append(refs, WorldPackRef{
+					PackID:  mf.Header.UUID,
+					Version: mf.Header.Version,
+				})
+				_ = SaveWorldPackRefs(serverDir, cleanWorldName, detectedType, refs)
+			}
+
+			// Ensure mirrored into world packs dir under normalized folderName
+			_ = copyDirRecursive(serverPackDir, filepath.Join(targetWorldDir, detectedType+"_packs", folderName))
+
+			if detectedType == "resource" {
+				hasResource = true
+			}
+
+			verStr := fmt.Sprintf("%d.%d.%d", mf.Header.Version[0], mf.Header.Version[1], mf.Header.Version[2])
+			name := mf.Header.Name
+			if name == "" {
+				name = folderName
+			}
+			bundledPacks = append(bundledPacks, InstalledPack{
+				Type:        detectedType,
+				Folder:      folderName,
+				Name:        name,
+				Description: mf.Header.Description,
+				UUID:        mf.Header.UUID,
+				Version:     verStr,
+				VersionInts: mf.Header.Version,
+				Active:      true,
+			})
+		}
+	}
+
+	// 7. Check for nested .mcpack or .mcaddon archives inside the archive
+	for _, f := range zipReader.File {
+		normName := strings.ReplaceAll(f.Name, "\\", "/")
+		if strings.HasPrefix(normName, "__MACOSX/") || strings.HasPrefix(filepath.Base(normName), "._") {
+			continue
+		}
+		lowerName := strings.ToLower(normName)
+		if strings.HasSuffix(lowerName, ".mcpack") || strings.HasSuffix(lowerName, ".mcaddon") {
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			packBytes, _ := io.ReadAll(rc)
+			rc.Close()
+			if len(packBytes) > 0 {
+				subPacks, err := InstallAllPacks(serverDir, bytes.NewReader(packBytes), int64(len(packBytes)))
+				if err == nil {
+					for _, sp := range subPacks {
+						if sp.Type == "behavior" || sp.Type == "resource" {
+							_, _ = setPackActiveInternal(serverDir, sp.Type, sp.Folder, true, true)
+							bundledPacks = append(bundledPacks, sp)
+							if sp.Type == "resource" {
+								hasResource = true
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 8. Update level-name in server.properties and invalidate cache
+	_ = UpdateActiveLevelNameProp(serverDir, cleanWorldName)
+
+	if hasResource {
+		_ = updateTexturePackRequiredProp(serverDir, true)
+	}
+
+	invalidateKnownPacksCache(serverDir)
+
+	worldPack := InstalledPack{
+		Type:        "world",
+		Folder:      cleanWorldName,
+		Name:        cleanWorldName,
+		Description: fmt.Sprintf("Bedrock world map installed to worlds/%s", cleanWorldName),
+		UUID:        cleanWorldName,
+		Active:      true,
+	}
+
+	return append([]InstalledPack{worldPack}, bundledPacks...), nil
+}
+
+// InstallAllPacks unzips an archive and extracts all behavior packs, resource packs, or world maps found within it.
+func InstallAllPacks(serverDir string, r io.ReaderAt, size int64, defaultName ...string) ([]InstalledPack, error) {
 	zipReader, err := zip.NewReader(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("invalid archive: %w", err)
+	}
+
+	if isWorldArchive(zipReader) {
+		name := ""
+		if len(defaultName) > 0 {
+			name = defaultName[0]
+		}
+		return InstallWorldArchive(serverDir, r, size, name)
 	}
 
 	type manifestEntry struct {
@@ -714,9 +1175,9 @@ func InstallAllPacks(serverDir string, r io.ReaderAt, size int64) ([]InstalledPa
 	return installedPacks, nil
 }
 
-// InstallPack unzips a .mcpack, .mcaddon, or .zip into the appropriate pack directory.
-func InstallPack(serverDir string, r io.ReaderAt, size int64) (*InstalledPack, error) {
-	packs, err := InstallAllPacks(serverDir, r, size)
+// InstallPack unzips a .mcpack, .mcaddon, .mcworld, or .zip into the appropriate server directory.
+func InstallPack(serverDir string, r io.ReaderAt, size int64, defaultName ...string) (*InstalledPack, error) {
+	packs, err := InstallAllPacks(serverDir, r, size, defaultName...)
 	if err != nil {
 		return nil, err
 	}
@@ -1031,8 +1492,8 @@ func UpdateAddonConfig(serverDir string, texturePackRequired bool) error {
 	return nil
 }
 
-// InstallAllFromURL downloads a pack archive from a direct URL and installs all packs inside it.
-func InstallAllFromURL(ctx context.Context, serverDir, downloadURL string) ([]InstalledPack, error) {
+// InstallAllFromURL downloads a pack or world archive from a direct URL and installs all packs/worlds inside it.
+func InstallAllFromURL(ctx context.Context, serverDir, downloadURL string, defaultName ...string) ([]InstalledPack, error) {
 	parsed, err := url.Parse(downloadURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return nil, fmt.Errorf("invalid URL: must be http or https")
@@ -1045,7 +1506,7 @@ func InstallAllFromURL(ctx context.Context, serverDir, downloadURL string) ([]In
 	req.Header.Set("User-Agent", "Bedrock-Server-Manager/1.0")
 
 	client := &http.Client{
-		Timeout: 60 * time.Second,
+		Timeout: 300 * time.Second,
 	}
 
 	resp, err := client.Do(req)
@@ -1065,8 +1526,8 @@ func InstallAllFromURL(ctx context.Context, serverDir, downloadURL string) ([]In
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
-	// Max 100MB limit
-	size, err := io.Copy(tempFile, io.LimitReader(resp.Body, 100<<20))
+	// Max 500MB limit to accommodate rich world maps and textures
+	size, err := io.Copy(tempFile, io.LimitReader(resp.Body, 500<<20))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read download: %w", err)
 	}
@@ -1074,12 +1535,12 @@ func InstallAllFromURL(ctx context.Context, serverDir, downloadURL string) ([]In
 		return nil, fmt.Errorf("downloaded file is empty")
 	}
 
-	return InstallAllPacks(serverDir, tempFile, size)
+	return InstallAllPacks(serverDir, tempFile, size, defaultName...)
 }
 
-// InstallFromURL downloads a pack archive from a direct URL and installs it.
-func InstallFromURL(ctx context.Context, serverDir, downloadURL string) (*InstalledPack, error) {
-	packs, err := InstallAllFromURL(ctx, serverDir, downloadURL)
+// InstallFromURL downloads a pack or world archive from a direct URL and installs it.
+func InstallFromURL(ctx context.Context, serverDir, downloadURL string, defaultName ...string) (*InstalledPack, error) {
+	packs, err := InstallAllFromURL(ctx, serverDir, downloadURL, defaultName...)
 	if err != nil {
 		return nil, err
 	}

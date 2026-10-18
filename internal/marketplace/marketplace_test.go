@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSearchCurseForge(t *testing.T) {
@@ -192,5 +193,89 @@ func TestGetCurseForgeModDetails(t *testing.T) {
 	}
 	if details.WikiURL != "https://wiki.example.com" {
 		t.Errorf("expected WikiURL 'https://wiki.example.com', got '%s'", details.WikiURL)
+	}
+}
+
+func TestSearchCurseForgeWorldCategory(t *testing.T) {
+	// Clear cache to ensure fresh categories fetched
+	cfCategoriesMu.Lock()
+	cfCategoriesCache = nil
+	cfCategoriesExp = time.Time{}
+	cfCategoriesMu.Unlock()
+
+	var requestedClassID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "test-cf-key" {
+			http.Error(w, `{"error": "Unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/categories") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{"id": 4559, "gameId": 78022, "name": "Addons", "slug": "addons", "isClass": true},
+					{"id": 44, "gameId": 78022, "name": "Worlds", "slug": "worlds", "isClass": true}
+				]
+			}`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "/mods/search") {
+			requestedClassID = r.URL.Query().Get("classId")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"data": [
+					{
+						"id": 99901,
+						"name": "Skyblock Adventure",
+						"summary": "Classic survival map",
+						"links": {"websiteUrl": "https://curseforge.com/mc/99901"},
+						"downloadCount": 54321,
+						"authors": [{"name": "MapMaker"}],
+						"categories": [{"id": 44, "name": "Worlds"}],
+						"latestFiles": [
+							{
+								"id": 888,
+								"displayName": "Skyblock v1.0",
+								"fileName": "skyblock.mcworld",
+								"downloadUrl": "https://cdn.example.com/skyblock.mcworld"
+							}
+						]
+					}
+				],
+				"pagination": {
+					"index": 0,
+					"pageSize": 20,
+					"resultCount": 1,
+					"totalCount": 1
+				}
+			}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	origCFURL := curseForgeBaseURL
+	curseForgeBaseURL = server.URL
+	defer func() { curseForgeBaseURL = origCFURL }()
+
+	client := server.Client()
+
+	res, err := SearchCurseForge(context.Background(), client, "test-cf-key", "skyblock", "world", 1, 10)
+	if err != nil {
+		t.Fatalf("SearchCurseForge world category failed: %v", err)
+	}
+
+	if requestedClassID != "44" {
+		t.Fatalf("expected classId 44 for Worlds category, got %s", requestedClassID)
+	}
+	if len(res.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(res.Items))
+	}
+	if res.Items[0].Type != "world" {
+		t.Fatalf("expected item type 'world', got %s", res.Items[0].Type)
+	}
+	if res.Items[0].FileName != "skyblock.mcworld" {
+		t.Fatalf("expected fileName skyblock.mcworld, got %s", res.Items[0].FileName)
 	}
 }

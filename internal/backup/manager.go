@@ -1,7 +1,6 @@
 package backup
 
 import (
-	"archive/zip"
 	"context"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/addon"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 )
@@ -68,88 +68,8 @@ func ImportWorld(serverDir, worldName string, fileReader io.ReaderAt, size int64
 		return fmt.Errorf("invalid world name: path traversal attempt")
 	}
 
-	zipReader, err := zip.NewReader(fileReader, size)
-	if err != nil {
-		return fmt.Errorf("invalid world archive: %w", err)
-	}
-
-	targetDir := filepath.Join(serverDir, "worlds", cleanWorldName)
-	worldsDirClean := filepath.Clean(filepath.Join(serverDir, "worlds")) + string(filepath.Separator)
-	if !strings.HasPrefix(filepath.Clean(targetDir)+string(filepath.Separator), worldsDirClean) {
-		return fmt.Errorf("path traversal attempt detected")
-	}
-
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		return err
-	}
-
-	// Detect if files are wrapped in an enclosing folder (e.g. MyWorld/level.dat)
-	var rootPrefix string
-	for _, f := range zipReader.File {
-		cleaned := filepath.Clean(f.Name)
-		if strings.EqualFold(filepath.Base(cleaned), "level.dat") {
-			dir := filepath.Dir(cleaned)
-			if dir != "." && dir != "/" && dir != "" {
-				rootPrefix = dir + "/"
-			}
-			break
-		}
-	}
-
-	for _, f := range zipReader.File {
-		cleaned := filepath.Clean(f.Name)
-		if strings.HasPrefix(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
-			continue
-		}
-
-		if rootPrefix != "" {
-			if strings.HasPrefix(f.Name, rootPrefix) {
-				cleaned = filepath.Clean(strings.TrimPrefix(f.Name, rootPrefix))
-			} else {
-				continue
-			}
-		}
-		if cleaned == "" || cleaned == "." {
-			continue
-		}
-
-		target := filepath.Join(targetDir, cleaned)
-		targetDirClean := filepath.Clean(targetDir) + string(filepath.Separator)
-		if !strings.HasPrefix(filepath.Clean(target), targetDirClean) {
-			continue // Zip Slip path traversal attempt blocked
-		}
-
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, f.Mode()); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return err
-		}
-
-		outFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-		if err != nil {
-			return err
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			outFile.Close()
-			return err
-		}
-
-		_, err = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	_, err := addon.InstallWorldArchive(serverDir, fileReader, size, cleanWorldName)
+	return err
 }
 
 // ResetWorld deletes all existing world data (the worlds/ directory and any pre-restore world backups)

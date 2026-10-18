@@ -2432,6 +2432,43 @@ func TestAddonURLAndMarketplaceAPIs(t *testing.T) {
 	if len(packs) != 1 || packs[0].Name != "Admin URL Pack" {
 		t.Fatalf("unexpected packs after URL install: %+v", packs)
 	}
+
+	// 8. Test marketplace install with a map archive
+	mapBuf := new(bytes.Buffer)
+	mapZw := zip.NewWriter(mapBuf)
+	mw1, _ := mapZw.Create("level.dat")
+	_, _ = mw1.Write([]byte("fake-world-level"))
+	mw2, _ := mapZw.Create("levelname.txt")
+	_, _ = mw2.Write([]byte("Marketplace Arena\n"))
+	mw3, _ := mapZw.Create("db/CURRENT")
+	_, _ = mw3.Write([]byte("fake-world-db"))
+	_ = mapZw.Close()
+
+	mockMapServer := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Header().Set("Content-Type", "application/zip")
+		_, _ = rw.Write(mapBuf.Bytes())
+	}))
+	defer mockMapServer.Close()
+
+	req = httptest.NewRequest("POST", "/api/servers/addon-srv-1/addons/marketplace/install", strings.NewReader(fmt.Sprintf(`{"provider":"curseforge","item_id":"123","download_url":"%s/arena.mcworld","item_name":"Marketplace Arena"}`, mockMapServer.URL)))
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for marketplace map install, got %d: %s", w.Code, w.Body.String())
+	}
+	var installedMap addon.InstalledPack
+	_ = json.Unmarshal(w.Body.Bytes(), &installedMap)
+	if installedMap.Type != "world" || installedMap.Name != "Marketplace Arena" {
+		t.Fatalf("unexpected installed map response: %+v", installedMap)
+	}
+
+	// Verify server.properties has level-name=Marketplace Arena
+	activeLevel := addon.GetActiveLevelName(filepath.Join("data_test", "servers", "addon-srv-1"))
+	if activeLevel != "Marketplace Arena" {
+		t.Fatalf("expected active level to be 'Marketplace Arena', got '%s'", activeLevel)
+	}
 }
 
 func TestResourceStatusAPI(t *testing.T) {

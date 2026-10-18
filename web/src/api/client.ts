@@ -718,6 +718,7 @@ class APIClient {
       item_id: string;
       file_id?: number;
       download_url?: string;
+      item_name?: string;
     }
   ): Promise<AddonPack> {
     return this.request(`/api/servers/${serverId}/addons/marketplace/install`, {

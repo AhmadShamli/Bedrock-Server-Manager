@@ -611,3 +611,257 @@ func TestTolerantManifestAndForcePropertiesSync(t *testing.T) {
 	}
 }
 
+func TestInstallWorldArchiveDirect(t *testing.T) {
+	serverDir := t.TempDir()
+
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	w1, _ := zw.Create("level.dat")
+	_, _ = w1.Write([]byte("fake-level-data"))
+	w2, _ := zw.Create("levelname.txt")
+	_, _ = w2.Write([]byte("Castle Siege\n"))
+	w3, _ := zw.Create("db/CURRENT")
+	_, _ = w3.Write([]byte("fake-db-current"))
+	w4, _ := zw.Create("world_icon.jpeg")
+	_, _ = w4.Write([]byte("fake-icon"))
+	_ = zw.Close()
+
+	reader := bytes.NewReader(buf.Bytes())
+	pack, err := InstallPack(serverDir, reader, int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("InstallPack for world failed: %v", err)
+	}
+
+	if pack.Type != "world" {
+		t.Fatalf("expected pack type 'world', got %s", pack.Type)
+	}
+	if pack.Name != "Castle Siege" {
+		t.Fatalf("expected world name 'Castle Siege', got %s", pack.Name)
+	}
+
+	// Verify world files exist under worlds/Castle Siege
+	targetDir := filepath.Join(serverDir, "worlds", "Castle Siege")
+	if _, err := os.Stat(filepath.Join(targetDir, "level.dat")); err != nil {
+		t.Fatalf("expected level.dat in world directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "db", "CURRENT")); err != nil {
+		t.Fatalf("expected db/CURRENT in world directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "world_icon.jpeg")); err != nil {
+		t.Fatalf("expected world_icon.jpeg in world directory: %v", err)
+	}
+
+	// Verify active level name in server properties is updated
+	activeLevel := GetActiveLevelName(serverDir)
+	if activeLevel != "Castle Siege" {
+		t.Fatalf("expected active level name 'Castle Siege', got '%s'", activeLevel)
+	}
+}
+
+func TestInstallWorldArchiveWithBundledPacks(t *testing.T) {
+	serverDir := t.TempDir()
+
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	w1, _ := zw.Create("level.dat")
+	_, _ = w1.Write([]byte("fake-level-data"))
+	w2, _ := zw.Create("levelname.txt")
+	_, _ = w2.Write([]byte("Parkour World\n"))
+	w3, _ := zw.Create("db/CURRENT")
+	_, _ = w3.Write([]byte("fake-db-current"))
+
+	bpManifest := `{
+		"format_version": 2,
+		"header": {
+			"name": "Parkour BP",
+			"description": "Parkour custom scripts",
+			"uuid": "aaaaaaaa-1111-2222-3333-444444444444",
+			"version": [1, 0, 0]
+		},
+		"modules": [{"type": "data", "uuid": "bbbbbbbb-1111-2222-3333-444444444444"}]
+	}`
+	w4, _ := zw.Create("behavior_packs/parkour_bp/manifest.json")
+	_, _ = w4.Write([]byte(bpManifest))
+
+	rpManifest := `{
+		"format_version": 2,
+		"header": {
+			"name": "Parkour RP",
+			"description": "Parkour custom textures",
+			"uuid": "cccccccc-1111-2222-3333-444444444444",
+			"version": [1, 0, 0]
+		},
+		"modules": [{"type": "resources", "uuid": "dddddddd-1111-2222-3333-444444444444"}]
+	}`
+	w5, _ := zw.Create("resource_packs/parkour_rp/manifest.json")
+	_, _ = w5.Write([]byte(rpManifest))
+	_ = zw.Close()
+
+	reader := bytes.NewReader(buf.Bytes())
+	packs, err := InstallAllPacks(serverDir, reader, int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("InstallAllPacks with bundled packs failed: %v", err)
+	}
+
+	if len(packs) < 3 {
+		t.Fatalf("expected at least 3 installed packs (world, BP, RP), got %d: %+v", len(packs), packs)
+	}
+
+	if packs[0].Type != "world" || packs[0].Name != "Parkour World" {
+		t.Errorf("expected first pack to be world 'Parkour World', got %+v", packs[0])
+	}
+
+	// Verify BP is installed to <serverDir>/behavior_packs with .bsm_installed
+	bpServerDir := filepath.Join(serverDir, "behavior_packs", "Parkour_BP")
+	if _, err := os.Stat(filepath.Join(bpServerDir, bsmInstalledMarker)); err != nil {
+		t.Fatalf("expected .bsm_installed marker in server behavior_packs: %v", err)
+	}
+
+	// Verify RP is installed to <serverDir>/resource_packs with .bsm_installed
+	rpServerDir := filepath.Join(serverDir, "resource_packs", "Parkour_RP")
+	if _, err := os.Stat(filepath.Join(rpServerDir, bsmInstalledMarker)); err != nil {
+		t.Fatalf("expected .bsm_installed marker in server resource_packs: %v", err)
+	}
+
+	// Verify active refs in worlds/Parkour World
+	bpRefs, err := GetWorldPackRefs(serverDir, "Parkour World", "behavior")
+	if err != nil || len(bpRefs) != 1 || bpRefs[0].PackID != "aaaaaaaa-1111-2222-3333-444444444444" {
+		t.Fatalf("expected BP ref in world_behavior_packs.json: %+v, err: %v", bpRefs, err)
+	}
+	rpRefs, err := GetWorldPackRefs(serverDir, "Parkour World", "resource")
+	if err != nil || len(rpRefs) != 1 || rpRefs[0].PackID != "cccccccc-1111-2222-3333-444444444444" {
+		t.Fatalf("expected RP ref in world_resource_packs.json: %+v, err: %v", rpRefs, err)
+	}
+
+	// Verify texturepack-required was enabled
+	cfg := GetAddonConfig(serverDir)
+	if !cfg.TexturePackRequired {
+		t.Errorf("expected texturepack_required to be true when map contains resource packs")
+	}
+	if cfg.ActiveWorld != "Parkour World" {
+		t.Errorf("expected active world to be 'Parkour World', got '%s'", cfg.ActiveWorld)
+	}
+}
+
+func TestInstallWorldArchiveNestedMCWorld(t *testing.T) {
+	serverDir := t.TempDir()
+
+	// 1. Create inner .mcworld
+	innerBuf := new(bytes.Buffer)
+	innerZw := zip.NewWriter(innerBuf)
+	iw1, _ := innerZw.Create("level.dat")
+	_, _ = iw1.Write([]byte("fake-inner-level"))
+	iw2, _ := innerZw.Create("levelname.txt")
+	_, _ = iw2.Write([]byte("Skyblock Extreme\n"))
+	iw3, _ := innerZw.Create("db/CURRENT")
+	_, _ = iw3.Write([]byte("fake-db"))
+	_ = innerZw.Close()
+
+	// 2. Wrap inside outer .zip
+	outerBuf := new(bytes.Buffer)
+	outerZw := zip.NewWriter(outerBuf)
+	ow, _ := outerZw.Create("skyblock_extreme.mcworld")
+	_, _ = ow.Write(innerBuf.Bytes())
+	_ = outerZw.Close()
+
+	reader := bytes.NewReader(outerBuf.Bytes())
+	pack, err := InstallPack(serverDir, reader, int64(outerBuf.Len()))
+	if err != nil {
+		t.Fatalf("InstallPack for nested .mcworld failed: %v", err)
+	}
+
+	if pack.Type != "world" {
+		t.Fatalf("expected pack type 'world', got %s", pack.Type)
+	}
+	if pack.Name != "Skyblock Extreme" {
+		t.Fatalf("expected world name 'Skyblock Extreme', got %s", pack.Name)
+	}
+
+	// Verify extracted to disk
+	levelPath := filepath.Join(serverDir, "worlds", "Skyblock Extreme", "level.dat")
+	if _, err := os.Stat(levelPath); err != nil {
+		t.Fatalf("expected level.dat at worlds/Skyblock Extreme: %v", err)
+	}
+}
+
+func TestInstallWorldArchiveTemplate(t *testing.T) {
+	serverDir := t.TempDir()
+
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	templateManifest := `{
+		"format_version": 2,
+		"header": {
+			"name": "Dungeon Crawler",
+			"description": "World template adventure",
+			"uuid": "99999999-8888-7777-6666-555555555555",
+			"version": [1, 0, 0]
+		},
+		"modules": [
+			{
+				"type": "world_template",
+				"uuid": "11112222-3333-4444-5555-666677778888",
+				"version": [1, 0, 0]
+			}
+		]
+	}`
+	w1, _ := zw.Create("manifest.json")
+	_, _ = w1.Write([]byte(templateManifest))
+	w2, _ := zw.Create("level.dat")
+	_, _ = w2.Write([]byte("fake-template-level"))
+	w3, _ := zw.Create("db/CURRENT")
+	_, _ = w3.Write([]byte("fake-template-db"))
+	_ = zw.Close()
+
+	reader := bytes.NewReader(buf.Bytes())
+	pack, err := InstallPack(serverDir, reader, int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("InstallPack world template failed: %v", err)
+	}
+
+	if pack.Type != "world" {
+		t.Fatalf("expected world_template to be installed as 'world', got '%s'", pack.Type)
+	}
+	if pack.Name != "Dungeon Crawler" {
+		t.Fatalf("expected name 'Dungeon Crawler', got '%s'", pack.Name)
+	}
+
+	// Ensure NOT placed in resource_packs/
+	rpDir := filepath.Join(serverDir, "resource_packs", "Dungeon_Crawler")
+	if _, err := os.Stat(rpDir); err == nil {
+		t.Fatalf("world_template should NOT be extracted to resource_packs")
+	}
+
+	// Verify placed in worlds/Dungeon Crawler
+	worldLevel := filepath.Join(serverDir, "worlds", "Dungeon Crawler", "level.dat")
+	if _, err := os.Stat(worldLevel); err != nil {
+		t.Fatalf("expected level.dat in worlds/Dungeon Crawler: %v", err)
+	}
+}
+
+func TestInstallWorldArchiveTraversal(t *testing.T) {
+	serverDir := t.TempDir()
+
+	buf := new(bytes.Buffer)
+	zw := zip.NewWriter(buf)
+
+	w1, _ := zw.Create("../../etc/passwd")
+	_, _ = w1.Write([]byte("root:x:0:0"))
+	w2, _ := zw.Create("level.dat")
+	_, _ = w2.Write([]byte("fake-level"))
+	_ = zw.Close()
+
+	reader := bytes.NewReader(buf.Bytes())
+	_, _ = InstallPack(serverDir, reader, int64(buf.Len()))
+
+	// Ensure file was not written outside worlds
+	badFile := filepath.Join(serverDir, "..", "etc", "passwd")
+	if _, err := os.Stat(badFile); err == nil {
+		t.Fatalf("path traversal file was written: %s", badFile)
+	}
+}
+
+
