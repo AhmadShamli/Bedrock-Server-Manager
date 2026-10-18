@@ -71,6 +71,11 @@ CREATE TABLE IF NOT EXISTS servers (
     game_server_address TEXT NOT NULL DEFAULT '',
     network_mode TEXT NOT NULL DEFAULT 'host',
     idle_timeout_minutes INTEGER NOT NULL DEFAULT 0,
+    engine TEXT NOT NULL DEFAULT 'docker',
+    bds_version TEXT NOT NULL DEFAULT 'latest',
+    update_policy TEXT NOT NULL DEFAULT 'manual',
+    installed_bds_version TEXT NOT NULL DEFAULT '',
+    previous_bds_version TEXT NOT NULL DEFAULT '',
     owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL

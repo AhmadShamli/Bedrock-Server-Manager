@@ -34,6 +34,7 @@ PLATFORMS=(
   "linux/amd64"
   "linux/arm64"
   "linux/arm/7"
+  "windows/amd64"
 )
 
 for PLATFORM in "${PLATFORMS[@]}"; do
@@ -72,6 +73,9 @@ for PLATFORM in "${PLATFORMS[@]}"; do
   if [ -f "${ROOT_DIR}/LICENSE" ]; then
     cp "${ROOT_DIR}/LICENSE" "${BUILD_DIR}/"
   fi
+  if [ "${OS}" = "windows" ] && [ -f "${ROOT_DIR}/scripts/install.ps1" ]; then
+    cp "${ROOT_DIR}/scripts/install.ps1" "${BUILD_DIR}/"
+  fi
   
   (
     cd "${DIST_DIR}"
@@ -86,7 +90,7 @@ done
 
 (
   cd "${DIST_DIR}"
-  sha256sum bedrock-server-manager-*.tar.gz > checksums.txt 2>/dev/null || true
+  sha256sum bedrock-server-manager-*.tar.gz bedrock-server-manager-*.zip > checksums.txt 2>/dev/null || true
 )
 
 echo "==> Build completed successfully! Generated release artifacts in ${DIST_DIR}:"

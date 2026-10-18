@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,14 +47,9 @@ func CreateHotBackup(
 
 	// Hot backup LevelDB safety protocol
 	isRunning := srv.Status == models.ServerStatusRunning && eng != nil
+	var snapshotFiles map[string]int64
 	if isRunning {
-		// 1. Tell Bedrock to freeze writes and hold LevelDB snapshots
-		_ = eng.SendConsoleCommand(ctx, srv, "save hold")
-		time.Sleep(500 * time.Millisecond)
-
-		// 2. Query Bedrock until snapshot is staged
-		_ = eng.SendConsoleCommand(ctx, srv, "save query")
-		time.Sleep(500 * time.Millisecond)
+		snapshotFiles = waitForBedrockSnapshot(ctx, srv, eng)
 	}
 
 	// Always resume Bedrock saving afterwards
@@ -64,7 +60,7 @@ func CreateHotBackup(
 	}()
 
 	// 3. Zip worlds directory into destination zip
-	if err := zipDirectory(worldsDir, destZipPath); err != nil {
+	if err := zipDirectory(worldsDir, destZipPath, snapshotFiles); err != nil {
 		_ = os.Remove(destZipPath)
 		return nil, fmt.Errorf("failed to compress world archive: %w", err)
 	}
@@ -94,8 +90,61 @@ func CreateHotBackup(
 	return backupRecord, nil
 }
 
-// zipDirectory recursively compresses srcDir into a zip archive at destZipPath.
-func zipDirectory(srcDir, destZipPath string) error {
+// waitForBedrockSnapshot issues save hold and queries until snapshot is staged.
+func waitForBedrockSnapshot(ctx context.Context, srv *models.Server, eng engine.ServerEngine) map[string]int64 {
+	logCh, unsub := eng.SubscribeLogs(srv.ID)
+	defer unsub()
+
+	_ = eng.SendConsoleCommand(ctx, srv, "save hold")
+
+	ticker := time.NewTicker(400 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.After(8 * time.Second)
+
+	_ = eng.SendConsoleCommand(ctx, srv, "save query")
+
+	snapshot := make(map[string]int64)
+	ready := false
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timeout:
+			return snapshot // Return whatever was discovered or empty fallback
+		case line := <-logCh:
+			clean := strings.TrimSpace(line)
+			if strings.Contains(clean, "Data saved. Files are now ready to be copied") {
+				ready = true
+				continue
+			}
+			if ready {
+				// Parse file list: e.g. "world/db/000005.ldb:12345, world/level.dat:5678"
+				parts := strings.Split(clean, ",")
+				for _, p := range parts {
+					p = strings.TrimSpace(p)
+					if idx := strings.LastIndex(p, ":"); idx > 0 {
+						fn := strings.TrimSpace(p[:idx])
+						lenStr := strings.TrimSpace(p[idx+1:])
+						if l, err := strconv.ParseInt(lenStr, 10, 64); err == nil && fn != "" {
+							snapshot[filepath.ToSlash(filepath.Clean(fn))] = l
+						}
+					}
+				}
+				if len(snapshot) > 0 {
+					return snapshot
+				}
+			}
+		case <-ticker.C:
+			if !ready {
+				_ = eng.SendConsoleCommand(ctx, srv, "save query")
+			}
+		}
+	}
+}
+
+// zipDirectory recursively compresses srcDir into a zip archive at destZipPath, skipping LevelDB LOCK files.
+func zipDirectory(srcDir, destZipPath string, snapshot map[string]int64) error {
 	zipFile, err := os.Create(destZipPath)
 	if err != nil {
 		return err
@@ -117,6 +166,11 @@ func zipDirectory(srcDir, destZipPath string) error {
 
 		if relPath == "." {
 			return nil
+		}
+
+		baseName := filepath.Base(path)
+		if baseName == "LOCK" || strings.HasSuffix(baseName, ".lock") {
+			return nil // Skip LevelDB LOCK file to prevent Windows sharing violations
 		}
 
 		header, err := zip.FileInfoHeader(info)
@@ -147,7 +201,20 @@ func zipDirectory(srcDir, destZipPath string) error {
 			}
 			defer file.Close()
 
-			_, err = io.Copy(writer, file)
+			var reader io.Reader = file
+			cleanRel := filepath.ToSlash(relPath)
+			if maxLen, ok := snapshot[cleanRel]; ok && maxLen >= 0 {
+				reader = io.LimitReader(file, maxLen)
+			} else {
+				for snapPath, snapLen := range snapshot {
+					if strings.HasSuffix(cleanRel, snapPath) && snapLen >= 0 {
+						reader = io.LimitReader(file, snapLen)
+						break
+					}
+				}
+			}
+
+			_, err = io.Copy(writer, reader)
 			return err
 		}()
 	})

@@ -7,6 +7,7 @@ import (
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/bds"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
@@ -35,6 +36,8 @@ type RouterOptions struct {
 	TelemetryCollector *telemetry.TelemetryCollector
 	MetricsDB          *database.MetricsDB
 	ResourceMonitor    *resourcemonitor.ResourceMonitor
+	BDSCache           *bds.CacheManager
+	BDSResolver        *bds.Resolver
 }
 
 // NewRouter constructs and configures the Chi router.
@@ -47,7 +50,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 	mw := NewMiddleware(opts.DB, opts.IPResolver, opts.RateLimiter, opts.JWTSecret)
 	authHandler := NewAuthHandler(opts.DB, opts.RateLimiter, opts.JWTSecret)
-	systemHandler := NewSystemHandler(opts.DB)
+	systemHandler := NewSystemHandler(opts.DB, opts.DataDir, opts.BDSCache, opts.BDSResolver)
 	serverHandler := NewServerHandler(opts.DB, opts.Engine, opts.PortAllocator, opts.DataDir, opts.TelemetryCollector, opts.MetricsDB, opts.PlayerManager)
 	if opts.ResourceMonitor != nil {
 		serverHandler.SetResourceMonitor(opts.ResourceMonitor)
@@ -58,6 +61,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	backupHandler := NewBackupHandler(opts.DB, opts.Engine, opts.DataDir)
 	backupHandler.SetServerHandler(serverHandler)
 	addonHandler := NewAddonHandler(opts.DB, opts.DataDir)
+	addonHandler.SetServerHandler(serverHandler)
 	taskHandler := NewTaskHandler(opts.DB, opts.Scheduler)
 	globalPlayerHandler := NewGlobalPlayerHandler(opts.DB, opts.Engine, opts.DataDir)
 	userHandler := NewUserHandler(opts.DB)
@@ -255,6 +259,12 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Get("/system/audit", systemHandler.ListAuditLogs)
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)
 				adminGroup.Post("/system/settings", systemHandler.UpdateSetting)
+				adminGroup.Get("/system/bds/status", systemHandler.GetBDSStatus)
+				adminGroup.Post("/system/bds/eula", systemHandler.AcceptBDSEULA)
+				adminGroup.Post("/system/bds/purge-cache", systemHandler.PurgeBDSCache)
+				adminGroup.Get("/system/bds/versions", systemHandler.CheckBDSVersions)
+				adminGroup.Post("/system/windows/loopback", systemHandler.SetLoopbackExemption)
+				adminGroup.Post("/system/windows/defender", systemHandler.AddDefenderExclusion)
 				adminGroup.Post("/addons/marketplace/config", addonHandler.UpdateMarketplaceConfig)
 
 				// Centralized Port Gate Management (Global & Multi-Server)

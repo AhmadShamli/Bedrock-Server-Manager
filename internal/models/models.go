@@ -92,13 +92,27 @@ type Server struct {
 	CPULimit        float64   `json:"cpu_limit"`         // e.g. 2.0
 	ContainerID     string    `json:"container_id"`
 	Seed              string    `json:"seed"`
-	GameServerAddress  string    `json:"game_server_address"`
-	NetworkMode        string    `json:"network_mode"`         // "host" (default), "bridge", or custom network
-	IdleTimeoutMinutes int       `json:"idle_timeout_minutes"` // 0 = disabled (24/7), >0 = stop server after N minutes with 0 players
-	OwnerUserID        *int64    `json:"owner_user_id,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	GameServerAddress string    `json:"game_server_address"`
+	NetworkMode         string    `json:"network_mode"`         // "host" (default), "bridge", or custom network
+	IdleTimeoutMinutes  int       `json:"idle_timeout_minutes"` // 0 = disabled (24/7), >0 = stop server after N minutes with 0 players
+	Engine              string    `json:"engine"`                // "docker" (default) or "native"
+	BDSVersion          string    `json:"bds_version"`           // "latest", "preview", or pinned version
+	UpdatePolicy        string    `json:"update_policy"`         // "auto" or "manual"
+	InstalledBDSVersion string    `json:"installed_bds_version"` // active version installed in server dir
+	PreviousBDSVersion  string    `json:"previous_bds_version"`  // previously installed version for rollback
+	OwnerUserID         *int64    `json:"owner_user_id,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
+
+// Engine types and update policies
+const (
+	EngineDocker = "docker"
+	EngineNative = "native"
+
+	UpdatePolicyAuto   = "auto"
+	UpdatePolicyManual = "manual"
+)
 
 // PortGateKey represents an access passphrase/key for unlocking the port gate.
 type PortGateKey struct {

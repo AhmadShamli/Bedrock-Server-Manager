@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -93,6 +94,11 @@ func (db *ManagerDB) Migrate(ctx context.Context) error {
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN game_server_address TEXT NOT NULL DEFAULT ''")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN network_mode TEXT NOT NULL DEFAULT 'host'")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN idle_timeout_minutes INTEGER NOT NULL DEFAULT 0")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN engine TEXT NOT NULL DEFAULT 'docker'")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN bds_version TEXT NOT NULL DEFAULT 'latest'")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN update_policy TEXT NOT NULL DEFAULT 'manual'")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN installed_bds_version TEXT NOT NULL DEFAULT ''")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN previous_bds_version TEXT NOT NULL DEFAULT ''")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_id INTEGER REFERENCES plans(id) ON DELETE SET NULL")
@@ -457,16 +463,31 @@ func (db *ManagerDB) CreateServer(ctx context.Context, s *models.Server) error {
 	if s.IdleTimeoutMinutes < 0 {
 		s.IdleTimeoutMinutes = 0
 	}
+	if s.Engine == "" {
+		if runtime.GOOS == "windows" {
+			s.Engine = models.EngineNative
+		} else {
+			s.Engine = models.EngineDocker
+		}
+	}
+	if s.BDSVersion == "" {
+		s.BDSVersion = "latest"
+	}
+	if s.UpdatePolicy == "" {
+		s.UpdatePolicy = models.UpdatePolicyManual
+	}
 
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO servers (
 			id, name, version, port, portv6, status, mode, difficulty,
 			autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-			memory_limit, cpu_limit, container_id, seed, game_server_address, network_mode, idle_timeout_minutes, owner_user_id, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			memory_limit, cpu_limit, container_id, seed, game_server_address, network_mode, idle_timeout_minutes,
+			engine, bds_version, update_policy, installed_bds_version, previous_bds_version, owner_user_id, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		s.ID, s.Name, s.Version, s.Port, s.PortV6, s.Status, s.Mode, s.Difficulty,
 		autostartInt, portGateInt, s.PortGateMode, s.PortGateTimeout,
-		s.MemoryLimit, s.CPULimit, s.ContainerID, s.Seed, s.GameServerAddress, s.NetworkMode, s.IdleTimeoutMinutes, s.OwnerUserID, nowStr, nowStr,
+		s.MemoryLimit, s.CPULimit, s.ContainerID, s.Seed, s.GameServerAddress, s.NetworkMode, s.IdleTimeoutMinutes,
+		s.Engine, s.BDSVersion, s.UpdatePolicy, s.InstalledBDSVersion, s.PreviousBDSVersion, s.OwnerUserID, nowStr, nowStr,
 	)
 	return err
 }
@@ -480,18 +501,29 @@ func (db *ManagerDB) GetServer(ctx context.Context, id string) (*models.Server, 
 	err := db.QueryRowContext(ctx, `
 		SELECT id, name, version, port, portv6, status, mode, difficulty,
 		       autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-		       memory_limit, cpu_limit, container_id, seed, game_server_address, network_mode, idle_timeout_minutes, owner_user_id, created_at, updated_at
+		       memory_limit, cpu_limit, container_id, seed, game_server_address, network_mode, idle_timeout_minutes,
+		       engine, bds_version, update_policy, installed_bds_version, previous_bds_version, owner_user_id, created_at, updated_at
 		FROM servers WHERE id = ?`, id,
 	).Scan(
 		&s.ID, &s.Name, &s.Version, &s.Port, &s.PortV6, &s.Status, &s.Mode, &s.Difficulty,
 		&autostartInt, &portGateInt, &s.PortGateMode, &s.PortGateTimeout,
-		&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &s.NetworkMode, &s.IdleTimeoutMinutes, &ownerID, &createdAtStr, &updatedAtStr,
+		&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &s.NetworkMode, &s.IdleTimeoutMinutes,
+		&s.Engine, &s.BDSVersion, &s.UpdatePolicy, &s.InstalledBDSVersion, &s.PreviousBDSVersion, &ownerID, &createdAtStr, &updatedAtStr,
 	)
 	if err != nil {
 		return nil, err
 	}
 	if s.NetworkMode == "" {
 		s.NetworkMode = "host"
+	}
+	if s.Engine == "" {
+		s.Engine = models.EngineDocker
+	}
+	if s.BDSVersion == "" {
+		s.BDSVersion = "latest"
+	}
+	if s.UpdatePolicy == "" {
+		s.UpdatePolicy = models.UpdatePolicyManual
 	}
 	s.AutostartOnBoot = autostartInt == 1
 	s.PortGateEnabled = portGateInt == 1
@@ -511,7 +543,8 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, name, version, port, portv6, status, mode, difficulty,
 		       autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-		       memory_limit, cpu_limit, container_id, seed, game_server_address, network_mode, idle_timeout_minutes, owner_user_id, created_at, updated_at
+		       memory_limit, cpu_limit, container_id, seed, game_server_address, network_mode, idle_timeout_minutes,
+		       engine, bds_version, update_policy, installed_bds_version, previous_bds_version, owner_user_id, created_at, updated_at
 		FROM servers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -528,12 +561,22 @@ func (db *ManagerDB) ListServers(ctx context.Context) ([]models.Server, error) {
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Version, &s.Port, &s.PortV6, &s.Status, &s.Mode, &s.Difficulty,
 			&autostartInt, &portGateInt, &s.PortGateMode, &s.PortGateTimeout,
-			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &s.NetworkMode, &s.IdleTimeoutMinutes, &ownerID, &createdAtStr, &updatedAtStr,
+			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &s.NetworkMode, &s.IdleTimeoutMinutes,
+			&s.Engine, &s.BDSVersion, &s.UpdatePolicy, &s.InstalledBDSVersion, &s.PreviousBDSVersion, &ownerID, &createdAtStr, &updatedAtStr,
 		); err != nil {
 			return nil, err
 		}
 		if s.NetworkMode == "" {
 			s.NetworkMode = "host"
+		}
+		if s.Engine == "" {
+			s.Engine = models.EngineDocker
+		}
+		if s.BDSVersion == "" {
+			s.BDSVersion = "latest"
+		}
+		if s.UpdatePolicy == "" {
+			s.UpdatePolicy = models.UpdatePolicyManual
 		}
 		s.AutostartOnBoot = autostartInt == 1
 		s.PortGateEnabled = portGateInt == 1
@@ -555,7 +598,8 @@ func (db *ManagerDB) ListServersByOwner(ctx context.Context, ownerUserID int64) 
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, name, version, port, portv6, status, mode, difficulty,
 		       autostart_on_boot, port_gate_enabled, port_gate_mode, port_gate_timeout,
-		       memory_limit, cpu_limit, container_id, seed, game_server_address, network_mode, idle_timeout_minutes, owner_user_id, created_at, updated_at
+		       memory_limit, cpu_limit, container_id, seed, game_server_address, network_mode, idle_timeout_minutes,
+		       engine, bds_version, update_policy, installed_bds_version, previous_bds_version, owner_user_id, created_at, updated_at
 		FROM servers WHERE owner_user_id = ? ORDER BY created_at DESC`, ownerUserID)
 	if err != nil {
 		return nil, err
@@ -572,12 +616,22 @@ func (db *ManagerDB) ListServersByOwner(ctx context.Context, ownerUserID int64) 
 		if err := rows.Scan(
 			&s.ID, &s.Name, &s.Version, &s.Port, &s.PortV6, &s.Status, &s.Mode, &s.Difficulty,
 			&autostartInt, &portGateInt, &s.PortGateMode, &s.PortGateTimeout,
-			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &s.NetworkMode, &s.IdleTimeoutMinutes, &ownerID, &createdAtStr, &updatedAtStr,
+			&s.MemoryLimit, &s.CPULimit, &s.ContainerID, &s.Seed, &s.GameServerAddress, &s.NetworkMode, &s.IdleTimeoutMinutes,
+			&s.Engine, &s.BDSVersion, &s.UpdatePolicy, &s.InstalledBDSVersion, &s.PreviousBDSVersion, &ownerID, &createdAtStr, &updatedAtStr,
 		); err != nil {
 			return nil, err
 		}
 		if s.NetworkMode == "" {
 			s.NetworkMode = "host"
+		}
+		if s.Engine == "" {
+			s.Engine = models.EngineDocker
+		}
+		if s.BDSVersion == "" {
+			s.BDSVersion = "latest"
+		}
+		if s.UpdatePolicy == "" {
+			s.UpdatePolicy = models.UpdatePolicyManual
 		}
 		s.AutostartOnBoot = autostartInt == 1
 		s.PortGateEnabled = portGateInt == 1
@@ -612,6 +666,17 @@ func (db *ManagerDB) UpdateServerStatus(ctx context.Context, id, status, contain
 	return err
 }
 
+func (db *ManagerDB) UpdateServerBDSVersion(ctx context.Context, id, installedVer, prevVer string) error {
+	nowStr := FormatTime(time.Now().UTC())
+	_, err := db.ExecContext(ctx, `
+		UPDATE servers 
+		SET installed_bds_version = ?, previous_bds_version = ?, updated_at = ?
+		WHERE id = ?`,
+		installedVer, prevVer, nowStr, id,
+	)
+	return err
+}
+
 func (db *ManagerDB) UpdateServer(ctx context.Context, s *models.Server) error {
 	nowStr := FormatTime(time.Now().UTC())
 	autostartInt := 0
@@ -628,16 +693,27 @@ func (db *ManagerDB) UpdateServer(ctx context.Context, s *models.Server) error {
 	if s.IdleTimeoutMinutes < 0 {
 		s.IdleTimeoutMinutes = 0
 	}
+	if s.Engine == "" {
+		s.Engine = models.EngineDocker
+	}
+	if s.BDSVersion == "" {
+		s.BDSVersion = "latest"
+	}
+	if s.UpdatePolicy == "" {
+		s.UpdatePolicy = models.UpdatePolicyManual
+	}
 
 	_, err := db.ExecContext(ctx, `
 		UPDATE servers SET
 			name = ?, version = ?, port = ?, portv6 = ?, mode = ?, difficulty = ?,
 			autostart_on_boot = ?, port_gate_enabled = ?, port_gate_mode = ?, port_gate_timeout = ?,
-			memory_limit = ?, cpu_limit = ?, seed = ?, game_server_address = ?, network_mode = ?, idle_timeout_minutes = ?, updated_at = ?
+			memory_limit = ?, cpu_limit = ?, seed = ?, game_server_address = ?, network_mode = ?, idle_timeout_minutes = ?,
+			engine = ?, bds_version = ?, update_policy = ?, installed_bds_version = ?, previous_bds_version = ?, updated_at = ?
 		WHERE id = ?`,
 		s.Name, s.Version, s.Port, s.PortV6, s.Mode, s.Difficulty,
 		autostartInt, portGateInt, s.PortGateMode, s.PortGateTimeout,
-		s.MemoryLimit, s.CPULimit, s.Seed, s.GameServerAddress, s.NetworkMode, s.IdleTimeoutMinutes, nowStr, s.ID,
+		s.MemoryLimit, s.CPULimit, s.Seed, s.GameServerAddress, s.NetworkMode, s.IdleTimeoutMinutes,
+		s.Engine, s.BDSVersion, s.UpdatePolicy, s.InstalledBDSVersion, s.PreviousBDSVersion, nowStr, s.ID,
 	)
 	return err
 }

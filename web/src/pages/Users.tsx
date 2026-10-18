@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, UserPlus, Key, Trash2, Server, Check, Loader2, AlertCircle, Clock, Save, Layers, Edit3, UserCheck, ToggleLeft, ToggleRight } from 'lucide-react';
+import {
+  Shield, UserPlus, Key, Trash2, Server, Check, Loader2, AlertCircle, Clock,
+  Save, Layers, Edit3, UserCheck, ToggleLeft, ToggleRight, Box, ShieldCheck,
+  Cpu, HardDrive, Download, RefreshCw, ExternalLink
+} from 'lucide-react';
 import { api } from '../api/client';
-import { User, Server as ServerType, Plan } from '../types';
+import { User, Server as ServerType, Plan, BDSStatus, BDSVersionsResponse } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 
@@ -34,6 +38,12 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
+  // BDS & Windows host state
+  const [bdsStatus, setBdsStatus] = useState<BDSStatus | null>(null);
+  const [bdsVersions, setBdsVersions] = useState<BDSVersionsResponse | null>(null);
+  const [bdsActionLoading, setBdsActionLoading] = useState<string | null>(null);
+  const [bdsMessage, setBdsMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
   // Add User modal state
   const [showAddModal, setShowAddModal] = useState(false);
   const [newUsername, setNewUsername] = useState('');
@@ -64,16 +74,20 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
     try {
       setLoading(true);
       setError(null);
-      const [uList, sList, pList, settingsRes] = await Promise.all([
+      const [uList, sList, pList, settingsRes, bdsStatusRes] = await Promise.all([
         api.listUsers(),
         api.listServers(),
         api.listPlans(),
         api.getSettings(),
+        api.getBDSStatus().catch(() => null),
       ]);
       const safeUsers = Array.isArray(uList) ? uList : [];
       setUsers(safeUsers);
       setServers(Array.isArray(sList) ? sList : []);
       setPlans(Array.isArray(pList) ? pList : []);
+      if (bdsStatusRes) {
+        setBdsStatus(bdsStatusRes);
+      }
 
       if (settingsRes && settingsRes['heartbeat_interval_seconds']) {
         const val = parseInt(settingsRes['heartbeat_interval_seconds'], 10);
@@ -243,6 +257,78 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
       alert(err.message || 'Failed to update settings');
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  const handleAcceptEula = async () => {
+    try {
+      setBdsActionLoading('eula');
+      await api.acceptBDSEULA();
+      const st = await api.getBDSStatus();
+      setBdsStatus(st);
+      setBdsMessage({ text: 'Mojang BDS EULA accepted successfully.', type: 'success' });
+    } catch (err: any) {
+      setBdsMessage({ text: err.message || 'Failed to accept EULA', type: 'error' });
+    } finally {
+      setBdsActionLoading(null);
+    }
+  };
+
+  const handlePurgeCache = async () => {
+    if (!confirm('Purge cached BDS versions that are not currently in use by any server?')) return;
+    try {
+      setBdsActionLoading('purge');
+      await api.purgeBDSCache();
+      const st = await api.getBDSStatus();
+      setBdsStatus(st);
+      setBdsMessage({ text: 'BDS cache purged successfully.', type: 'success' });
+    } catch (err: any) {
+      setBdsMessage({ text: err.message || 'Failed to purge cache', type: 'error' });
+    } finally {
+      setBdsActionLoading(null);
+    }
+  };
+
+  const handleCheckVersions = async () => {
+    try {
+      setBdsActionLoading('versions');
+      const v = await api.checkBDSVersions(true);
+      setBdsVersions(v);
+      setBdsMessage({
+        text: `BDS versions checked. Latest: ${v.latest?.version || 'unknown'}, Preview: ${v.preview?.version || 'unknown'}`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      setBdsMessage({ text: err.message || 'Failed to check versions', type: 'error' });
+    } finally {
+      setBdsActionLoading(null);
+    }
+  };
+
+  const handleSetLoopback = async () => {
+    try {
+      setBdsActionLoading('loopback');
+      const res = await api.setLoopbackExemption();
+      setBdsMessage({ text: res.output || 'Loopback exemption enabled successfully.', type: 'success' });
+    } catch (err: any) {
+      setBdsMessage({ text: err.message || 'Failed to enable loopback exemption', type: 'error' });
+    } finally {
+      setBdsActionLoading(null);
+    }
+  };
+
+  const handleAddDefender = async () => {
+    try {
+      setBdsActionLoading('defender');
+      const res = await api.addDefenderExclusion();
+      setBdsMessage({
+        text: `Windows Defender exclusion added for ${res.exclusion_path || 'data directory'}.`,
+        type: 'success',
+      });
+    } catch (err: any) {
+      setBdsMessage({ text: err.message || 'Failed to add Defender exclusion', type: 'error' });
+    } finally {
+      setBdsActionLoading(null);
     }
   };
 
@@ -526,6 +612,234 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
           </div>
         </form>
       </div>
+
+      {/* BDS & WINDOWS HOST SETTINGS CARD */}
+      {bdsStatus && (
+        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 space-y-6">
+          <div>
+            <h3 className="font-mono text-base font-bold text-slate-100 mb-1 flex items-center gap-2">
+              <Box className="w-4 h-4 text-emerald-400" />
+              <span>Mojang Bedrock Dedicated Server (BDS) &amp; Host Configuration</span>
+            </h3>
+            <p className="text-xs text-slate-400 font-mono">
+              Manage official Mojang BDS engine settings, version caches, EULA compliance, and host integrations.
+            </p>
+          </div>
+
+          {bdsMessage && (
+            <div
+              className={`p-3 rounded-lg border font-mono text-xs flex items-center justify-between ${
+                bdsMessage.type === 'success'
+                  ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                  : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+              }`}
+            >
+              <span>{bdsMessage.text}</span>
+              <button onClick={() => setBdsMessage(null)} className="opacity-70 hover:opacity-100 font-bold ml-2">
+                ✕
+              </button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs">
+            {/* BDS EULA Compliance */}
+            <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>Minecraft BDS EULA</span>
+                </span>
+                {bdsStatus.eula_accepted ? (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    Accepted
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                    Not Accepted
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Official BDS binaries require agreement to the{' '}
+                <a
+                  href={bdsStatus.eula_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-0.5"
+                >
+                  Minecraft EULA <ExternalLink className="w-3 h-3" />
+                </a>{' '}
+                and{' '}
+                <a
+                  href={bdsStatus.privacy_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-0.5"
+                >
+                  Privacy Statement <ExternalLink className="w-3 h-3" />
+                </a>.
+              </p>
+              {bdsStatus.eula_accepted ? (
+                <div className="text-[10px] text-slate-500">
+                  Accepted {bdsStatus.eula_accepted_at ? `on ${new Date(bdsStatus.eula_accepted_at).toLocaleString()}` : ''}{' '}
+                  {bdsStatus.eula_accepted_by ? `by ${bdsStatus.eula_accepted_by}` : ''}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleAcceptEula}
+                  disabled={bdsActionLoading === 'eula'}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  {bdsActionLoading === 'eula' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Agree &amp; Accept EULA</span>
+                </button>
+              )}
+            </div>
+
+            {/* Visual C++ Runtime Status */}
+            <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                  <Cpu className="w-4 h-4 text-emerald-400" />
+                  <span>Visual C++ 2015–2022 Runtime</span>
+                </span>
+                {bdsStatus.vc_installed ? (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                    Installed
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                    Missing
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                {bdsStatus.vc_installed
+                  ? 'MSVC v14 runtime library detected in registry / system folder. Native BDS can launch normally.'
+                  : 'bedrock_server.exe requires the x64 Microsoft Visual C++ Redistributable to execute on Windows.'}
+              </p>
+              {!bdsStatus.vc_installed && (
+                <div>
+                  <a
+                    href="https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition-colors"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Download vc_redist.x64.exe</span>
+                  </a>
+                </div>
+              )}
+            </div>
+
+            {/* BDS Cache & Versions */}
+            <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                  <HardDrive className="w-4 h-4 text-emerald-400" />
+                  <span>BDS Binary Cache</span>
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  {bdsStatus.cache_count} cached ({(bdsStatus.cache_bytes / (1024 * 1024)).toFixed(1)} MB)
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Cached versions:{' '}
+                {bdsStatus.cached_versions && bdsStatus.cached_versions.length > 0 ? (
+                  <span className="text-slate-300">{bdsStatus.cached_versions.join(', ')}</span>
+                ) : (
+                  <span className="text-slate-500 italic">None yet downloaded</span>
+                )}
+              </p>
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handlePurgeCache}
+                  disabled={bdsActionLoading === 'purge' || bdsStatus.cache_count === 0}
+                  className="px-3 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                >
+                  {bdsActionLoading === 'purge' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Purge Unused Versions</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCheckVersions}
+                  disabled={bdsActionLoading === 'versions'}
+                  className="px-3 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                >
+                  {bdsActionLoading === 'versions' ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+                  )}
+                  <span>Check BDS Releases</span>
+                </button>
+              </div>
+              {bdsVersions && (
+                <div className="text-[10px] text-slate-400 pt-1 border-t border-obsidian-800/60 flex flex-col gap-0.5">
+                  <div>Latest Stable: <span className="text-emerald-400 font-bold">{bdsVersions.latest?.version || 'N/A'}</span></div>
+                  <div>Latest Preview: <span className="text-cyber-cyan font-bold">{bdsVersions.preview?.version || 'N/A'}</span></div>
+                </div>
+              )}
+            </div>
+
+            {/* Windows Host Integrations */}
+            {bdsStatus.is_windows && (
+              <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                    <Shield className="w-4 h-4 text-emerald-400" />
+                    <span>Windows Host Optimizations</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                    Host: Windows
+                  </span>
+                </div>
+                <div className="space-y-3 pt-1">
+                  <div>
+                    <div className="text-[11px] font-bold text-slate-300 mb-1">
+                      Local Client Loopback Exemption
+                    </div>
+                    <p className="text-[10px] text-slate-400 mb-1.5">
+                      Enables the local Minecraft UWP app on this PC to connect to local servers via 127.0.0.1.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleSetLoopback}
+                      disabled={bdsActionLoading === 'loopback'}
+                      className="px-3 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                    >
+                      {bdsActionLoading === 'loopback' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      <span>Enable UWP Loopback</span>
+                    </button>
+                  </div>
+
+                  <div className="border-t border-obsidian-800/80 pt-2.5">
+                    <div className="text-[11px] font-bold text-slate-300 mb-1">
+                      Windows Defender Exclusion
+                    </div>
+                    <p className="text-[10px] text-slate-400 mb-1.5">
+                      Adds data directory exclusion to prevent antivirus real-time scan lockups during world saves.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleAddDefender}
+                      disabled={bdsActionLoading === 'defender'}
+                      className="px-3 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
+                    >
+                      {bdsActionLoading === 'defender' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                      <span>Add Defender Exclusion</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* CREATE USER MODAL */}
       {showAddModal && (

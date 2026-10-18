@@ -11,6 +11,14 @@
 
 ## ✨ Highlights & Features
 
+- 🪟 **First-Class Native Windows Support**:
+  - Run official Mojang `bedrock_server.exe` as managed child processes without Docker or WSL2.
+  - Hard memory caps (`JOB_OBJECT_LIMIT_PROCESS_MEMORY`) and CPU rate limits via Windows Job Objects.
+  - Native Windows Service integration (`bedrock-server-manager.exe service [install|start|stop|status]`).
+  - Native Windows Defender Firewall driver (`netsh advfirewall`) with zero-lease drop policy.
+  - Automated BDS binary downloads, Mojang version resolution, retention cache, and crash-loop auto-rollback.
+  - Automated Windows Defender exclusion and UWP loopback exemption for local Minecraft clients.
+
 - 🎮 **Strict Multi-Server Container Orchestration**:
   - All BDS instances run as isolated Docker containers (`itzg/minecraft-bedrock-server`) with hard CPU (`--cpus`) and RAM (`--memory`) caps.
   - Interactive web console with bidirectional WebSocket stdin/stdout streaming and ANSI coloring.
@@ -122,6 +130,39 @@ sudo make update
 ```bash
 ./scripts/build.sh
 ./bin/bedrock-server-manager
+```
+
+---
+
+### Option C: Windows Host Deployment (Native BDS & Windows Service)
+
+BSM supports Windows 10/11 and Windows Server 2019/2022 natively without requiring Docker, running official Mojang `bedrock_server.exe` as managed child processes with Windows Job Objects for memory caps and CPU rate limits.
+
+#### 1. Quick Automated Setup (PowerShell)
+Download `bedrock-server-manager-v<ver>-windows-amd64.zip` from GitHub Releases, extract it, and run PowerShell as Administrator:
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\install.ps1
+```
+
+The installer automatically:
+- Checks and installs the Microsoft Visual C++ 2015-2022 x64 Redistributable if missing.
+- Registers Windows Defender exclusions for `%ProgramData%\BedrockServerManager`.
+- Grants UWP loopback exemption so the local Minecraft Bedrock client can connect to `127.0.0.1`.
+- Configures Windows Defender Firewall rules for the Web UI.
+- Installs and starts `BedrockServerManager` as an automatic Windows background service.
+
+#### 2. Managing the Windows Service
+```powershell
+.\bedrock-server-manager.exe service status
+.\bedrock-server-manager.exe service stop
+.\bedrock-server-manager.exe service start
+```
+
+#### 3. Portable Mode (No Service)
+To run BSM in portable mode without installing a Windows service:
+```powershell
+.\bedrock-server-manager.exe --data-dir .\data --open
 ```
 
 ---

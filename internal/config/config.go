@@ -77,6 +77,12 @@ func LoadConfig(explicitConfigFile ...string) *Config {
 	if envFile := os.Getenv("BSM_CONFIG_FILE"); envFile != "" {
 		candidateFiles = append(candidateFiles, envFile)
 	}
+	if progData := os.Getenv("ProgramData"); progData != "" {
+		candidateFiles = append(candidateFiles, filepath.Join(progData, "BedrockServerManager", "bsm.env"))
+	}
+	if exePath, err := os.Executable(); err == nil {
+		candidateFiles = append(candidateFiles, filepath.Join(filepath.Dir(exePath), "bsm.env"))
+	}
 	candidateFiles = append(candidateFiles,
 		"/etc/bedrock-server-manager/bsm.env",
 		"./bsm.env",
@@ -100,6 +106,9 @@ func LoadConfig(explicitConfigFile ...string) *Config {
 	}
 
 	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = os.Getenv("BSM_DATA_DIR")
+	}
 	if dataDir == "" {
 		dataDir = "data"
 	}

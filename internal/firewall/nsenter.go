@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 // FindExecutable searches for an executable in PATH and standard system sbin directories.
@@ -46,22 +45,7 @@ func (d *NetNSDetector) ShouldUseNsenter() bool {
 	if d.override == "false" {
 		return false
 	}
-
-	// Auto-detection: compare inode of current net ns to PID 1 net ns
-	selfStat, err1 := os.Stat("/proc/self/ns/net")
-	initStat, err2 := os.Stat("/proc/1/ns/net")
-	if err1 != nil || err2 != nil {
-		return false
-	}
-
-	selfSys, ok1 := selfStat.Sys().(*syscall.Stat_t)
-	initSys, ok2 := initStat.Sys().(*syscall.Stat_t)
-	if !ok1 || !ok2 {
-		return false
-	}
-
-	// If inodes differ, we are running in an isolated container network namespace (e.g. docker bridge)
-	return selfSys.Ino != initSys.Ino
+	return detectNetNS()
 }
 
 // WrapCommand prepends nsenter --net=/proc/1/ns/net if nsenter is needed,
@@ -69,7 +53,7 @@ func (d *NetNSDetector) ShouldUseNsenter() bool {
 func (d *NetNSDetector) WrapCommand(ctx context.Context, cmd string, args ...string) *exec.Cmd {
 	resolvedCmd := FindExecutable(cmd)
 	baseName := filepath.Base(resolvedCmd)
-	isNonRoot := os.Getuid() != 0
+	isNonRoot := isNonRootUser()
 
 	hasSudo := false
 	if _, err := exec.LookPath("sudo"); err == nil {

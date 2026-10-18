@@ -233,15 +233,26 @@ func (h *BackupHandler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
 	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
 	backupZipPath := filepath.Join(h.dataDir, "backups", server.ID, b.Filename)
 
-	if err := backup.RestoreBackup(r.Context(), server, serverDir, backupZipPath, h.eng); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
-		return
-	}
-
-	claims := GetUserClaims(r)
 	actorName := "user"
+	claims := GetUserClaims(r)
 	if claims != nil {
 		actorName = claims.Username
+	}
+
+	restoreAction := func() error {
+		return backup.RestoreBackup(r.Context(), server, serverDir, backupZipPath, h.eng)
+	}
+
+	var restoreErr error
+	if h.serverHandler != nil {
+		restoreErr = h.serverHandler.WithServerStopped(r.Context(), server, "user", actorName, "backup_restore", GetClientIP(r).String(), restoreAction)
+	} else {
+		restoreErr = restoreAction()
+	}
+
+	if restoreErr != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, restoreErr.Error()), http.StatusBadRequest)
+		return
 	}
 	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 		ActorType: "user",
@@ -410,84 +421,77 @@ func (h *BackupHandler) ResetWorld(w http.ResponseWriter, r *http.Request) {
 		resourceRefs, _ = addon.GetWorldPackRefs(serverDir, levelName, "resource")
 	}
 
-	// 3. Check live server status; stop if running so LevelDB files are not locked
-	liveStatus := server.Status
+	wasRunning := false
 	if h.eng != nil {
-		if st, err := h.eng.GetServerStatus(r.Context(), server); err == nil && st != "" {
-			liveStatus = st
+		if st, err := h.eng.GetServerStatus(r.Context(), server); err == nil && (st == models.ServerStatusRunning || st == models.ServerStatusStarting) {
+			wasRunning = true
+		} else if server.Status == models.ServerStatusRunning || server.Status == models.ServerStatusStarting {
+			wasRunning = true
 		}
-	}
-	wasRunning := liveStatus == models.ServerStatusRunning || liveStatus == models.ServerStatusStarting
-
-	if wasRunning && h.eng != nil {
-		_ = h.eng.StopServer(r.Context(), server, 15)
-		server.Status = models.ServerStatusStopped
-		_ = h.db.UpdateServerStatus(r.Context(), server.ID, models.ServerStatusStopped, server.ContainerID)
-		if h.serverHandler != nil && h.serverHandler.resourceMonitor != nil {
-			h.serverHandler.resourceMonitor.ResetIdleTimer(server.ID)
-		}
+	} else if server.Status == models.ServerStatusRunning || server.Status == models.ServerStatusStarting {
+		wasRunning = true
 	}
 
-	// 4. Wipe existing world data cleanly
-	if err := backup.ResetWorld(serverDir); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to reset world data: %s"}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-
-	// 5. Optional seed update for the new world
-	if req.Seed != nil {
-		newSeed := strings.TrimSpace(*req.Seed)
-		server.Seed = newSeed
-		_ = h.db.UpdateServer(r.Context(), server)
-
-		propPath := filepath.Join(serverDir, "server.properties")
-		updated, _ := configfile.UpdateExistingPropertyFile(propPath, map[string]string{
-			"level-seed": newSeed,
-		})
-		if !updated {
-			existingProps, existingKeys, ok, _ := configfile.ReadPendingProperties(serverDir)
-			if !ok || existingProps == nil {
-				existingProps, existingKeys = configfile.MergeDefaultProperties(make(map[string]string), nil, server)
-			}
-			mergedProps, mergedKeys := configfile.MergeProperties(existingProps, existingKeys, map[string]string{
-				"level-seed": newSeed,
-			})
-			_ = configfile.WritePendingProperties(serverDir, mergedProps, mergedKeys)
-		}
-	}
-
-	// 6. Restore active addon pack bindings into the fresh world directory
-	if keepAddons {
-		if len(behaviorRefs) > 0 {
-			_ = addon.SaveWorldPackRefs(serverDir, levelName, "behavior", behaviorRefs)
-		}
-		if len(resourceRefs) > 0 {
-			_ = addon.SaveWorldPackRefs(serverDir, levelName, "resource", resourceRefs)
-		}
-		addon.SyncActivePacksToWorlds(serverDir)
-	}
-
-	claims := GetUserClaims(r)
 	actorName := "user"
+	claims := GetUserClaims(r)
 	if claims != nil {
 		actorName = claims.Username
 	}
 
-	// 7. Restart server if it was running before the world reset
-	restarted := false
-	if wasRunning {
-		if h.serverHandler != nil {
-			if err := h.serverHandler.StartServerInstance(r.Context(), server, "user", actorName, "server_restart_after_world_reset", GetClientIP(r).String()); err == nil {
-				restarted = true
-			}
-		} else if h.eng != nil {
-			if err := h.eng.StartServer(r.Context(), server); err == nil {
-				server.Status = models.ServerStatusRunning
-				_ = h.db.UpdateServerStatus(r.Context(), server.ID, models.ServerStatusRunning, server.ContainerID)
-				restarted = true
+	resetAction := func() error {
+		// Wipe existing world data cleanly
+		if err := backup.ResetWorld(serverDir); err != nil {
+			return fmt.Errorf("failed to reset world data: %w", err)
+		}
+
+		// Optional seed update for the new world
+		if req.Seed != nil {
+			newSeed := strings.TrimSpace(*req.Seed)
+			server.Seed = newSeed
+			_ = h.db.UpdateServer(r.Context(), server)
+
+			propPath := filepath.Join(serverDir, "server.properties")
+			updated, _ := configfile.UpdateExistingPropertyFile(propPath, map[string]string{
+				"level-seed": newSeed,
+			})
+			if !updated {
+				existingProps, existingKeys, ok, _ := configfile.ReadPendingProperties(serverDir)
+				if !ok || existingProps == nil {
+					existingProps, existingKeys = configfile.MergeDefaultProperties(make(map[string]string), nil, server)
+				}
+				mergedProps, mergedKeys := configfile.MergeProperties(existingProps, existingKeys, map[string]string{
+					"level-seed": newSeed,
+				})
+				_ = configfile.WritePendingProperties(serverDir, mergedProps, mergedKeys)
 			}
 		}
+
+		// Restore active addon pack bindings into the fresh world directory
+		if keepAddons {
+			if len(behaviorRefs) > 0 {
+				_ = addon.SaveWorldPackRefs(serverDir, levelName, "behavior", behaviorRefs)
+			}
+			if len(resourceRefs) > 0 {
+				_ = addon.SaveWorldPackRefs(serverDir, levelName, "resource", resourceRefs)
+			}
+			addon.SyncActivePacksToWorlds(serverDir)
+		}
+		return nil
 	}
+
+	if h.serverHandler != nil {
+		if err := h.serverHandler.WithServerStopped(r.Context(), server, "user", actorName, "world_reset", GetClientIP(r).String(), resetAction); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		if err := resetAction(); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	restarted := wasRunning
 
 	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 		ActorType: "user",

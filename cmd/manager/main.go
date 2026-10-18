@@ -6,8 +6,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -16,6 +18,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/allocator"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/api"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/bds"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/config"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
@@ -33,19 +36,30 @@ import (
 )
 
 func main() {
+	if handled, err := handleServiceCommand(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Service error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	var customConfigFile string
+	var openBrowser bool
 
 	for i := 1; i < len(os.Args); i++ {
 		arg := os.Args[i]
 		switch {
 		case arg == "version" || arg == "-v" || arg == "--version":
-			fmt.Printf("%s v%s (Linux static) - %s\n", version.AppName, version.Version, version.RepositoryURL)
+			fmt.Printf("%s v%s - %s\n", version.AppName, version.Version, version.RepositoryURL)
 			return
 		case arg == "help" || arg == "-h" || arg == "--help":
-			fmt.Printf("Usage: %s [serve] [options]\n\nCommands:\n  serve               Run the Bedrock Server Manager daemon (default)\n  version             Display current version and repository info\n  help                Display usage help\n\nOptions:\n  -c, --config <file> Specify custom environment/configuration file path\n", os.Args[0])
+			fmt.Printf("Usage: %s [serve] [options]\n\nCommands:\n  serve               Run the Bedrock Server Manager daemon (default)\n  service             Manage Windows background service (install, uninstall, start, stop, status)\n  version             Display current version and repository info\n  help                Display usage help\n\nOptions:\n  -c, --config <file> Specify custom environment/configuration file path\n  --data-dir <path>   Specify custom data directory\n  --open              Automatically open dashboard in browser on launch\n", os.Args[0])
 			return
 		case arg == "serve":
 			// Proceed to daemon start
+		case arg == "--open":
+			openBrowser = true
 		case arg == "-c" || arg == "--config":
 			if i+1 < len(os.Args) {
 				customConfigFile = os.Args[i+1]
@@ -56,9 +70,16 @@ func main() {
 			}
 		case strings.HasPrefix(arg, "--config="):
 			customConfigFile = strings.TrimPrefix(arg, "--config=")
+		case arg == "--data-dir":
+			if i+1 < len(os.Args) {
+				os.Setenv("DATA_DIR", os.Args[i+1])
+				i++
+			}
+		case strings.HasPrefix(arg, "--data-dir="):
+			os.Setenv("DATA_DIR", strings.TrimPrefix(arg, "--data-dir="))
 		default:
 			if strings.HasPrefix(arg, "-") {
-				fmt.Fprintf(os.Stderr, "Unknown flag: %s\nRun '%s help' for usage.\n", os.Args[1], os.Args[0])
+				fmt.Fprintf(os.Stderr, "Unknown flag: %s\nRun '%s help' for usage.\n", os.Args[i], os.Args[0])
 				os.Exit(1)
 			}
 		}
@@ -179,15 +200,28 @@ func main() {
 		},
 	)
 
-	// 8. Initialize Container Orchestration Engine
-	dockerEng, err := engine.NewDockerEngine(cfg.DockerHost)
-	if err == nil {
-		serverEngine = dockerEng
+	// 8. Initialize Container & Process Orchestration Engine
+	bdsCache := bds.NewCacheManager(cfg.DataDir, nil)
+	bdsResolver := bds.NewResolver(nil)
+	nativeEng, err := engine.NewNativeEngine(cfg.DataDir, bdsCache, bdsResolver, mgrDB)
+	if err != nil {
+		log.Printf("[Engine] Warning: native engine init: %v", err)
+	}
+
+	var dockerEng engine.ServerEngine
+	if d, err := engine.NewDockerEngine(cfg.DockerHost); err == nil {
+		dockerEng = d
 		log.Println("[Engine] Docker container orchestrator initialized.")
 	} else {
-		log.Printf("[WARN] Docker daemon unreachable (%v). Running in simulated fallback mode.", err)
-		serverEngine = engine.NewMockEngine()
+		if runtime.GOOS == "windows" {
+			log.Printf("[Engine] Docker unreachable (%v). Native BDS engine active; Docker instances unavailable.", err)
+		} else {
+			log.Printf("[WARN] Docker daemon unreachable (%v). Running in simulated fallback mode.", err)
+			dockerEng = engine.NewMockEngine()
+		}
 	}
+
+	serverEngine = engine.NewEngineRouter(dockerEng, nativeEng, mgrDB)
 
 	// Connect real-time container log feed to Player Hub and Chat feed parser
 	serverEngine.SetLogListener(func(serverID, line string) {
@@ -261,40 +295,51 @@ func main() {
 
 	// 12. Initialize Dynamic Firewall Driver & Lease Auditor
 	var fwDriver firewall.FirewallDriver
-	detector := firewall.NewNetNSDetector("auto")
-	switch cfg.FirewallDriver {
-	case "iptables":
-		ipt := firewall.NewIPTablesDriver(detector)
-		if err := ipt.Validate(ctx); err == nil {
-			fwDriver = ipt
-			log.Println("[Firewall] Initialized IPTables driver (dedicated chain: BSM_PORT_GATE)")
-		}
-	case "custom":
-		scriptPath := os.Getenv("BSM_FIREWALL_SCRIPT")
-		cust := firewall.NewCustomScriptDriver(scriptPath)
-		if err := cust.Validate(ctx); err == nil {
-			fwDriver = cust
-			log.Printf("[Firewall] Initialized Custom script driver: %s", scriptPath)
-		}
-	default: // "ufw" or default
-		ufw := firewall.NewUFWDriver(detector)
-		if err := ufw.Validate(ctx); err == nil {
-			fwDriver = ufw
-			log.Println("[Firewall] Initialized UFW driver")
+	if runtime.GOOS == "windows" {
+		winFw := firewall.NewWindowsFirewallDriver()
+		if err := winFw.Validate(ctx); err == nil {
+			fwDriver = winFw
+			log.Println("[Firewall] Initialized Windows Advanced Firewall (netsh) driver")
 		} else {
+			log.Printf("[Firewall] Windows firewall unreachable/non-elevated (%v). Operating in simulated Mock driver mode.", err)
+			fwDriver = firewall.NewMockFirewallDriver()
+		}
+	} else {
+		detector := firewall.NewNetNSDetector("auto")
+		switch cfg.FirewallDriver {
+		case "iptables":
 			ipt := firewall.NewIPTablesDriver(detector)
-			if iptErr := ipt.Validate(ctx); iptErr == nil {
+			if err := ipt.Validate(ctx); err == nil {
 				fwDriver = ipt
-				log.Printf("[Firewall] UFW unavailable (%v); fallen back to IPTables driver", err)
+				log.Println("[Firewall] Initialized IPTables driver (dedicated chain: BSM_PORT_GATE)")
+			}
+		case "custom":
+			scriptPath := os.Getenv("BSM_FIREWALL_SCRIPT")
+			cust := firewall.NewCustomScriptDriver(scriptPath)
+			if err := cust.Validate(ctx); err == nil {
+				fwDriver = cust
+				log.Printf("[Firewall] Initialized Custom script driver: %s", scriptPath)
+			}
+		default: // "ufw" or default
+			ufw := firewall.NewUFWDriver(detector)
+			if err := ufw.Validate(ctx); err == nil {
+				fwDriver = ufw
+				log.Println("[Firewall] Initialized UFW driver")
 			} else {
-				log.Printf("[Firewall] UFW unavailable (%v) and IPTables failed (%v)", err, iptErr)
+				ipt := firewall.NewIPTablesDriver(detector)
+				if iptErr := ipt.Validate(ctx); iptErr == nil {
+					fwDriver = ipt
+					log.Printf("[Firewall] UFW unavailable (%v); fallen back to IPTables driver", err)
+				} else {
+					log.Printf("[Firewall] UFW unavailable (%v) and IPTables failed (%v)", err, iptErr)
+				}
 			}
 		}
-	}
 
-	if fwDriver == nil {
-		log.Println("[Firewall] No supported host firewall detected. Operating in simulated Mock driver mode.")
-		fwDriver = firewall.NewMockFirewallDriver()
+		if fwDriver == nil {
+			log.Println("[Firewall] No supported host firewall detected. Operating in simulated Mock driver mode.")
+			fwDriver = firewall.NewMockFirewallDriver()
+		}
 	}
 
 	// Sync permanent allow rules to firewall
@@ -313,14 +358,14 @@ func main() {
 
 	// 14. Build Router
 	router := api.NewRouter(api.RouterOptions{
-		DB:            mgrDB,
-		IPResolver:    resolver,
-		RateLimiter:   rateLimiter,
-		Engine:        serverEngine,
-		Firewall:      fwDriver,
-		Scheduler:     taskScheduler,
-		PortAllocator: portAlloc,
-		PlayerManager: playerMgr,
+		DB:                 mgrDB,
+		IPResolver:         resolver,
+		RateLimiter:        rateLimiter,
+		Engine:             serverEngine,
+		Firewall:           fwDriver,
+		Scheduler:          taskScheduler,
+		PortAllocator:      portAlloc,
+		PlayerManager:      playerMgr,
 		DataDir:            cfg.DataDir,
 		JWTSecret:          []byte(jwtSecretStr),
 		Pepper:             pepperStr,
@@ -328,9 +373,11 @@ func main() {
 		TelemetryCollector: telemetryCollector,
 		MetricsDB:          metricsDB,
 		ResourceMonitor:    resourceMonitor,
+		BDSCache:           bdsCache,
+		BDSResolver:        bdsResolver,
 	})
 
-	// 13. Start HTTP Server
+	// 15. Start HTTP Server
 	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv := &http.Server{
 		Addr:              serverAddr,
@@ -346,12 +393,47 @@ func main() {
 		}
 	}()
 
-	// 14. Graceful Shutdown
+	log.Printf("[Web] Management Dashboard available at: http://localhost:%d\n", cfg.Port)
+
+	if openBrowser && !isWindowsService() {
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			dashURL := fmt.Sprintf("http://localhost:%d", cfg.Port)
+			if runtime.GOOS == "windows" {
+				_ = exec.Command("rundll32", "url.dll,FileProtocolHandler", dashURL).Start()
+			} else {
+				_ = exec.Command("xdg-open", dashURL).Start()
+			}
+		}()
+	}
+
+	// 16. Service & Graceful Shutdown
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	if isWindowsService() {
+		go func() {
+			if err := runWindowsService(rootCtx, rootCancel); err != nil {
+				log.Printf("[Service] Windows service execution error: %v", err)
+			}
+		}()
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+
+	select {
+	case <-quit:
+		log.Println("[SHUTDOWN] OS interrupt signal received.")
+	case <-rootCtx.Done():
+		log.Println("[SHUTDOWN] Service stop requested by SCM.")
+	}
 
 	log.Println("[SHUTDOWN] Terminating Bedrock Server Manager gracefully...")
+
+	// Concurrently stop all running native BDS servers with 15s deadline (Decision 33)
+	if nativeEng != nil {
+		nativeEng.StopAllGracefully(15)
+	}
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

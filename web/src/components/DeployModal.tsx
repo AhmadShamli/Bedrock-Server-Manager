@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api/client';
-import { Preset, SeedPreset, UserPlanStatus, User } from '../types';
+import { Preset, SeedPreset, UserPlanStatus, User, BDSStatus } from '../types';
 import { PopularSeedPicker } from './PopularSeedPicker';
 import {
   Plus,
@@ -92,6 +92,11 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
   const [availableNetworks, setAvailableNetworks] = useState<string[]>(['bridge', 'host']);
 
   // Auxiliary state
+  const [bdsStatus, setBdsStatus] = useState<BDSStatus | null>(null);
+  const [engine, setEngine] = useState<'docker' | 'native'>('docker');
+  const [bdsVersion, setBdsVersion] = useState<string>('latest');
+  const [updatePolicy, setUpdatePolicy] = useState<'auto' | 'manual'>('auto');
+  const [eulaAccepted, setEulaAccepted] = useState<boolean>(false);
   const [presets, setPresets] = useState<Preset[]>([]);
   const [selectedPresetId, setSelectedPresetId] = useState<string>('survival');
   const [showSeedPickerDrawer, setShowSeedPickerDrawer] = useState(false);
@@ -102,6 +107,20 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
   // Load presets & port suggestion on open and apply plan restrictions
   useEffect(() => {
     if (!isOpen) return;
+
+    api.getBDSStatus()
+      .then((status) => {
+        if (status) {
+          setBdsStatus(status);
+          if (status.is_windows) {
+            setEngine('native');
+          }
+          if (status.eula_accepted) {
+            setEulaAccepted(true);
+          }
+        }
+      })
+      .catch(() => {});
 
     api.suggestPorts()
       .then((res) => {
@@ -185,6 +204,15 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
 
     setCreating(true);
     try {
+      if (engine === 'native' && bdsStatus && !bdsStatus.eula_accepted) {
+        if (!eulaAccepted) {
+          setError('You must accept the Minecraft End User License Agreement and Microsoft Privacy Policy to deploy a native BDS server.');
+          setCreating(false);
+          return;
+        }
+        await api.acceptBDSEULA();
+      }
+
       await api.createServer({
         id: trimmedId,
         name: trimmedName,
@@ -198,10 +226,13 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
         cpu_limit: Number(cpuLimit),
         idle_timeout_minutes: Math.max(0, Number(idleTimeoutMinutes) || 0),
         autostart_on_boot: autostartOnBoot,
-        port_gate_enabled: portGate,
+        port_gate_enabled: bdsStatus?.is_windows && engine === 'docker' ? false : portGate,
         port_gate_mode: portGateMode,
         port_gate_timeout: 7200,
-        network_mode: isAdmin ? networkMode : 'host',
+        network_mode: bdsStatus?.is_windows && engine === 'docker' ? 'bridge' : (isAdmin ? networkMode : 'host'),
+        engine,
+        bds_version: engine === 'native' ? bdsVersion : undefined,
+        update_policy: engine === 'native' ? updatePolicy : undefined,
       });
 
       onSuccess();
@@ -211,6 +242,130 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
     } finally {
       setCreating(false);
     }
+  };
+
+  const renderEngineSelector = () => {
+    if (!bdsStatus?.is_windows) return null;
+    return (
+      <div className="p-4 rounded-xl bg-obsidian-950/80 border border-obsidian-800 space-y-3 font-mono">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold text-slate-200">Execution Engine</span>
+          <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+            Windows Host Detected
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => setEngine('native')}
+            className={`p-3 rounded-lg border text-left text-xs transition-all ${
+              engine === 'native'
+                ? 'bg-emerald-950/40 border-emerald-500 text-slate-100 ring-1 ring-emerald-500/30'
+                : 'bg-obsidian-900 border-obsidian-700 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className="font-bold flex items-center gap-1.5">
+              <span>Native BDS</span>
+              <span className="text-[10px] text-emerald-400 font-semibold">(Recommended)</span>
+            </div>
+            <div className="text-[10px] text-slate-400 mt-1">
+              Official bedrock_server.exe child process with Job Object resource limits
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEngine('docker');
+              setPortGate(false);
+              setNetworkMode('bridge');
+            }}
+            className={`p-3 rounded-lg border text-left text-xs transition-all ${
+              engine === 'docker'
+                ? 'bg-emerald-950/40 border-emerald-500 text-slate-100 ring-1 ring-emerald-500/30'
+                : 'bg-obsidian-900 border-obsidian-700 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <div className="font-bold">Docker Container</div>
+            <div className="text-[10px] text-slate-400 mt-1">
+              Linux container via Docker Desktop (WSL2 bridge mode)
+            </div>
+          </button>
+        </div>
+
+        {engine === 'native' ? (
+          <div className="space-y-3 pt-2 border-t border-obsidian-800/80">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-slate-300 mb-1">Official BDS Version</label>
+                <select
+                  value={bdsVersion}
+                  onChange={(e) => setBdsVersion(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                >
+                  <option value="latest">Latest Official Stable</option>
+                  <option value="preview">Latest Official Preview / Beta</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-300 mb-1">Update Policy</label>
+                <select
+                  value={updatePolicy}
+                  onChange={(e) => setUpdatePolicy(e.target.value as 'auto' | 'manual')}
+                  className="w-full px-3 py-2 rounded-lg bg-obsidian-900 border border-obsidian-700 text-slate-100 text-xs focus:border-emerald-500"
+                >
+                  <option value="auto">Automatic (Update on boot if newer exists)</option>
+                  <option value="manual">Manual (Update only when triggered)</option>
+                </select>
+              </div>
+            </div>
+
+            {!bdsStatus.vc_installed && (
+              <div className="p-3 rounded-lg bg-amber-950/40 border border-amber-600/40 text-amber-300 text-xs flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <span>Missing Microsoft Visual C++ 2015-2022 Redistributable (x64). </span>
+                  <a
+                    href="https://aka.ms/vs/17/release/vc_redist.x64.exe"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline text-emerald-400 hover:text-emerald-300 font-bold"
+                  >
+                    Download VC++ Runtime
+                  </a>
+                  <span> to prevent startup crashes.</span>
+                </div>
+              </div>
+            )}
+
+            {!bdsStatus.eula_accepted && (
+              <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-500/30 flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  id="bds_eula_check"
+                  checked={eulaAccepted}
+                  onChange={(e) => setEulaAccepted(e.target.checked)}
+                  className="mt-1 rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
+                />
+                <label htmlFor="bds_eula_check" className="text-xs text-slate-300 cursor-pointer">
+                  I agree to the{' '}
+                  <a href={bdsStatus.eula_url} target="_blank" rel="noreferrer" className="underline text-emerald-400 hover:text-emerald-300">
+                    Minecraft End User License Agreement
+                  </a>{' '}
+                  and{' '}
+                  <a href={bdsStatus.privacy_url} target="_blank" rel="noreferrer" className="underline text-emerald-400 hover:text-emerald-300">
+                    Microsoft Privacy Statement
+                  </a>.
+                </label>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="p-2.5 rounded-lg bg-obsidian-900/60 border border-obsidian-800 text-[11px] text-slate-400">
+            <span className="text-amber-400 font-bold">Notice:</span> Port Gate is unsupported for Docker instances on Windows. UDP ports bind directly in bridge mode.
+          </div>
+        )}
+      </div>
+    );
   };
 
   if (!isOpen) return null;
@@ -386,6 +541,8 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                       </div>
                     </div>
                   </div>
+
+                  {renderEngineSelector()}
 
                   {/* Preset Templates */}
                   <div>
@@ -1044,6 +1201,8 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                   />
                 </div>
               </div>
+
+              {renderEngineSelector()}
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>

@@ -19,8 +19,9 @@ import (
 )
 
 type AddonHandler struct {
-	db      *database.ManagerDB
-	dataDir string
+	db            *database.ManagerDB
+	dataDir       string
+	serverHandler *ServerHandler
 }
 
 func NewAddonHandler(db *database.ManagerDB, dataDir string) *AddonHandler {
@@ -28,6 +29,10 @@ func NewAddonHandler(db *database.ManagerDB, dataDir string) *AddonHandler {
 		db:      db,
 		dataDir: dataDir,
 	}
+}
+
+func (h *AddonHandler) SetServerHandler(sh *ServerHandler) {
+	h.serverHandler = sh
 }
 
 func (h *AddonHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -78,24 +83,44 @@ func (h *AddonHandler) Install(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	packs, err := addon.InstallAllPacks(serverDir, tempFile, size)
-	if err != nil || len(packs) == 0 {
-		errMsg := "failed to install addon"
-		if err != nil {
-			errMsg = err.Error()
-		}
-		http.Error(w, fmt.Sprintf(`{"error": "%s"}`, errMsg), http.StatusBadRequest)
-		return
+	actorName := "user"
+	claims := GetUserClaims(r)
+	if claims != nil {
+		actorName = claims.Username
 	}
 
-	for i := range packs {
-		if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
-			packs[i] = *activePack
+	var packs []addon.InstalledPack
+	installAction := func() error {
+		var err error
+		packs, err = addon.InstallAllPacks(serverDir, tempFile, size)
+		if err != nil || len(packs) == 0 {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("no valid packs found in archive")
+		}
+		for i := range packs {
+			if activePack, err := addon.SetPackActive(serverDir, packs[i].Type, packs[i].Folder, true); err == nil && activePack != nil {
+				packs[i] = *activePack
+			}
+		}
+		return nil
+	}
+
+	if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv != nil && h.serverHandler != nil {
+		if err := h.serverHandler.WithServerStopped(r.Context(), srv, "user", actorName, "addon_install", GetClientIP(r).String(), installAction); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := installAction(); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "%s"}`, err.Error()), http.StatusBadRequest)
+			return
 		}
 	}
 	pack := &packs[0]
 
-	claims := GetUserClaims(r)
+	claims = GetUserClaims(r)
 	if claims != nil {
 		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 			UserID:    &claims.UserID,
@@ -361,12 +386,28 @@ func (h *AddonHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	folder := chi.URLParam(r, "folder")
 	serverDir := filepath.Join(h.dataDir, "servers", serverID)
 
-	if err := addon.DeletePack(serverDir, packType, folder); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to delete addon: %s"}`, err.Error()), http.StatusBadRequest)
-		return
+	actorName := "user"
+	claims := GetUserClaims(r)
+	if claims != nil {
+		actorName = claims.Username
 	}
 
-	claims := GetUserClaims(r)
+	deleteAction := func() error {
+		return addon.DeletePack(serverDir, packType, folder)
+	}
+
+	if srv, err := h.db.GetServer(r.Context(), serverID); err == nil && srv != nil && h.serverHandler != nil {
+		if err := h.serverHandler.WithServerStopped(r.Context(), srv, "user", actorName, "addon_delete", GetClientIP(r).String(), deleteAction); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Failed to delete addon: %s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := deleteAction(); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error": "Failed to delete addon: %s"}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	}
+
 	if claims != nil {
 		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 			UserID:    &claims.UserID,

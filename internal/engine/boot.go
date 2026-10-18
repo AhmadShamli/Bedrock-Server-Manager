@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"log"
+	"runtime"
+	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
@@ -35,6 +37,20 @@ func (bm *BootManager) AutostartServers(ctx context.Context) ([]string, error) {
 	servers, err := bm.db.ListServers(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	// On Windows, native instances start immediately; for Docker instances,
+	// wait up to 45s (polling every 5s) for Docker Desktop VM/daemon readiness (Decision 35).
+	hasDockerToStart := false
+	for _, s := range servers {
+		if s.AutostartOnBoot && s.Engine == models.EngineDocker {
+			hasDockerToStart = true
+			break
+		}
+	}
+
+	if hasDockerToStart && runtime.GOOS == "windows" {
+		bm.waitForDocker(ctx, 45*time.Second)
 	}
 
 	var started []string
@@ -74,4 +90,33 @@ func (bm *BootManager) AutostartServers(ctx context.Context) ([]string, error) {
 	}
 
 	return started, nil
+}
+
+func (bm *BootManager) waitForDocker(ctx context.Context, timeout time.Duration) {
+	log.Printf("[BootManager] Polling Docker daemon readiness (up to %v)...", timeout)
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	// Initial immediate probe
+	if _, err := bm.engine.ListNetworks(ctx); err == nil {
+		log.Println("[BootManager] Docker daemon is ready.")
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := bm.engine.ListNetworks(ctx); err == nil {
+				log.Println("[BootManager] Docker daemon is ready.")
+				return
+			}
+			if time.Now().After(deadline) {
+				log.Printf("[WARN] [BootManager] Docker daemon readiness timed out after %v", timeout)
+				return
+			}
+		}
+	}
 }

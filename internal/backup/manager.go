@@ -58,7 +58,7 @@ func ExportWorld(serverDir, worldName, outPath string) error {
 		worldDir = filepath.Join(serverDir, "worlds")
 	}
 
-	return zipDirectory(worldDir, outPath)
+	return zipDirectory(worldDir, outPath, nil)
 }
 
 // ImportWorld extracts an uploaded .mcworld or .zip into the server's worlds folder.

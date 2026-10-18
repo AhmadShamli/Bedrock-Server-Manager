@@ -136,6 +136,18 @@ func (m *MockEngine) SetLogListener(listener func(serverID, line string)) {
 	m.logListener = listener
 }
 
+func (m *MockEngine) AppendMockLog(serverID, line string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rb, ok := m.ringBuffers[serverID]; ok {
+		rb.Write(line)
+	} else {
+		rb := NewRingBuffer(1000)
+		rb.Write(line)
+		m.ringBuffers[serverID] = rb
+	}
+}
+
 func (m *MockEngine) GetRecentLogs(serverID string) []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

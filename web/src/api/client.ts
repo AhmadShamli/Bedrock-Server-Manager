@@ -1,4 +1,4 @@
-import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AddonServerConfig, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary } from '../types';
+import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AddonServerConfig, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary, BDSStatus, BDSVersionsResponse } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -805,6 +805,31 @@ class APIClient {
       method: 'POST',
       body: JSON.stringify({ key, value }),
     });
+  }
+
+  // --- BDS & Windows Host ---
+  async getBDSStatus(): Promise<BDSStatus> {
+    return this.request('/api/system/bds/status');
+  }
+
+  async acceptBDSEULA(): Promise<{ status: string }> {
+    return this.request('/api/system/bds/eula', { method: 'POST' });
+  }
+
+  async purgeBDSCache(): Promise<{ status: string }> {
+    return this.request('/api/system/bds/purge-cache', { method: 'POST' });
+  }
+
+  async checkBDSVersions(force?: boolean): Promise<BDSVersionsResponse> {
+    return this.request(`/api/system/bds/versions${force ? '?force=true' : ''}`);
+  }
+
+  async setLoopbackExemption(): Promise<{ status: string; output: string }> {
+    return this.request('/api/system/windows/loopback', { method: 'POST' });
+  }
+
+  async addDefenderExclusion(): Promise<{ status: string; exclusion_path: string }> {
+    return this.request('/api/system/windows/defender', { method: 'POST' });
   }
 
   // --- User Management ---

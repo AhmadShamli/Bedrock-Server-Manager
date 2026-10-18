@@ -72,9 +72,44 @@ export interface Server {
   seed?: string;
   game_server_address?: string;
   network_mode?: string;
+  engine?: 'docker' | 'native';
+  bds_version?: string;
+  update_policy?: 'auto' | 'manual';
+  installed_bds_version?: string;
+  previous_bds_version?: string;
   owner_user_id?: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface BDSStatus {
+  is_windows: boolean;
+  eula_accepted: boolean;
+  eula_accepted_at?: string;
+  eula_accepted_by?: string;
+  eula_url: string;
+  privacy_url: string;
+  vc_installed: boolean;
+  vc_error?: string;
+  cache_bytes: number;
+  cache_count: number;
+  cached_versions: string[];
+  data_dir: string;
+}
+
+export interface BDSVersionsResponse {
+  latest?: {
+    version: string;
+    download_url: string;
+    is_preview: boolean;
+    resolved_at: string;
+  };
+  preview?: {
+    version: string;
+    download_url: string;
+    is_preview: boolean;
+    resolved_at: string;
+  };
 }
 
 export interface PortGateKey {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -217,6 +218,31 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 		s.IdleTimeoutMinutes = 0
 	}
 	s.GameServerAddress = strings.TrimSpace(s.GameServerAddress)
+
+	if runtime.GOOS == "windows" {
+		if s.Engine == "" {
+			s.Engine = models.EngineNative
+		}
+		if s.Engine == models.EngineDocker {
+			// Enforce bridge mode and disable port gate for Docker on Windows (Decisions 8 & 19)
+			s.NetworkMode = "bridge"
+			s.PortGateEnabled = false
+		} else if s.Engine == models.EngineNative {
+			s.NetworkMode = "host"
+		}
+	} else {
+		if s.Engine == models.EngineNative {
+			http.Error(w, `{"error": "Native BDS engine is only supported on Windows"}`, http.StatusBadRequest)
+			return
+		}
+		s.Engine = models.EngineDocker
+	}
+	if s.BDSVersion == "" {
+		s.BDSVersion = "latest"
+	}
+	if s.UpdatePolicy == "" {
+		s.UpdatePolicy = models.UpdatePolicyManual
+	}
 
 	existing, _ := h.db.ListServers(r.Context())
 
@@ -983,6 +1009,8 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		GameServerAddress  *string  `json:"game_server_address"`
 		NetworkMode        *string  `json:"network_mode"`
 		IdleTimeoutMinutes *int     `json:"idle_timeout_minutes"`
+		BDSVersion         *string  `json:"bds_version"`
+		UpdatePolicy       *string  `json:"update_policy"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1040,6 +1068,16 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.PortGateTimeout != nil && *req.PortGateTimeout > 0 {
 		existing.PortGateTimeout = *req.PortGateTimeout
+	}
+	if req.BDSVersion != nil && *req.BDSVersion != "" {
+		existing.BDSVersion = *req.BDSVersion
+	}
+	if req.UpdatePolicy != nil && *req.UpdatePolicy != "" {
+		existing.UpdatePolicy = *req.UpdatePolicy
+	}
+	if runtime.GOOS == "windows" && existing.Engine == models.EngineDocker {
+		existing.NetworkMode = "bridge"
+		existing.PortGateEnabled = false
 	}
 	if isAdmin {
 		if req.MemoryLimit != nil && *req.MemoryLimit != "" {
