@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log"
+	"runtime"
 	"sync"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
@@ -61,7 +63,20 @@ func (r *EngineRouter) resolveEngine(server *models.Server) (ServerEngine, error
 
 	engineType := server.Engine
 	if engineType == "" {
-		engineType = models.EngineDocker
+		if runtime.GOOS == "windows" {
+			engineType = models.EngineNative
+		} else {
+			engineType = models.EngineDocker
+		}
+		server.Engine = engineType
+	}
+
+	// On Windows, if the server is configured for Docker but the Docker daemon is unreachable,
+	// automatically fallback to the Native BDS host engine.
+	if runtime.GOOS == "windows" && engineType == models.EngineDocker && r.dockerEngine == nil && r.nativeEngine != nil {
+		log.Printf("[EngineRouter] Server '%s' has engine=docker, but Docker is unavailable on Windows. Auto-falling back to Native BDS engine.", server.ID)
+		engineType = models.EngineNative
+		server.Engine = models.EngineNative
 	}
 
 	r.mu.Lock()
@@ -89,6 +104,19 @@ func (r *EngineRouter) resolveEngineByID(serverID string) (ServerEngine, string)
 	if !ok && r.lookup != nil {
 		if s, err := r.lookup.GetServer(context.Background(), serverID); err == nil && s != nil {
 			engType = s.Engine
+			if engType == "" {
+				if runtime.GOOS == "windows" {
+					engType = models.EngineNative
+				} else {
+					engType = models.EngineDocker
+				}
+				s.Engine = engType
+			}
+			if runtime.GOOS == "windows" && engType == models.EngineDocker && r.dockerEngine == nil && r.nativeEngine != nil {
+				log.Printf("[EngineRouter] Server '%s' has engine=docker, but Docker is unavailable on Windows. Auto-falling back to Native BDS engine.", serverID)
+				engType = models.EngineNative
+				s.Engine = models.EngineNative
+			}
 			r.mu.Lock()
 			r.serverEngines[serverID] = engType
 			r.mu.Unlock()
@@ -99,7 +127,14 @@ func (r *EngineRouter) resolveEngineByID(serverID string) (ServerEngine, string)
 		return r.nativeEngine, engType
 	}
 	if engType == models.EngineDocker {
+		if r.dockerEngine == nil && runtime.GOOS == "windows" && r.nativeEngine != nil {
+			return r.nativeEngine, models.EngineNative
+		}
 		return r.dockerEngine, engType
+	}
+
+	if runtime.GOOS == "windows" && r.nativeEngine != nil {
+		return r.nativeEngine, models.EngineNative
 	}
 	return nil, engType
 }

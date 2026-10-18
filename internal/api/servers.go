@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -367,7 +368,8 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Provision container via engine
 	cid, err := h.engine.CreateServer(r.Context(), &s, h.dataDir)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Container engine creation failed: %s"}`, err.Error()), http.StatusInternalServerError)
+		log.Printf("[Server] ERROR: Failed to create server '%s': %v", s.ID, err)
+		writeJSONError(w, fmt.Sprintf("Server creation failed: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 	s.ContainerID = cid
@@ -486,7 +488,8 @@ func (h *ServerHandler) Start(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.StartServerInstance(r.Context(), server, "user", actorName, "start_server", GetClientIP(r).String()); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to start server: %s"}`, err.Error()), http.StatusInternalServerError)
+		log.Printf("[Server] ERROR: Failed to start server '%s': %v", id, err)
+		writeJSONError(w, fmt.Sprintf("Failed to start server: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 
@@ -615,7 +618,8 @@ func (h *ServerHandler) Stop(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.engine.StopServer(r.Context(), server, 15); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to stop server: %s"}`, err.Error()), http.StatusInternalServerError)
+		log.Printf("[Server] ERROR: Failed to stop server '%s': %v", id, err)
+		writeJSONError(w, fmt.Sprintf("Failed to stop server: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 
@@ -648,7 +652,8 @@ func (h *ServerHandler) Restart(w http.ResponseWriter, r *http.Request) {
 	addon.SyncActivePacksToWorlds(filepath.Join(h.dataDir, "servers", server.ID))
 
 	if err := h.engine.RestartServer(r.Context(), server); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to restart server: %s"}`, err.Error()), http.StatusInternalServerError)
+		log.Printf("[Server] ERROR: Failed to restart server '%s': %v", id, err)
+		writeJSONError(w, fmt.Sprintf("Failed to restart server: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 
@@ -717,7 +722,8 @@ func (h *ServerHandler) SendCommand(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.engine.SendConsoleCommand(r.Context(), server, cleanCmd); err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Command execution failed: %s"}`, err.Error()), http.StatusInternalServerError)
+		log.Printf("[Server] ERROR: Failed to send command to server '%s': %v", id, err)
+		writeJSONError(w, fmt.Sprintf("Command execution failed: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 
@@ -745,7 +751,7 @@ func (h *ServerHandler) Stats(w http.ResponseWriter, r *http.Request) {
 
 	stats, err := h.engine.GetContainerStats(r.Context(), server)
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "Failed to sample stats: %s"}`, err.Error()), http.StatusInternalServerError)
+		writeJSONError(w, fmt.Sprintf("Failed to sample stats: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 
@@ -1157,7 +1163,8 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		// Recreate container with new network mode
 		cid, err := h.engine.CreateServer(r.Context(), existing, h.dataDir)
 		if err != nil {
-			http.Error(w, fmt.Sprintf(`{"error": "Failed to recreate container with new network mode: %s"}`, err.Error()), http.StatusInternalServerError)
+			log.Printf("[Server] ERROR: Failed to recreate server '%s' with new network mode: %v", existing.ID, err)
+			writeJSONError(w, fmt.Sprintf("Failed to recreate container with new network mode: %s", err.Error()), http.StatusInternalServerError)
 			return
 		}
 		existing.ContainerID = cid

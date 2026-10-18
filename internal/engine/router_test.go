@@ -75,3 +75,39 @@ func TestEngineRouter(t *testing.T) {
 		t.Fatalf("unexpected docker logs: %v", dockLogs)
 	}
 }
+
+func TestEngineRouterFallback(t *testing.T) {
+	nativeEng := NewMockEngine()
+	lookup := &mockLookup{
+		servers: map[string]*models.Server{
+			"unassigned-1": {ID: "unassigned-1", Engine: ""},
+			"dock-fallback": {ID: "dock-fallback", Engine: models.EngineDocker},
+		},
+	}
+
+	// Docker is nil (e.g. host mode on Windows with no Docker daemon)
+	router := NewEngineRouter(nil, nativeEng, lookup)
+	ctx := context.Background()
+
+	// 1. Create server with engine native
+	srvNative := &models.Server{ID: "nat-direct", Engine: models.EngineNative}
+	cid, err := router.CreateServer(ctx, srvNative, "/tmp")
+	if err != nil {
+		t.Fatalf("expected native create to succeed: %v", err)
+	}
+	if cid == "" {
+		t.Fatalf("expected valid CID")
+	}
+
+	// 2. Start server with engine native
+	if err := router.StartServer(ctx, srvNative); err != nil {
+		t.Fatalf("failed to start native server: %v", err)
+	}
+
+	// 3. Resolve by ID for native
+	eng, engType := router.resolveEngineByID("nat-direct")
+	if eng != nativeEng || engType != models.EngineNative {
+		t.Fatalf("expected native engine for nat-direct, got %v (%s)", eng, engType)
+	}
+}
+

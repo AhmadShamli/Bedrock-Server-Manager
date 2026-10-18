@@ -131,6 +131,10 @@ type NativeEngine struct {
 
 // NewNativeEngine initializes the NativeEngine for Windows.
 func NewNativeEngine(dataDir string, bdsCache *bds.CacheManager, bdsResolver *bds.Resolver, db bds.SettingGetter) (*NativeEngine, error) {
+	absDataDir, err := filepath.Abs(dataDir)
+	if err == nil {
+		dataDir = absDataDir
+	}
 	return &NativeEngine{
 		dataDir:        dataDir,
 		bdsCache:       bdsCache,
@@ -146,31 +150,63 @@ func NewNativeEngine(dataDir string, bdsCache *bds.CacheManager, bdsResolver *bd
 
 // CheckVCRuntime checks for required Visual C++ 2015-2022 x64 runtime libraries.
 func CheckVCRuntime() error {
-	sysRoot := os.Getenv("SystemRoot")
-	if sysRoot == "" {
-		sysRoot = `C:\Windows`
+	// 1. Check System32 DLLs
+	roots := []string{os.Getenv("SystemRoot"), os.Getenv("windir"), `C:\Windows`}
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+		sys32 := filepath.Join(root, "System32")
+		msvcp := filepath.Join(sys32, "msvcp140.dll")
+		vcrun := filepath.Join(sys32, "vcruntime140.dll")
+		if _, errM := os.Stat(msvcp); errM == nil {
+			if _, errV := os.Stat(vcrun); errV == nil {
+				return nil
+			}
+		}
 	}
-	sys32 := filepath.Join(sysRoot, "System32")
-	msvcp := filepath.Join(sys32, "msvcp140.dll")
-	vcrun := filepath.Join(sys32, "vcruntime140.dll")
 
-	_, errM := os.Stat(msvcp)
-	_, errV := os.Stat(vcrun)
-	if errM != nil || errV != nil {
-		return fmt.Errorf("missing Microsoft Visual C++ 2015-2022 Redistributable (x64). Please install it from https://aka.ms/vs/17/release/vc_redist.x64.exe to run Bedrock Dedicated Server")
+	// 2. Check Windows Registry
+	regKeys := []string{
+		`SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64`,
+		`SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64`,
 	}
+	for _, regKey := range regKeys {
+		var hKey windows.Handle
+		keyPtr, err := windows.UTF16PtrFromString(regKey)
+		if err != nil {
+			continue
+		}
+		if err := windows.RegOpenKeyEx(windows.HKEY_LOCAL_MACHINE, keyPtr, 0, windows.KEY_READ, &hKey); err == nil {
+			valPtr, err := windows.UTF16PtrFromString("Installed")
+			if err == nil {
+				var valType uint32
+				var buf [4]byte
+				buflen := uint32(len(buf))
+				if err := windows.RegQueryValueEx(hKey, valPtr, nil, &valType, &buf[0], &buflen); err == nil {
+					windows.CloseHandle(hKey)
+					if valType == windows.REG_DWORD && buf[0] == 1 {
+						return nil
+					}
+				}
+			}
+			windows.CloseHandle(hKey)
+		}
+	}
+
+	log.Printf("[NativeEngine] WARNING: Microsoft Visual C++ 2015-2022 Redistributable (x64) may not be installed. If server crashes with 0xC0000135, install from https://aka.ms/vs/17/release/vc_redist.x64.exe")
 	return nil
 }
 
 func (e *NativeEngine) getServerDir(serverID string) string {
-	return filepath.Join(e.dataDir, "servers", serverID)
+	absDir, err := filepath.Abs(filepath.Join(e.dataDir, "servers", serverID))
+	if err != nil {
+		return filepath.Join(e.dataDir, "servers", serverID)
+	}
+	return absDir
 }
 
 func (e *NativeEngine) CreateServer(ctx context.Context, server *models.Server, dataDir string) (string, error) {
-	if err := CheckVCRuntime(); err != nil {
-		return "", err
-	}
-
 	serverDir := e.getServerDir(server.ID)
 	if err := os.MkdirAll(serverDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create server directory: %w", err)
@@ -179,7 +215,15 @@ func (e *NativeEngine) CreateServer(ctx context.Context, server *models.Server, 
 	// Verify EULA acceptance
 	eulaAccepted, _ := bds.IsEULAAccepted(ctx, e.db)
 	if !eulaAccepted {
-		return "", bds.ErrEULANotAccepted
+		if os.Getenv("EULA") == "TRUE" || os.Getenv("EULA") == "true" || os.Getenv("EULA") == "1" {
+			if setter, ok := e.db.(bds.SettingSetter); ok {
+				_ = bds.AcceptEULA(ctx, setter, "system-env")
+				eulaAccepted = true
+			}
+		}
+	}
+	if !eulaAccepted {
+		return "", fmt.Errorf("%w. Please accept the Minecraft EULA in Settings or deploy dialog before launching the server", bds.ErrEULANotAccepted)
 	}
 
 	// Resolve requested BDS version
@@ -187,19 +231,25 @@ func (e *NativeEngine) CreateServer(ctx context.Context, server *models.Server, 
 	if verSelector == "" {
 		verSelector = "latest"
 	}
+	log.Printf("[NativeEngine] Resolving BDS version '%s' for server '%s'...", verSelector, server.ID)
 	resolved, err := e.bdsResolver.ResolveVersion(ctx, verSelector, false)
 	if err != nil {
+		log.Printf("[NativeEngine] ERROR: Failed to resolve BDS version '%s': %v", verSelector, err)
 		return "", fmt.Errorf("failed to resolve BDS version: %w", err)
 	}
 
 	// Download and extract into cache
+	log.Printf("[NativeEngine] Ensuring BDS version %s is cached...", resolved.Version)
 	cacheDir, err := e.bdsCache.EnsureVersion(ctx, resolved, true)
 	if err != nil {
+		log.Printf("[NativeEngine] ERROR: Failed to prepare BDS version %s: %v", resolved.Version, err)
 		return "", fmt.Errorf("failed to prepare BDS version %s: %w", resolved.Version, err)
 	}
 
 	// Install binaries into instance directory
+	log.Printf("[NativeEngine] Installing server binaries from %s to %s...", cacheDir, serverDir)
 	if err := bds.InstallServerFiles(serverDir, cacheDir, false); err != nil {
+		log.Printf("[NativeEngine] ERROR: Failed to install server files to %s: %v", serverDir, err)
 		return "", fmt.Errorf("failed to install server binaries: %w", err)
 	}
 
@@ -218,13 +268,12 @@ func (e *NativeEngine) CreateServer(ctx context.Context, server *models.Server, 
 	}
 	e.mu.Unlock()
 
+	log.Printf("[NativeEngine] Server '%s' successfully provisioned with BDS %s at %s", server.ID, resolved.Version, serverDir)
 	return fmt.Sprintf("native-%s", server.ID), nil
 }
 
 func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) error {
-	if err := CheckVCRuntime(); err != nil {
-		return err
-	}
+	_ = CheckVCRuntime()
 
 	if e.circuitBreaker.IsTripped(server.ID) {
 		return fmt.Errorf("circuit breaker tripped for server %s (repeated crashes)", server.ID)
@@ -242,8 +291,13 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 
 	// If binary does not exist, provision it
 	if _, err := os.Stat(exePath); os.IsNotExist(err) {
+		log.Printf("[NativeEngine] bedrock_server.exe not found at %s. Provisioning instance for '%s'...", exePath, server.ID)
 		if _, err := e.CreateServer(ctx, server, e.dataDir); err != nil {
-			return err
+			log.Printf("[NativeEngine] ERROR: Auto-provisioning failed for '%s': %v", server.ID, err)
+			return fmt.Errorf("failed to provision server files: %w", err)
+		}
+		if _, err := os.Stat(exePath); os.IsNotExist(err) {
+			return fmt.Errorf("bedrock_server.exe still not found after provisioning at %s", exePath)
 		}
 	} else if server.UpdatePolicy == models.UpdatePolicyAuto {
 		// Auto update check on start (Decision 4 & 16)
@@ -266,6 +320,16 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 	mergedProps, mergedKeys := configfile.MergeDefaultProperties(existingProps, existingKeys, server)
 	_ = configfile.WriteProperties(propsPath, mergedProps, mergedKeys)
 
+	// Ensure absolute paths for working directory and executable
+	absServerDir, err := filepath.Abs(serverDir)
+	if err == nil {
+		serverDir = absServerDir
+	}
+	absExePath, err := filepath.Abs(exePath)
+	if err == nil {
+		exePath = absExePath
+	}
+
 	// Configure Job Object with RAM and CPU caps
 	memBytes, _ := ParseMemoryBytes(server.MemoryLimit)
 	hJob, err := createWindowsJob(memBytes, server.CPULimit)
@@ -273,6 +337,7 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 		log.Printf("[WARN] [NativeEngine] Failed to create Job Object (%v), running without Job limits", err)
 	}
 
+	log.Printf("[NativeEngine] Launching '%s': %s (workdir: %s)", server.ID, exePath, serverDir)
 	cmd := exec.Command(exePath)
 	cmd.Dir = serverDir
 	cmd.SysProcAttr = &windows.SysProcAttr{
@@ -313,10 +378,13 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 		if hJob != 0 {
 			windows.CloseHandle(hJob)
 		}
+		log.Printf("[NativeEngine] ERROR: Failed to start bedrock_server.exe for '%s': %v", server.ID, err)
 		return fmt.Errorf("failed to start bedrock_server.exe: %w", err)
 	}
 
 	pid := cmd.Process.Pid
+	log.Printf("[NativeEngine] Server '%s' started successfully (PID: %d) at %s", server.ID, pid, serverDir)
+
 	if hJob != 0 {
 		hProcess, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_INFORMATION, false, uint32(pid))
 		if err == nil {
@@ -406,6 +474,12 @@ func (e *NativeEngine) supervise(server *models.Server, proc *nativeProcess, log
 		windows.CloseHandle(proc.jobHandle)
 	}
 
+	var exitCode int
+	if exitErr, ok := waitErr.(*exec.ExitError); ok {
+		exitCode = exitErr.ExitCode()
+	}
+	proc.exitCode = exitCode
+
 	e.mu.Lock()
 	delete(e.processes, server.ID)
 	e.mu.Unlock()
@@ -415,7 +489,33 @@ func (e *NativeEngine) supervise(server *models.Server, proc *nativeProcess, log
 	}
 
 	now := time.Now().UTC()
-	log.Printf("[WARN] [NativeEngine] Server %s exited unexpectedly (%v)", server.ID, waitErr)
+	log.Printf("[WARN] [NativeEngine] Server %s exited unexpectedly (%v, exit code: %d / 0x%X)", server.ID, waitErr, exitCode, uint32(exitCode))
+
+	isDllNotFound := uint32(exitCode) == 0xC0000135
+	if isDllNotFound {
+		errDllMsg := fmt.Sprintf("[NativeEngine] CRITICAL: Server '%s' crashed with 0xC0000135 (STATUS_DLL_NOT_FOUND). Microsoft Visual C++ 2015-2022 Redistributable (x64) is missing! Please install it from https://aka.ms/vs/17/release/vc_redist.x64.exe", server.ID)
+		log.Println(errDllMsg)
+
+		e.mu.RLock()
+		rb := e.ringBuffers[server.ID]
+		subs := e.logChans[server.ID]
+		listener := e.logListener
+		e.mu.RUnlock()
+
+		if rb != nil {
+			rb.Write(errDllMsg)
+		}
+		for _, ch := range subs {
+			select {
+			case ch <- errDllMsg:
+			default:
+			}
+		}
+		if listener != nil {
+			listener(server.ID, errDllMsg)
+		}
+	}
+
 	e.circuitBreaker.RecordCrash(server.ID, now)
 
 	proc.crashHistory = append(proc.crashHistory, now)
@@ -438,7 +538,7 @@ func (e *NativeEngine) supervise(server *models.Server, proc *nativeProcess, log
 		}
 	}
 
-	if !e.circuitBreaker.IsTripped(server.ID) {
+	if !isDllNotFound && !e.circuitBreaker.IsTripped(server.ID) {
 		// Backoff restart: 2s
 		time.Sleep(2 * time.Second)
 		_ = e.StartServer(context.Background(), server)

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/netip"
 
@@ -40,3 +41,11 @@ func GetUserClaims(r *http.Request) *auth.Claims {
 	}
 	return nil
 }
+
+// writeJSONError safely writes a JSON response with properly encoded and escaped error message.
+func writeJSONError(w http.ResponseWriter, message string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
