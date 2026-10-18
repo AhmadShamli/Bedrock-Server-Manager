@@ -94,6 +94,8 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
   // Auxiliary state
   const [bdsStatus, setBdsStatus] = useState<BDSStatus | null>(null);
   const [engine, setEngine] = useState<'docker' | 'native'>('docker');
+  const isWindowsDocker = Boolean(bdsStatus?.is_windows && engine === 'docker');
+  const effectivePortGate = isWindowsDocker ? false : portGate;
   const [bdsVersion, setBdsVersion] = useState<string>('latest');
   const [updatePolicy, setUpdatePolicy] = useState<'auto' | 'manual'>('auto');
   const [eulaAccepted, setEulaAccepted] = useState<boolean>(false);
@@ -226,10 +228,10 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
         cpu_limit: Number(cpuLimit),
         idle_timeout_minutes: Math.max(0, Number(idleTimeoutMinutes) || 0),
         autostart_on_boot: autostartOnBoot,
-        port_gate_enabled: bdsStatus?.is_windows && engine === 'docker' ? false : portGate,
+        port_gate_enabled: effectivePortGate,
         port_gate_mode: portGateMode,
         port_gate_timeout: 7200,
-        network_mode: bdsStatus?.is_windows && engine === 'docker' ? 'bridge' : (isAdmin ? networkMode : 'host'),
+        network_mode: isWindowsDocker ? 'bridge' : (isAdmin ? networkMode : 'host'),
         engine,
         bds_version: engine === 'native' ? bdsVersion : undefined,
         update_policy: engine === 'native' ? updatePolicy : undefined,
@@ -957,31 +959,49 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                       Keep your Bedrock port completely closed to public scanners and DDoS bots. Players unlock temporary firewall leases via the web Knock Portal.
                     </p>
 
+                    {isWindowsDocker && (
+                      <div className="p-3.5 mb-4 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-300 text-xs font-mono flex items-start gap-2.5">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold block mb-0.5">Port Gate Unavailable for Docker on Windows</span>
+                          <p className="text-[11px] text-slate-300 leading-relaxed">
+                            Docker containers on Windows run inside a virtualized WSL2 bridge network where incoming UDP traffic bypasses Windows host firewall rules. To enable Port Gate stealth protection on Windows, switch to the <strong>Native BDS</strong> engine in Step 1.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="space-y-3">
                       <label className={`flex items-center space-x-3 p-3.5 rounded-xl border ${
-                        !allowPortGate ? 'bg-obsidian-950 border-obsidian-800 opacity-60 cursor-not-allowed' : 'bg-obsidian-900 border-obsidian-800 cursor-pointer'
+                        !allowPortGate || isWindowsDocker ? 'bg-obsidian-950 border-obsidian-800 opacity-60 cursor-not-allowed' : 'bg-obsidian-900 border-obsidian-800 cursor-pointer'
                       }`}>
                         <input
                           type="checkbox"
-                          disabled={!allowPortGate}
-                          checked={portGate}
+                          disabled={!allowPortGate || isWindowsDocker}
+                          checked={effectivePortGate}
                           onChange={(e) => setPortGate(e.target.checked)}
                           className="rounded bg-obsidian-950 border-obsidian-700 text-emerald-500 w-4 h-4"
                         />
                         <div>
                           <span className="font-mono text-xs font-bold text-slate-200">
                             Enable Port Gate (Zero-Trust Stealth Firewall)
-                            {!allowPortGate && <span className="text-amber-400 text-[10px] ml-2 font-normal">(Unavailable on current plan)</span>}
+                            {isWindowsDocker ? (
+                              <span className="text-amber-400 text-[10px] ml-2 font-normal">(Unsupported on Windows Docker)</span>
+                            ) : !allowPortGate ? (
+                              <span className="text-amber-400 text-[10px] ml-2 font-normal">(Unavailable on current plan)</span>
+                            ) : null}
                           </span>
                           <p className="text-[11px] text-slate-400">
-                            {!allowPortGate
+                            {isWindowsDocker
+                              ? 'Port Gate cannot be activated when running Docker on a Windows host.'
+                              : !allowPortGate
                               ? 'Your current plan does not include the Dynamic Port Gate stealth feature.'
                               : `UDP port ${port} is dropped by default until knocked via /knock/${serverId || 'id'}`}
                           </p>
                         </div>
                       </label>
 
-                      {portGate && (
+                      {effectivePortGate && (
                         <div className="p-3.5 bg-obsidian-900/80 border border-obsidian-800 rounded-xl space-y-3">
                           <div>
                             <label className="block text-xs font-mono text-slate-300 mb-1">
@@ -1061,8 +1081,12 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
 
                       <div className="p-3 rounded-lg bg-obsidian-900 border border-obsidian-800">
                         <span className="text-slate-500 block mb-0.5">Port Gate Security:</span>
-                        <span className={`font-bold ${portGate ? 'text-emerald-400' : 'text-slate-400'}`}>
-                          {portGate ? `Enabled (${portGateMode})` : 'Disabled (Public Open)'}
+                        <span className={`font-bold ${isWindowsDocker ? 'text-slate-500' : effectivePortGate ? 'text-emerald-400' : 'text-slate-400'}`}>
+                          {isWindowsDocker
+                            ? 'Disabled (Unsupported on Windows Docker)'
+                            : effectivePortGate
+                            ? `Enabled (${portGateMode})`
+                            : 'Disabled (Public Open)'}
                         </span>
                       </div>
 
@@ -1402,19 +1426,32 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                 </label>
 
                 <label className={`flex items-center space-x-2 text-xs font-mono text-slate-200 ${
-                  !allowPortGate ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                  !allowPortGate || isWindowsDocker ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
                 }`}>
                   <input
                     type="checkbox"
-                    disabled={!allowPortGate}
-                    checked={portGate}
+                    disabled={!allowPortGate || isWindowsDocker}
+                    checked={effectivePortGate}
                     onChange={(e) => setPortGate(e.target.checked)}
                     className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500"
                   />
-                  <span>Enable Dynamic Port Gating (Firewall Block) {!allowPortGate && '(Unavailable on plan)'}</span>
+                  <span>
+                    Enable Dynamic Port Gating (Firewall Block)
+                    {isWindowsDocker ? (
+                      <span className="text-amber-400 text-[10px] ml-2 font-normal">(Unsupported on Windows Docker)</span>
+                    ) : !allowPortGate ? (
+                      <span className="text-amber-400 text-[10px] ml-2 font-normal">(Unavailable on plan)</span>
+                    ) : null}
+                  </span>
                 </label>
 
-                {portGate && (
+                {isWindowsDocker && (
+                  <p className="text-[10px] text-slate-400 font-mono pl-6 leading-relaxed">
+                    Port Gate is unsupported for Docker on Windows. Traffic flows via WSL2 bridge networking, which bypasses the Windows host firewall. Switch execution engine to Native BDS to enable Port Gate on Windows.
+                  </p>
+                )}
+
+                {effectivePortGate && (
                   <div className="pt-2">
                     <label className="block text-[11px] font-mono text-slate-400 mb-1">Verification Mode</label>
                     <select

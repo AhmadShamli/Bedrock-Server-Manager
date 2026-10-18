@@ -9,7 +9,7 @@ import {
   Network, Search, Clock, History, Eye, Image, FileText, MessageCircle, ArrowUp, ArrowDown, MapPin
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Server, User, Backup, AddonPack, AddonServerConfig, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
+import { Server, User, Backup, AddonPack, AddonServerConfig, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer, BDSStatus } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 import { TelemetryCharts } from '../components/TelemetryCharts';
@@ -246,6 +246,8 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [editGameServerAddress, setEditGameServerAddress] = useState('');
   const [editServerNetworkMode, setEditServerNetworkMode] = useState('host');
   const [editIdleTimeoutMinutes, setEditIdleTimeoutMinutes] = useState(0);
+  const [bdsStatus, setBdsStatus] = useState<BDSStatus | null>(null);
+  const isWindowsDocker = Boolean(bdsStatus?.is_windows && server?.engine === 'docker');
   const [availableNetworks, setAvailableNetworks] = useState<string[]>(['host', 'bridge']);
   const [serverUpdating, setServerUpdating] = useState(false);
   const [serverUpdatedMsg, setServerUpdatedMsg] = useState<string | null>(null);
@@ -636,6 +638,14 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   }, [server]);
 
   useEffect(() => {
+    api.getBDSStatus()
+      .then((status) => {
+        if (status) setBdsStatus(status);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     if (user.role === 'admin') {
       api.listNetworks()
         .then((res) => {
@@ -751,11 +761,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         cpu_limit: Number(editServerCpuLimit),
         autostart_on_boot: editServerAutostart,
         idle_timeout_minutes: Math.max(0, Number(editIdleTimeoutMinutes) || 0),
-        port_gate_enabled: editServerPortGate,
+        port_gate_enabled: isWindowsDocker ? false : editServerPortGate,
         port_gate_mode: editServerPortGateMode,
         port_gate_timeout: computedTimeoutSec,
         game_server_address: editGameServerAddress.trim(),
-        network_mode: editServerNetworkMode,
+        network_mode: isWindowsDocker ? 'bridge' : editServerNetworkMode,
       });
       setServer((prev) => (prev ? { ...prev, ...updated, status: prev.status } : null));
       setServerUpdatedMsg('Server instance configuration updated successfully!');
@@ -2333,6 +2343,18 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       {/* PORT GATE TAB */}
       {activeTab === 'portgate' && (
         <div className="space-y-6">
+          {isWindowsDocker && (
+            <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-300 font-mono text-xs flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold text-sm block mb-1">Port Gate Inactive for Docker on Windows</span>
+                <p className="text-slate-300 text-xs leading-relaxed">
+                  This instance is running as a Docker container on a Windows host. Because Docker on Windows routes traffic via WSL2 bridge networking, incoming UDP packets cannot be filtered by the Windows host firewall. Ports bind directly in bridge mode without stealth firewall gating.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
               <div>
@@ -4384,21 +4406,36 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   </div>
                 </label>
 
-                <label className="flex items-center space-x-2.5 cursor-pointer">
+                <label className={`flex items-center space-x-2.5 ${isWindowsDocker ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'}`}>
                   <input
                     type="checkbox"
-                    checked={editServerPortGate}
+                    disabled={isWindowsDocker}
+                    checked={isWindowsDocker ? false : editServerPortGate}
                     onChange={(e) => setEditServerPortGate(e.target.checked)}
                     className="rounded bg-obsidian-900 border-obsidian-700 text-emerald-500 focus:ring-emerald-500"
                   />
                   <div>
-                    <span className="text-slate-200 font-bold block">Dynamic Port Gating</span>
+                    <span className="text-slate-200 font-bold block flex items-center gap-1.5">
+                      <span>Dynamic Port Gating</span>
+                      {isWindowsDocker && (
+                        <span className="text-amber-400 text-[10px] font-normal">(Unsupported on Windows Docker)</span>
+                      )}
+                    </span>
                     <span className="text-[10px] text-slate-400">Enforce firewall knock before allowing UDP connections</span>
                   </div>
                 </label>
               </div>
 
-              {editServerPortGate && (
+              {isWindowsDocker && (
+                <div className="p-3 rounded-lg bg-amber-950/40 border border-amber-500/30 text-amber-300 text-xs font-mono flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <span>
+                    Port Gate is unsupported for Docker instances on Windows. Incoming UDP traffic routes through WSL2 bridge networking, which bypasses Windows host firewall rules.
+                  </span>
+                </div>
+              )}
+
+              {editServerPortGate && !isWindowsDocker && (
                 <div className="p-3 bg-obsidian-900/60 border border-obsidian-800 rounded-lg grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
                   <div>
                     <label className="block text-slate-400 mb-1 text-[11px] font-bold">Knock Verification Mode</label>
