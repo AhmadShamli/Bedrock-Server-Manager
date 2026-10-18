@@ -29,6 +29,19 @@ func NewResolver(proxyMode string, trustedProxies []netip.Prefix) *Resolver {
 	}
 }
 
+// ProxyMode returns the configured proxy resolution mode.
+func (r *Resolver) ProxyMode() string {
+	if r == nil {
+		return "direct"
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.proxyMode == "" {
+		return "direct"
+	}
+	return r.proxyMode
+}
+
 // ResolveClientIP safely extracts the genuine client IP from an incoming HTTP request.
 func (r *Resolver) ResolveClientIP(req *http.Request) netip.Addr {
 	peerIP := extractPeerIP(req.RemoteAddr)

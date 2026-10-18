@@ -89,9 +89,37 @@ func (rl *RateLimiter) CheckKnockAttempt(ip string, now time.Time) RateLimitResu
 	return RateLimitResult{Blocked: false, Level: 0}
 }
 
+// UpdateConfig dynamically updates the rate limiter thresholds.
+func (rl *RateLimiter) UpdateConfig(maxAttempts int, distThreshold int, distLockout time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	if maxAttempts > 0 {
+		rl.maxAttempts = maxAttempts
+	}
+	if distThreshold > 0 {
+		rl.distThreshold = distThreshold
+	}
+	if distLockout > 0 {
+		rl.distLockout = distLockout
+	}
+}
+
+// Config returns the current active thresholds.
+func (rl *RateLimiter) Config() (maxAttempts int, distThreshold int, distLockout time.Duration) {
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+	return rl.maxAttempts, rl.distThreshold, rl.distLockout
+}
+
 // RecordKnockFailure logs a failed port-knock attempt.
 // Returns true if circuit breaker was newly tripped.
 func (rl *RateLimiter) RecordKnockFailure(ip string, now time.Time) (circuitBreakerTripped bool) {
+	_, tripped := rl.RecordKnockFailureEx(ip, now)
+	return tripped
+}
+
+// RecordKnockFailureEx logs a failed port-knock attempt and returns whether the IP is newly locked out and if circuit breaker was tripped.
+func (rl *RateLimiter) RecordKnockFailureEx(ip string, now time.Time) (lockedOut bool, circuitBreakerTripped bool) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
@@ -108,6 +136,7 @@ func (rl *RateLimiter) RecordKnockFailure(ip string, now time.Time) (circuitBrea
 			delaySeconds = 300
 		}
 		rl.perIPBlock[ip] = now.Add(time.Duration(delaySeconds) * time.Second)
+		lockedOut = true
 	}
 
 	// Level 2 update
@@ -121,7 +150,7 @@ func (rl *RateLimiter) RecordKnockFailure(ip string, now time.Time) (circuitBrea
 		}
 	}
 
-	return circuitBreakerTripped
+	return lockedOut, circuitBreakerTripped
 }
 
 // RecordKnockSuccess clears per-IP failure tracking for that visitor.
@@ -157,8 +186,8 @@ func (rl *RateLimiter) CheckLogin(ip string, now time.Time) RateLimitResult {
 	return RateLimitResult{Blocked: false, Level: 0}
 }
 
-// RecordLoginFailure records a manager login failure.
-func (rl *RateLimiter) RecordLoginFailure(ip, username string, now time.Time) (circuitBreakerTripped bool) {
+// RecordLoginFailure records a manager login failure and returns whether the IP is newly locked out.
+func (rl *RateLimiter) RecordLoginFailure(ip, username string, now time.Time) (lockedOut bool) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
@@ -174,6 +203,7 @@ func (rl *RateLimiter) RecordLoginFailure(ip, username string, now time.Time) (c
 			delaySeconds = 300
 		}
 		rl.perIPBlock[ip] = now.Add(time.Duration(delaySeconds) * time.Second)
+		lockedOut = true
 	}
 
 	// User-targeted distributed attack tracking
@@ -190,7 +220,7 @@ func (rl *RateLimiter) RecordLoginFailure(ip, username string, now time.Time) (c
 		}
 	}
 
-	return false
+	return lockedOut
 }
 
 // ResetCircuitBreaker clears active Level 2 lockdown.

@@ -16,6 +16,7 @@ import { UsersPage } from './pages/Users';
 import { PortGateManager } from './pages/PortGateManager';
 import { Plans } from './pages/Plans';
 import { Register } from './pages/Register';
+import { SettingsPage } from './pages/Settings';
 import { Footer } from './components/Footer';
 import { Loader2 } from 'lucide-react';
 
@@ -140,6 +141,10 @@ export const App: React.FC = () => {
           <Route
             path="/plans"
             element={user && user.role === 'admin' ? <Plans /> : <Navigate to="/" replace />}
+          />
+          <Route
+            path="/settings"
+            element={user && user.role === 'admin' ? <SettingsPage currentUser={user} /> : <Navigate to="/" replace />}
           />
 
           {/* Fallback */}

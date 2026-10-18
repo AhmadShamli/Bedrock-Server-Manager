@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { Shield, KeyRound, Play, RefreshCw, AlertCircle, CheckCircle2, Wifi, Clock, Loader2, Copy, Check, Timer, Plus, Power, Server as ServerIcon } from 'lucide-react';
 import { api } from '../api/client';
-import { KnockConfig } from '../types';
+import { KnockConfig, TurnstileConfig } from '../types';
+import { TurnstileWidget, TurnstileWidgetRef } from '../components/TurnstileWidget';
 
 export const KnockPortal: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -15,6 +16,11 @@ export const KnockPortal: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Turnstile state
+  const [turnstileConfig, setTurnstileConfig] = useState<TurnstileConfig | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string>('');
+  const turnstileRef = useRef<TurnstileWidgetRef>(null);
   const [activeLease, setActiveLease] = useState<{
     ip_address: string;
     expires_in_seconds: number;
@@ -112,6 +118,10 @@ export const KnockPortal: React.FC = () => {
       try {
         const conf = await api.getKnockConfig(id);
         setConfig(conf);
+        api.getTurnstileConfig()
+          .then((tCfg) => setTurnstileConfig(tCfg))
+          .catch(() => null);
+
         let currentStatus = conf.server_status || 'stopped';
         setServerStatus(currentStatus);
         if (conf.auto_started) {
@@ -251,17 +261,32 @@ export const KnockPortal: React.FC = () => {
     return () => clearInterval(interval);
   }, [id, activeLease?.session_token, activeLease?.always_allowed, config?.heartbeat_interval_seconds]);
 
+  const isTurnstileRequired = !!(
+    turnstileConfig?.enabled &&
+    turnstileConfig.knock_enabled &&
+    turnstileConfig.site_key &&
+    !config?.always_allowed &&
+    config?.port_gate_enabled
+  );
+
   const handleKnock = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!id) return;
 
     setError(null);
+
+    if (isTurnstileRequired && !turnstileToken) {
+      setError('Please complete the security challenge verification.');
+      return;
+    }
+
     setSubmitting(true);
 
     try {
       const res = await api.knock(id, {
         gamertag: gamertag.trim(),
         passphrase: passphrase.trim(),
+        turnstile_token: turnstileToken || undefined,
       });
 
       if (res.server_status) {
@@ -286,6 +311,10 @@ export const KnockPortal: React.FC = () => {
       });
     } catch (err: any) {
       setError(err.message || 'Authorization failed');
+      if (isTurnstileRequired) {
+        setTurnstileToken('');
+        turnstileRef.current?.reset();
+      }
     } finally {
       setSubmitting(false);
     }
@@ -761,10 +790,21 @@ export const KnockPortal: React.FC = () => {
               </div>
             )}
 
+            {isTurnstileRequired && (
+              <TurnstileWidget
+                ref={turnstileRef}
+                siteKey={turnstileConfig!.site_key}
+                action="knock"
+                onVerify={(token) => setTurnstileToken(token)}
+                onExpire={() => setTurnstileToken('')}
+                onError={() => setTurnstileToken('')}
+              />
+            )}
+
             <button
               type="submit"
-              disabled={submitting}
-              className="w-full py-3 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] disabled:opacity-50 flex items-center justify-center space-x-2"
+              disabled={submitting || (isTurnstileRequired && !turnstileToken)}
+              className="w-full py-3 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
             >
               {submitting ? <Loader2 className="w-5 h-5 animate-spin" /> : (
                 <>

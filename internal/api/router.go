@@ -9,6 +9,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/bds"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ddns"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
@@ -16,6 +17,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/resourcemonitor"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/scheduler"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/telemetry"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/turnstile"
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
@@ -38,6 +40,8 @@ type RouterOptions struct {
 	ResourceMonitor    *resourcemonitor.ResourceMonitor
 	BDSCache           *bds.CacheManager
 	BDSResolver        *bds.Resolver
+	TurnstileVerifier  *turnstile.Verifier
+	DDNSManager        *ddns.Manager
 }
 
 // NewRouter constructs and configures the Chi router.
@@ -50,13 +54,21 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 
 	mw := NewMiddleware(opts.DB, opts.IPResolver, opts.RateLimiter, opts.JWTSecret)
 	authHandler := NewAuthHandler(opts.DB, opts.RateLimiter, opts.JWTSecret)
-	systemHandler := NewSystemHandler(opts.DB, opts.DataDir, opts.BDSCache, opts.BDSResolver)
+	systemHandler := NewSystemHandler(opts.DB, opts.DataDir, opts.BDSCache, opts.BDSResolver, opts.Firewall, opts.IPResolver, opts.RateLimiter)
+
+	if opts.TurnstileVerifier == nil {
+		opts.TurnstileVerifier = turnstile.NewVerifier()
+	}
+	authHandler.SetTurnstileVerifier(opts.TurnstileVerifier)
+	systemHandler.SetTurnstileVerifier(opts.TurnstileVerifier)
+
 	serverHandler := NewServerHandler(opts.DB, opts.Engine, opts.PortAllocator, opts.DataDir, opts.TelemetryCollector, opts.MetricsDB, opts.PlayerManager)
 	if opts.ResourceMonitor != nil {
 		serverHandler.SetResourceMonitor(opts.ResourceMonitor)
 	}
 	knockHandler := NewKnockHandler(opts.DB, opts.RateLimiter, opts.Pepper, opts.Firewall)
 	knockHandler.SetServerHandler(serverHandler)
+	knockHandler.SetTurnstileVerifier(opts.TurnstileVerifier)
 	playerHubHandler := NewPlayerHubHandler(serverHandler, opts.PlayerManager)
 	backupHandler := NewBackupHandler(opts.DB, opts.Engine, opts.DataDir)
 	backupHandler.SetServerHandler(serverHandler)
@@ -67,6 +79,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 	userHandler := NewUserHandler(opts.DB)
 	planHandler := NewPlanHandler(opts.DB)
 	dashboardHandler := NewDashboardHandler(opts.DB, opts.Engine, opts.PlayerManager, opts.TelemetryCollector)
+	ddnsHandler := NewDDNSHandler(opts.DB, opts.DDNSManager)
 
 	// Global Middlewares
 	r.Use(chimiddleware.RequestID)
@@ -79,6 +92,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 		// Health & Status
 		api.Get("/health", systemHandler.Health)
 		api.Get("/version", systemHandler.Version)
+		api.Get("/system/turnstile-config", systemHandler.GetTurnstilePublicConfig)
 		api.Get("/setup/status", authHandler.SetupStatus)
 		api.Post("/setup", authHandler.Setup)
 
@@ -259,6 +273,8 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Get("/system/audit", systemHandler.ListAuditLogs)
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)
 				adminGroup.Post("/system/settings", systemHandler.UpdateSetting)
+				adminGroup.Post("/system/webhook/test", systemHandler.TestDiscordWebhook)
+				adminGroup.Post("/system/turnstile/test", systemHandler.TestTurnstile)
 				adminGroup.Get("/system/bds/status", systemHandler.GetBDSStatus)
 				adminGroup.Post("/system/bds/eula", systemHandler.AcceptBDSEULA)
 				adminGroup.Post("/system/bds/purge-cache", systemHandler.PurgeBDSCache)
@@ -276,6 +292,13 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Delete("/portgate/bans/{banId}", knockHandler.DeleteBanRule)
 				adminGroup.Get("/portgate/leases", knockHandler.ListAllLeases)
 				adminGroup.Post("/portgate/leases/{leaseId}/revoke", knockHandler.RevokeLeaseByID)
+
+				// Dynamic DNS (DDNS) Management
+				adminGroup.Get("/ddns/status", ddnsHandler.GetStatus)
+				adminGroup.Get("/ddns/config", ddnsHandler.GetConfig)
+				adminGroup.Post("/ddns/config", ddnsHandler.UpdateConfig)
+				adminGroup.Post("/ddns/sync", ddnsHandler.Sync)
+				adminGroup.Post("/ddns/test", ddnsHandler.Test)
 			})
 		})
 	})

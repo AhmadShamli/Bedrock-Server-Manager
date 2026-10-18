@@ -214,11 +214,23 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.PortGateTimeout <= 0 {
 		s.PortGateTimeout = 7200
+		if h.db != nil {
+			if val, err := h.db.GetSetting(r.Context(), "default_portgate_lease_seconds"); err == nil && val != "" {
+				if sec, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && sec > 0 {
+					s.PortGateTimeout = sec
+				}
+			}
+		}
 	}
 	if s.IdleTimeoutMinutes < 0 {
 		s.IdleTimeoutMinutes = 0
 	}
 	s.GameServerAddress = strings.TrimSpace(s.GameServerAddress)
+	if s.GameServerAddress == "" && h.db != nil {
+		if val, err := h.db.GetSetting(r.Context(), "default_game_server_address"); err == nil && strings.TrimSpace(val) != "" {
+			s.GameServerAddress = strings.TrimSpace(val)
+		}
+	}
 
 	if runtime.GOOS == "windows" {
 		if s.Engine == "" {

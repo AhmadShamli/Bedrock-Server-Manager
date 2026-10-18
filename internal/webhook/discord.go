@@ -170,3 +170,98 @@ func (d *Dispatcher) NotifyResourceAlert(ctx context.Context, webhookURL, server
 	})
 }
 
+func (d *Dispatcher) NotifyFailedLogin(ctx context.Context, webhookURL, username, clientIP string, lockedOut bool) error {
+	status := "Attempt Failed"
+	if lockedOut {
+		status = "IP Temporarily Locked Out"
+	}
+	return d.Send(ctx, webhookURL, Embed{
+		Title:       "🚨 Security Alert: Failed Admin Login",
+		Description: fmt.Sprintf("A login attempt failed for username **%s** from IP **%s**.", username, clientIP),
+		Color:       ColorRed,
+		Fields: []EmbedField{
+			{Name: "Target Username", Value: username, Inline: true},
+			{Name: "Client IP", Value: clientIP, Inline: true},
+			{Name: "Status", Value: status, Inline: true},
+		},
+	})
+}
+
+func (d *Dispatcher) NotifyCircuitBreakerTripped(ctx context.Context, webhookURL, serverID, clientIP string, distThreshold int) error {
+	return d.Send(ctx, webhookURL, Embed{
+		Title:       "🛡️ Defense Triggered: Distributed Attack Circuit Breaker",
+		Description: fmt.Sprintf("Knock portal brute-force circuit breaker tripped on server **%s** after %d distinct IPs failed access checks.", serverID, distThreshold),
+		Color:       ColorRed,
+		Fields: []EmbedField{
+			{Name: "Last Offending IP", Value: clientIP, Inline: true},
+			{Name: "Action", Value: "New authorizations paused", Inline: true},
+		},
+	})
+}
+
+func (d *Dispatcher) NotifyKnockFailed(ctx context.Context, webhookURL, serverName, serverID, clientIP, gamertag string, lockedOut bool) error {
+	status := "Failed Attempt"
+	if lockedOut {
+		status = "Visitor IP Locked Out"
+	}
+	return d.Send(ctx, webhookURL, Embed{
+		Title:       "⚠️ Port Gate Alert: Invalid Passphrase",
+		Description: fmt.Sprintf("Failed knock access attempt on server **%s** (%s) from IP **%s**.", serverName, serverID, clientIP),
+		Color:       ColorAmber,
+		Fields: []EmbedField{
+			{Name: "Client IP", Value: clientIP, Inline: true},
+			{Name: "Gamertag", Value: gamertag, Inline: true},
+			{Name: "Status", Value: status, Inline: true},
+		},
+	})
+}
+
+// NotifyDDNSSynced sends a notification when public IP changes or DDNS updates successfully.
+func (d *Dispatcher) NotifyDDNSSynced(ctx context.Context, webhookURL, domain, provider, ipv4, ipv6 string, ipChanged bool) error {
+	title := fmt.Sprintf("🌐 Dynamic DNS Synchronized: %s", domain)
+	desc := fmt.Sprintf("Dynamic DNS records successfully updated via **%s**.", provider)
+	color := ColorEmerald
+	if ipChanged {
+		title = fmt.Sprintf("🔄 Public IP Changed: %s", domain)
+		desc = fmt.Sprintf("Host server public IP address changed and DDNS was synchronized via **%s**.", provider)
+		color = ColorCyan
+	}
+
+	fields := []EmbedField{
+		{Name: "Domain", Value: domain, Inline: true},
+		{Name: "Provider", Value: provider, Inline: true},
+	}
+	if ipv4 != "" {
+		fields = append(fields, EmbedField{Name: "IPv4 Address", Value: ipv4, Inline: true})
+	}
+	if ipv6 != "" {
+		fields = append(fields, EmbedField{Name: "IPv6 Address", Value: ipv6, Inline: true})
+	}
+
+	return d.Send(ctx, webhookURL, Embed{
+		Title:       title,
+		Description: desc,
+		Color:       color,
+		Fields:      fields,
+	})
+}
+
+// NotifyDDNSFailed sends an alert when a DDNS update fails.
+func (d *Dispatcher) NotifyDDNSFailed(ctx context.Context, webhookURL, domain, provider string, syncErr error) error {
+	errMsg := "Unknown error"
+	if syncErr != nil {
+		errMsg = syncErr.Error()
+	}
+	return d.Send(ctx, webhookURL, Embed{
+		Title:       "🚨 Dynamic DNS Sync Failed",
+		Description: fmt.Sprintf("Failed to update Dynamic DNS records for domain **%s** via **%s**.", domain, provider),
+		Color:       ColorRed,
+		Fields: []EmbedField{
+			{Name: "Domain", Value: domain, Inline: true},
+			{Name: "Provider", Value: provider, Inline: true},
+			{Name: "Error Details", Value: errMsg, Inline: false},
+		},
+	})
+}
+
+

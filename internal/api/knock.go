@@ -14,15 +14,18 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/turnstile"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/webhook"
 	"github.com/go-chi/chi/v5"
 )
 
 type KnockHandler struct {
-	db            *database.ManagerDB
-	rateLimiter   *auth.RateLimiter
-	pepper        string
-	firewall      firewall.FirewallDriver
-	serverHandler *ServerHandler
+	db                *database.ManagerDB
+	rateLimiter       *auth.RateLimiter
+	pepper            string
+	firewall          firewall.FirewallDriver
+	serverHandler     *ServerHandler
+	turnstileVerifier *turnstile.Verifier
 }
 
 func NewKnockHandler(db *database.ManagerDB, rateLimiter *auth.RateLimiter, pepper string, fw firewall.FirewallDriver) *KnockHandler {
@@ -32,6 +35,11 @@ func NewKnockHandler(db *database.ManagerDB, rateLimiter *auth.RateLimiter, pepp
 		pepper:      pepper,
 		firewall:    fw,
 	}
+}
+
+// SetTurnstileVerifier sets the Turnstile verifier instance.
+func (h *KnockHandler) SetTurnstileVerifier(tv *turnstile.Verifier) {
+	h.turnstileVerifier = tv
 }
 
 // SetServerHandler wires the ServerHandler so the Knock Portal can inspect live status and auto-start idle/stopped instances.
@@ -190,8 +198,9 @@ func (h *KnockHandler) GetConfig(w http.ResponseWriter, r *http.Request) {
 
 // KnockRequest payload.
 type KnockRequest struct {
-	Gamertag   string `json:"gamertag"`
-	Passphrase string `json:"passphrase"`
+	Gamertag       string `json:"gamertag"`
+	Passphrase     string `json:"passphrase"`
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 // Knock handles port-knocking authorization.
@@ -275,6 +284,22 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "knock", req.TurnstileToken, clientIP); !ok {
+		lockedOut, tripped := h.rateLimiter.RecordKnockFailureEx(clientIP, now)
+		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+			ActorType: "portal",
+			ActorName: req.Gamertag,
+			Action:    "turnstile_knock_failed",
+			Target:    server.ID,
+			Details:   fmt.Sprintf(`{"error": "%s", "client_ip": "%s", "server_id": "%s", "locked_out": %t, "circuit_breaker_tripped": %t}`, reason, clientIP, server.ID, lockedOut, tripped),
+			ClientIP:  clientIP,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
+		return
+	}
+
 	var matchingKey *models.PortGateKey
 	leaseDuration := time.Duration(server.PortGateTimeout) * time.Second
 
@@ -313,7 +338,30 @@ func (h *KnockHandler) Knock(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if matchingKey == nil {
-			h.rateLimiter.RecordKnockFailure(clientIP, now)
+			lockedOut, tripped := h.rateLimiter.RecordKnockFailureEx(clientIP, now)
+
+			_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+				ActorType: "portal",
+				ActorName: req.Gamertag,
+				Action:    "knock_failed",
+				Target:    server.ID,
+				Details:   fmt.Sprintf(`{"client_ip": "%s", "server_id": "%s", "locked_out": %t, "circuit_breaker_tripped": %t}`, clientIP, server.ID, lockedOut, tripped),
+				ClientIP:  clientIP,
+			})
+
+			// Dispatch security alert to Discord if configured
+			if secAlert, _ := h.db.GetSetting(r.Context(), "security_alert_discord"); secAlert == "true" || secAlert == "1" {
+				if webhookURL, _ := h.db.GetSetting(r.Context(), "discord_webhook_url"); webhookURL != "" {
+					dispatcher := webhook.NewDispatcher()
+					if tripped {
+						_, distThreshold, _ := h.rateLimiter.Config()
+						_ = dispatcher.NotifyCircuitBreakerTripped(r.Context(), webhookURL, server.ID, clientIP, distThreshold)
+					} else {
+						_ = dispatcher.NotifyKnockFailed(r.Context(), webhookURL, server.Name, server.ID, clientIP, req.Gamertag, lockedOut)
+					}
+				}
+			}
+
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid access passphrase"})
@@ -839,6 +887,13 @@ func (h *KnockHandler) CreateAccessKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if leaseSec <= 0 {
 		leaseSec = 7200
+		if h.db != nil {
+			if val, err := h.db.GetSetting(r.Context(), "default_portgate_lease_seconds"); err == nil && val != "" {
+				if s, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && s > 0 {
+					leaseSec = s
+				}
+			}
+		}
 	}
 
 	key := &models.PortGateKey{

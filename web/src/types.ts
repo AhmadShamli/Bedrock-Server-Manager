@@ -428,3 +428,81 @@ export interface DashboardSummary {
   servers: ServerSummary[];
 }
 
+export interface SystemInfo {
+  version: string;
+  app_name: string;
+  go_version: string;
+  goroutines: number;
+  os: string;
+  arch: string;
+  uptime_sec: number;
+  alloc_mb: number;
+  sys_mb: number;
+  firewall_driver?: string;
+  proxy_mode?: string;
+}
+
+export interface TurnstileConfig {
+  enabled: boolean;
+  site_key: string;
+  login_enabled: boolean;
+  register_enabled: boolean;
+  setup_enabled: boolean;
+  knock_enabled: boolean;
+  fail_open: boolean;
+}
+
+export interface TurnstileTestResult {
+  success: boolean;
+  'error-codes'?: string[];
+  challenge_ts?: string;
+  hostname?: string;
+  action?: string;
+  cdata?: string;
+}
+
+export interface DDNSConfig {
+  enabled: boolean;
+  provider: 'cloudflare' | 'duckdns' | 'noip' | 'webhook';
+  domain: string;
+  enable_ipv4: boolean;
+  enable_ipv6: boolean;
+  interval_minutes: number;
+  auto_sync_game_address: boolean;
+  auth_token?: string;
+  zone_id?: string;
+  username?: string;
+  password?: string;
+  webhook_url?: string;
+  webhook_method?: 'GET' | 'POST';
+}
+
+export interface DDNSStatus {
+  enabled: boolean;
+  provider: string;
+  domain: string;
+  current_ipv4: string;
+  current_ipv6: string;
+  last_sync_time?: string;
+  next_sync_time?: string;
+  status: 'idle' | 'syncing' | 'success' | 'error';
+  last_error?: string;
+  interval_minutes: number;
+  auto_sync_game_address: boolean;
+}
+
+export interface DDNSSyncResponse {
+  success: boolean;
+  error?: string;
+  result?: {
+    success: boolean;
+    ipv4?: string;
+    ipv6?: string;
+    domain: string;
+    message: string;
+    timestamp: string;
+  };
+  status?: DDNSStatus;
+}
+
+

@@ -21,6 +21,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/bds"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/config"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ddns"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
@@ -233,8 +234,34 @@ func main() {
 	resolver := ipresolver.NewResolver(cfg.ProxyMode, cfg.TrustedProxies)
 	log.Printf("[Network] Client IP Resolver initialized (Mode: %s)", cfg.ProxyMode)
 
-	// Two-tier rate limiter: Level 1: 5 attempts/5m; Level 2: 10 distinct failed IPs/5m -> 15m circuit breaker
-	rateLimiter := auth.NewRateLimiter(5, 5*time.Minute, 10, 5*time.Minute, 15*time.Minute)
+	// Two-tier rate limiter: Level 1: 5 attempts/5m; Level 2: 10 distinct failed IPs/5m -> 15m circuit breaker (default)
+	maxAttempts := 5
+	lockoutDuration := 5 * time.Minute
+	cbThreshold := 10
+	cbLockout := 15 * time.Minute
+
+	if val, err := mgrDB.GetSetting(context.Background(), "rate_limit_max_attempts"); err == nil && val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 {
+			maxAttempts = n
+		}
+	}
+	if val, err := mgrDB.GetSetting(context.Background(), "rate_limit_lockout_seconds"); err == nil && val != "" {
+		if s, err := strconv.Atoi(val); err == nil && s > 0 {
+			lockoutDuration = time.Duration(s) * time.Second
+		}
+	}
+	if val, err := mgrDB.GetSetting(context.Background(), "circuit_breaker_threshold"); err == nil && val != "" {
+		if n, err := strconv.Atoi(val); err == nil && n > 0 {
+			cbThreshold = n
+		}
+	}
+	if val, err := mgrDB.GetSetting(context.Background(), "circuit_breaker_lockout_minutes"); err == nil && val != "" {
+		if m, err := strconv.Atoi(val); err == nil && m > 0 {
+			cbLockout = time.Duration(m) * time.Minute
+		}
+	}
+
+	rateLimiter := auth.NewRateLimiter(maxAttempts, lockoutDuration, cbThreshold, 5*time.Minute, cbLockout)
 
 	// 10. Initialize Telemetry Collector & Poller
 	telemetryCollector := telemetry.NewTelemetryCollector(metricsDB)
@@ -356,7 +383,15 @@ func main() {
 	_ = taskScheduler.Start(ctx)
 	defer taskScheduler.Stop()
 
-	// 14. Build Router
+	// 14. Initialize Dynamic DNS (DDNS) Manager
+	ddnsConfig := api.LoadDDNSConfig(ctx, mgrDB)
+	ddnsNotifier := &ddnsNotificationBridge{db: mgrDB, dispatcher: webhookDispatcher}
+	ddnsSyncer := &ddnsAddressSyncer{db: mgrDB}
+	ddnsManager := ddns.NewManager(ddnsConfig, nil, ddnsNotifier, ddnsSyncer)
+	ddnsManager.Start()
+	defer ddnsManager.Stop()
+
+	// 15. Build Router
 	router := api.NewRouter(api.RouterOptions{
 		DB:                 mgrDB,
 		IPResolver:         resolver,
@@ -375,9 +410,10 @@ func main() {
 		ResourceMonitor:    resourceMonitor,
 		BDSCache:           bdsCache,
 		BDSResolver:        bdsResolver,
+		DDNSManager:        ddnsManager,
 	})
 
-	// 15. Start HTTP Server
+	// 16. Start HTTP Server
 	serverAddr := fmt.Sprintf("0.0.0.0:%d", cfg.Port)
 	srv := &http.Server{
 		Addr:              serverAddr,
@@ -443,3 +479,65 @@ func main() {
 
 	log.Println("[SHUTDOWN] Exited cleanly.")
 }
+
+type ddnsNotificationBridge struct {
+	db         *database.ManagerDB
+	dispatcher *webhook.Dispatcher
+}
+
+func (b *ddnsNotificationBridge) getWebhookURL(ctx context.Context) string {
+	u, _ := b.db.GetSetting(ctx, "discord_webhook_url")
+	return u
+}
+
+func (b *ddnsNotificationBridge) OnIPChanged(ctx context.Context, domain, provider, ipv4, ipv6 string) {
+	url := b.getWebhookURL(ctx)
+	if url != "" {
+		_ = b.dispatcher.NotifyDDNSSynced(ctx, url, domain, provider, ipv4, ipv6, true)
+	}
+	_ = b.db.CreateAuditLog(ctx, &models.AuditLog{
+		ActorType: "system",
+		ActorName: "ddns",
+		Action:    "ddns_ip_changed",
+		Target:    domain,
+		Details:   fmt.Sprintf(`{"provider": "%s", "ipv4": "%s", "ipv6": "%s"}`, provider, ipv4, ipv6),
+	})
+}
+
+func (b *ddnsNotificationBridge) OnSyncFailed(ctx context.Context, domain, provider string, syncErr error) {
+	url := b.getWebhookURL(ctx)
+	if url != "" {
+		_ = b.dispatcher.NotifyDDNSFailed(ctx, url, domain, provider, syncErr)
+	}
+	_ = b.db.CreateAuditLog(ctx, &models.AuditLog{
+		ActorType: "system",
+		ActorName: "ddns",
+		Action:    "ddns_sync_failed",
+		Target:    domain,
+		Details:   fmt.Sprintf(`{"provider": "%s", "error": "%v"}`, provider, syncErr),
+	})
+}
+
+func (b *ddnsNotificationBridge) OnSyncRecovered(ctx context.Context, domain, provider, ipv4, ipv6 string) {
+	url := b.getWebhookURL(ctx)
+	if url != "" {
+		_ = b.dispatcher.NotifyDDNSSynced(ctx, url, domain, provider, ipv4, ipv6, false)
+	}
+	_ = b.db.CreateAuditLog(ctx, &models.AuditLog{
+		ActorType: "system",
+		ActorName: "ddns",
+		Action:    "ddns_sync_recovered",
+		Target:    domain,
+		Details:   fmt.Sprintf(`{"provider": "%s", "ipv4": "%s", "ipv6": "%s"}`, provider, ipv4, ipv6),
+	})
+}
+
+type ddnsAddressSyncer struct {
+	db *database.ManagerDB
+}
+
+func (s *ddnsAddressSyncer) UpdateGameServerAddress(ctx context.Context, newAddress string) error {
+	log.Printf("[DDNS] Propagating game server address to: %s", newAddress)
+	return s.db.SetSetting(ctx, "default_game_server_address", newAddress)
+}
+

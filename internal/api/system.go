@@ -12,10 +12,15 @@ import (
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/bds"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/turnstile"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/webhook"
 )
 
 type SystemHandler struct {
@@ -23,15 +28,26 @@ type SystemHandler struct {
 	dataDir     string
 	bdsCache    *bds.CacheManager
 	bdsResolver *bds.Resolver
-	startTime   time.Time
+	firewall    firewall.FirewallDriver
+	ipResolver  *ipresolver.Resolver
+	rateLimiter       *auth.RateLimiter
+	turnstileVerifier *turnstile.Verifier
+	startTime         time.Time
 }
 
-func NewSystemHandler(db *database.ManagerDB, dataDir string, bdsCache *bds.CacheManager, bdsResolver *bds.Resolver) *SystemHandler {
+func (h *SystemHandler) SetTurnstileVerifier(tv *turnstile.Verifier) {
+	h.turnstileVerifier = tv
+}
+
+func NewSystemHandler(db *database.ManagerDB, dataDir string, bdsCache *bds.CacheManager, bdsResolver *bds.Resolver, fw firewall.FirewallDriver, ipRes *ipresolver.Resolver, rl *auth.RateLimiter) *SystemHandler {
 	return &SystemHandler{
 		db:          db,
 		dataDir:     dataDir,
 		bdsCache:    bdsCache,
 		bdsResolver: bdsResolver,
+		firewall:    fw,
+		ipResolver:  ipRes,
+		rateLimiter: rl,
 		startTime:   time.Now(),
 	}
 }
@@ -62,17 +78,28 @@ func (h *SystemHandler) SystemInfo(w http.ResponseWriter, r *http.Request) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
+	fwName := "unknown"
+	if h.firewall != nil {
+		fwName = h.firewall.Name()
+	}
+	proxyMode := "direct"
+	if h.ipResolver != nil {
+		proxyMode = h.ipResolver.ProxyMode()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"version":    version.Version,
-		"app_name":   version.AppName,
-		"go_version": runtime.Version(),
-		"goroutines": runtime.NumGoroutine(),
-		"os":         runtime.GOOS,
-		"arch":       runtime.GOARCH,
-		"uptime_sec": int64(time.Since(h.startTime).Seconds()),
-		"alloc_mb":   float64(m.Alloc) / (1024 * 1024),
-		"sys_mb":     float64(m.Sys) / (1024 * 1024),
+		"version":         version.Version,
+		"app_name":        version.AppName,
+		"go_version":      runtime.Version(),
+		"goroutines":      runtime.NumGoroutine(),
+		"os":              runtime.GOOS,
+		"arch":            runtime.GOARCH,
+		"uptime_sec":      int64(time.Since(h.startTime).Seconds()),
+		"alloc_mb":        float64(m.Alloc) / (1024 * 1024),
+		"sys_mb":          float64(m.Sys) / (1024 * 1024),
+		"firewall_driver": fwName,
+		"proxy_mode":      proxyMode,
 	})
 }
 
@@ -116,7 +143,7 @@ func (h *SystemHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	// Redact sensitive settings
 	safeSettings := make(map[string]string)
 	for k, v := range settings {
-		if k == "jwt_secret" || k == "pepper" || k == "curseforge_api_key" {
+		if k == "jwt_secret" || k == "pepper" || k == "curseforge_api_key" || k == turnstile.SettingTurnstileSecretKey || k == "ddns_auth_token" || k == "ddns_password" {
 			if v != "" {
 				safeSettings[k] = "******"
 			} else {
@@ -148,9 +175,34 @@ func (h *SystemHandler) UpdateSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ignore placeholder masked values
+	if (payload.Key == "curseforge_api_key" || payload.Key == turnstile.SettingTurnstileSecretKey || payload.Key == "ddns_auth_token" || payload.Key == "ddns_password") && payload.Value == "******" {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ignored"})
+		return
+	}
+
 	if err := h.db.SetSetting(r.Context(), payload.Key, payload.Value); err != nil {
 		http.Error(w, `{"error": "Failed to update setting"}`, http.StatusInternalServerError)
 		return
+	}
+
+	if h.rateLimiter != nil && (payload.Key == "rate_limit_max_attempts" || payload.Key == "circuit_breaker_threshold" || payload.Key == "circuit_breaker_lockout_minutes") {
+		maxAtt, distThresh, distLock := h.rateLimiter.Config()
+		if payload.Key == "rate_limit_max_attempts" {
+			if v, err := strconv.Atoi(payload.Value); err == nil && v > 0 {
+				maxAtt = v
+			}
+		} else if payload.Key == "circuit_breaker_threshold" {
+			if v, err := strconv.Atoi(payload.Value); err == nil && v > 0 {
+				distThresh = v
+			}
+		} else if payload.Key == "circuit_breaker_lockout_minutes" {
+			if v, err := strconv.Atoi(payload.Value); err == nil && v > 0 {
+				distLock = time.Duration(v) * time.Minute
+			}
+		}
+		h.rateLimiter.UpdateConfig(maxAtt, distThresh, distLock)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -327,3 +379,100 @@ func (h *SystemHandler) AddDefenderExclusion(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "exclusion_path": absDataDir})
 }
+
+// TestDiscordWebhook dispatches a sample test notification to a Discord webhook URL.
+func (h *SystemHandler) TestDiscordWebhook(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		WebhookURL string `json:"webhook_url"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+
+	webhookURL := strings.TrimSpace(payload.WebhookURL)
+	if webhookURL == "" {
+		stored, err := h.db.GetSetting(r.Context(), "discord_webhook_url")
+		if err == nil && stored != "" {
+			webhookURL = stored
+		}
+	}
+
+	if webhookURL == "" {
+		http.Error(w, `{"error": "No Discord Webhook URL provided or configured in settings"}`, http.StatusBadRequest)
+		return
+	}
+
+	dispatcher := webhook.NewDispatcher()
+	embed := webhook.Embed{
+		Title:       "🔔 BSM Outbound Webhook Test",
+		Description: "Your Discord webhook integration with Bedrock Server Manager is working successfully!",
+		Color:       webhook.ColorEmerald,
+		Fields: []webhook.EmbedField{
+			{Name: "Status", Value: "Connected & Verified", Inline: true},
+			{Name: "Server Time", Value: time.Now().UTC().Format(time.RFC3339), Inline: true},
+		},
+	}
+
+	if err := dispatcher.Send(r.Context(), webhookURL, embed); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Failed to send Discord webhook: %s"}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Test notification sent successfully!"})
+}
+
+// GetTurnstilePublicConfig returns public Cloudflare Turnstile configuration (enabled state, site key, and per-flow flags).
+func (h *SystemHandler) GetTurnstilePublicConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := turnstile.LoadConfig(r.Context(), h.db)
+	if err != nil {
+		http.Error(w, `{"error": "Failed to load turnstile configuration"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(cfg)
+}
+
+// TestTurnstile allows administrators to verify a Turnstile Site Key, Secret Key, and client response token.
+func (h *SystemHandler) TestTurnstile(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		SiteKey   string `json:"site_key"`
+		SecretKey string `json:"secret_key"`
+		Token     string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error": "Invalid request payload"}`, http.StatusBadRequest)
+		return
+	}
+
+	secretKey := strings.TrimSpace(payload.SecretKey)
+	if secretKey == "" || secretKey == "******" {
+		stored, _ := h.db.GetSetting(r.Context(), turnstile.SettingTurnstileSecretKey)
+		secretKey = strings.TrimSpace(stored)
+	}
+
+	if secretKey == "" {
+		http.Error(w, `{"error": "Turnstile Secret Key is required or must be configured"}`, http.StatusBadRequest)
+		return
+	}
+
+	if strings.TrimSpace(payload.Token) == "" {
+		http.Error(w, `{"error": "Test response token is required. Solve the challenge first."}`, http.StatusBadRequest)
+		return
+	}
+
+	verifier := h.turnstileVerifier
+	if verifier == nil {
+		verifier = turnstile.NewVerifier()
+	}
+
+	clientIP := GetClientIP(r).String()
+	res, err := verifier.Verify(r.Context(), secretKey, payload.Token, clientIP, "")
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error": "Cloudflare Turnstile API error: %s"}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
+}
+

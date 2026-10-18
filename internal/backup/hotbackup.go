@@ -85,7 +85,7 @@ func CreateHotBackup(
 	}
 
 	// 4. Enforce retention policy
-	_, _ = EnforceRetention(ctx, srv.ID, DefaultRetentionPolicy(), backupDir, mgrDB)
+	_, _ = EnforceRetention(ctx, srv.ID, ResolveRetentionPolicy(ctx, mgrDB), backupDir, mgrDB)
 
 	return backupRecord, nil
 }

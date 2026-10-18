@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, Server as ServerIcon, Layers, Shield, 
-  ChevronDown, Users, UserCog, Clock, History, LogOut, Terminal, Menu, X, Sparkles
+  ChevronDown, Users, UserCog, Clock, History, LogOut, Terminal, Menu, X, Sparkles, Settings as SettingsIcon
 } from 'lucide-react';
 import { api } from '../api/client';
 import { User, UserPlanStatus } from '../types';
@@ -56,6 +56,7 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
     '/portgate',
     '/tasks',
     '/audit',
+    '/settings',
   ].some((path) => location.pathname.startsWith(path));
 
   return (
@@ -189,6 +190,17 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
                         <div>
                           <div className="font-bold">System Audit Logs</div>
                           <div className="text-[10px] text-slate-500">Security & admin activity</div>
+                        </div>
+                      </Link>
+
+                      <Link
+                        to="/settings"
+                        className="flex items-center space-x-2.5 px-3 py-2 text-xs font-mono text-slate-300 hover:text-emerald-400 hover:bg-obsidian-800 rounded-lg transition-colors"
+                      >
+                        <SettingsIcon className="w-4 h-4 text-emerald-400" />
+                        <div>
+                          <div className="font-bold">System Settings</div>
+                          <div className="text-[10px] text-slate-500">Global policies & engine</div>
                         </div>
                       </Link>
                     </div>
@@ -353,6 +365,16 @@ export const Navbar: React.FC<NavbarProps> = ({ user, onLogout }) => {
                 >
                   <History className="w-4 h-4 text-purple-400" />
                   <span>System Audit</span>
+                </Link>
+
+                <Link
+                  to="/settings"
+                  className={`flex items-center space-x-2 px-3 py-2 rounded-lg ${
+                    location.pathname.startsWith('/settings') ? 'text-emerald-400 bg-obsidian-850' : 'text-slate-300'
+                  }`}
+                >
+                  <SettingsIcon className="w-4 h-4 text-emerald-400" />
+                  <span>System Settings</span>
                 </Link>
               </>
             )}

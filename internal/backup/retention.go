@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
@@ -26,6 +28,31 @@ func DefaultRetentionPolicy() RetentionPolicy {
 		MaxAge:       14 * 24 * time.Hour,
 		MaxDiskBytes: 5 * 1024 * 1024 * 1024, // 5 GB
 	}
+}
+
+// ResolveRetentionPolicy loads retention settings from the database, falling back to defaults.
+func ResolveRetentionPolicy(ctx context.Context, mgrDB *database.ManagerDB) RetentionPolicy {
+	policy := DefaultRetentionPolicy()
+	if mgrDB == nil {
+		return policy
+	}
+
+	if val, err := mgrDB.GetSetting(ctx, "backup_retention_max_count"); err == nil && strings.TrimSpace(val) != "" {
+		if c, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && c > 0 {
+			policy.MaxCount = c
+		}
+	}
+	if val, err := mgrDB.GetSetting(ctx, "backup_retention_max_days"); err == nil && strings.TrimSpace(val) != "" {
+		if d, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && d > 0 {
+			policy.MaxAge = time.Duration(d) * 24 * time.Hour
+		}
+	}
+	if val, err := mgrDB.GetSetting(ctx, "backup_retention_max_gb"); err == nil && strings.TrimSpace(val) != "" {
+		if gb, err := strconv.ParseFloat(strings.TrimSpace(val), 64); err == nil && gb > 0 {
+			policy.MaxDiskBytes = int64(gb * 1024 * 1024 * 1024)
+		}
+	}
+	return policy
 }
 
 // EnforceRetention prunes expired or excess unpinned backups according to policy.

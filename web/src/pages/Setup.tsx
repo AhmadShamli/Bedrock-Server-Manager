@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles, ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
 import { api } from '../api/client';
-import { User } from '../types';
+import { User, TurnstileConfig } from '../types';
+import { TurnstileWidget, TurnstileWidgetRef } from '../components/TurnstileWidget';
 
 interface SetupProps {
   onSetupSuccess: (user: User) => void;
@@ -15,6 +16,19 @@ export const Setup: React.FC<SetupProps> = ({ onSetupSuccess }) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Turnstile state
+  const [turnstileConfig, setTurnstileConfig] = useState<TurnstileConfig | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string>('');
+  const turnstileRef = useRef<TurnstileWidgetRef>(null);
+
+  useEffect(() => {
+    api.getTurnstileConfig()
+      .then((cfg) => setTurnstileConfig(cfg))
+      .catch(() => null);
+  }, []);
+
+  const isTurnstileRequired = !!(turnstileConfig?.enabled && turnstileConfig.setup_enabled && turnstileConfig.site_key);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,13 +44,26 @@ export const Setup: React.FC<SetupProps> = ({ onSetupSuccess }) => {
       return;
     }
 
+    if (isTurnstileRequired && !turnstileToken) {
+      setError('Please complete the security challenge verification.');
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await api.setup({ username, password });
+      const res = await api.setup({
+        username,
+        password,
+        turnstile_token: turnstileToken || undefined,
+      });
       onSetupSuccess(res.user);
       navigate('/');
     } catch (err: any) {
       setError(err.message || 'Setup failed');
+      if (isTurnstileRequired) {
+        setTurnstileToken('');
+        turnstileRef.current?.reset();
+      }
     } finally {
       setLoading(false);
     }
@@ -103,10 +130,21 @@ export const Setup: React.FC<SetupProps> = ({ onSetupSuccess }) => {
             />
           </div>
 
+          {isTurnstileRequired && (
+            <TurnstileWidget
+              ref={turnstileRef}
+              siteKey={turnstileConfig!.site_key}
+              action="setup"
+              onVerify={(token) => setTurnstileToken(token)}
+              onExpire={() => setTurnstileToken('')}
+              onError={() => setTurnstileToken('')}
+            />
+          )}
+
           <button
             type="submit"
-            disabled={loading}
-            className="w-full py-3 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] disabled:opacity-50 flex items-center justify-center space-x-2"
+            disabled={loading || (isTurnstileRequired && !turnstileToken)}
+            className="w-full py-3 px-4 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold font-mono uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
               <>

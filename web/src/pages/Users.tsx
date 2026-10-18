@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Shield, UserPlus, Key, Trash2, Server, Check, Loader2, AlertCircle, Clock,
-  Save, Layers, Edit3, UserCheck, ToggleLeft, ToggleRight, Box, ShieldCheck,
-  Cpu, HardDrive, Download, RefreshCw, ExternalLink
+  Shield, UserPlus, Key, Trash2, Server, Loader2, AlertCircle,
+  Layers, Edit3, UserCheck
 } from 'lucide-react';
 import { api } from '../api/client';
-import { User, Server as ServerType, Plan, BDSStatus, BDSVersionsResponse } from '../types';
+import { User, Server as ServerType, Plan } from '../types';
 import { Pagination } from '../components/Pagination';
 import { usePagination } from '../hooks/usePagination';
 
@@ -29,20 +28,6 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
     setCurrentPage,
     setPageSize,
   } = usePagination(users, 10);
-
-  // System Settings state
-  const [heartbeatSec, setHeartbeatSec] = useState(10);
-  const [allowRegistration, setAllowRegistration] = useState(false);
-  const [curseforgeApiKey, setCurseforgeApiKey] = useState('');
-  const [curseForgeConfigured, setCurseForgeConfigured] = useState(false);
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [settingsSaved, setSettingsSaved] = useState(false);
-
-  // BDS & Windows host state
-  const [bdsStatus, setBdsStatus] = useState<BDSStatus | null>(null);
-  const [bdsVersions, setBdsVersions] = useState<BDSVersionsResponse | null>(null);
-  const [bdsActionLoading, setBdsActionLoading] = useState<string | null>(null);
-  const [bdsMessage, setBdsMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Add User modal state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -74,33 +59,15 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
     try {
       setLoading(true);
       setError(null);
-      const [uList, sList, pList, settingsRes, bdsStatusRes] = await Promise.all([
+      const [uList, sList, pList] = await Promise.all([
         api.listUsers(),
         api.listServers(),
         api.listPlans(),
-        api.getSettings(),
-        api.getBDSStatus().catch(() => null),
       ]);
       const safeUsers = Array.isArray(uList) ? uList : [];
       setUsers(safeUsers);
       setServers(Array.isArray(sList) ? sList : []);
       setPlans(Array.isArray(pList) ? pList : []);
-      if (bdsStatusRes) {
-        setBdsStatus(bdsStatusRes);
-      }
-
-      if (settingsRes && settingsRes['heartbeat_interval_seconds']) {
-        const val = parseInt(settingsRes['heartbeat_interval_seconds'], 10);
-        if (!isNaN(val) && val > 0) setHeartbeatSec(val);
-      }
-
-      if (settingsRes && settingsRes['allow_registration']) {
-        setAllowRegistration(settingsRes['allow_registration'] === 'true' || settingsRes['allow_registration'] === '1');
-      }
-
-      if (settingsRes && settingsRes['curseforge_api_key']) {
-        setCurseForgeConfigured(true);
-      }
 
       // Default plan selection for modal
       const def = pList.find((p) => p.is_default);
@@ -234,104 +201,6 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
     }
   };
 
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingSettings(true);
-    setSettingsSaved(false);
-    try {
-      const updates: Promise<any>[] = [
-        api.updateSetting('heartbeat_interval_seconds', heartbeatSec.toString()),
-        api.updateSetting('allow_registration', allowRegistration ? 'true' : 'false'),
-      ];
-      if (curseforgeApiKey.trim()) {
-        updates.push(api.updateMarketplaceConfig(curseforgeApiKey.trim()));
-      }
-      await Promise.all(updates);
-      if (curseforgeApiKey.trim()) {
-        setCurseForgeConfigured(true);
-        setCurseforgeApiKey('');
-      }
-      setSettingsSaved(true);
-      setTimeout(() => setSettingsSaved(false), 3000);
-    } catch (err: any) {
-      alert(err.message || 'Failed to update settings');
-    } finally {
-      setSavingSettings(false);
-    }
-  };
-
-  const handleAcceptEula = async () => {
-    try {
-      setBdsActionLoading('eula');
-      await api.acceptBDSEULA();
-      const st = await api.getBDSStatus();
-      setBdsStatus(st);
-      setBdsMessage({ text: 'Mojang BDS EULA accepted successfully.', type: 'success' });
-    } catch (err: any) {
-      setBdsMessage({ text: err.message || 'Failed to accept EULA', type: 'error' });
-    } finally {
-      setBdsActionLoading(null);
-    }
-  };
-
-  const handlePurgeCache = async () => {
-    if (!confirm('Purge cached BDS versions that are not currently in use by any server?')) return;
-    try {
-      setBdsActionLoading('purge');
-      await api.purgeBDSCache();
-      const st = await api.getBDSStatus();
-      setBdsStatus(st);
-      setBdsMessage({ text: 'BDS cache purged successfully.', type: 'success' });
-    } catch (err: any) {
-      setBdsMessage({ text: err.message || 'Failed to purge cache', type: 'error' });
-    } finally {
-      setBdsActionLoading(null);
-    }
-  };
-
-  const handleCheckVersions = async () => {
-    try {
-      setBdsActionLoading('versions');
-      const v = await api.checkBDSVersions(true);
-      setBdsVersions(v);
-      setBdsMessage({
-        text: `BDS versions checked. Latest: ${v.latest?.version || 'unknown'}, Preview: ${v.preview?.version || 'unknown'}`,
-        type: 'success',
-      });
-    } catch (err: any) {
-      setBdsMessage({ text: err.message || 'Failed to check versions', type: 'error' });
-    } finally {
-      setBdsActionLoading(null);
-    }
-  };
-
-  const handleSetLoopback = async () => {
-    try {
-      setBdsActionLoading('loopback');
-      const res = await api.setLoopbackExemption();
-      setBdsMessage({ text: res.output || 'Loopback exemption enabled successfully.', type: 'success' });
-    } catch (err: any) {
-      setBdsMessage({ text: err.message || 'Failed to enable loopback exemption', type: 'error' });
-    } finally {
-      setBdsActionLoading(null);
-    }
-  };
-
-  const handleAddDefender = async () => {
-    try {
-      setBdsActionLoading('defender');
-      const res = await api.addDefenderExclusion();
-      setBdsMessage({
-        text: `Windows Defender exclusion added for ${res.exclusion_path || 'data directory'}.`,
-        type: 'success',
-      });
-    } catch (err: any) {
-      setBdsMessage({ text: err.message || 'Failed to add Defender exclusion', type: 'error' });
-    } finally {
-      setBdsActionLoading(null);
-    }
-  };
-
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
       {/* HEADER */}
@@ -342,7 +211,7 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
             <span>User & Access Management</span>
           </h1>
           <p className="text-sm font-mono text-slate-400 mt-1">
-            Provision users, assign deployment plans, configure operator scopes, and manage portal access policies.
+            Provision users, assign deployment plans, configure operator scopes, and manage accounts.
           </p>
         </div>
 
@@ -514,332 +383,6 @@ export const UsersPage: React.FC<UsersPageProps> = ({ currentUser }) => {
           </div>
         )}
       </div>
-
-      {/* SYSTEM REGISTRATION & PORTAL SETTINGS CARD */}
-      <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 space-y-6">
-        <div>
-          <h3 className="font-mono text-base font-bold text-slate-100 mb-1 flex items-center gap-2">
-            <Clock className="w-4 h-4 text-emerald-400" />
-            <span>Registration & Portal Access Policies</span>
-          </h3>
-          <p className="text-xs text-slate-400 font-mono">
-            Configure open self-registration for normal users and dynamic firewall heartbeat intervals.
-          </p>
-        </div>
-
-        {settingsSaved && (
-          <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 font-mono text-xs flex items-center space-x-2">
-            <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Settings saved successfully!</span>
-          </div>
-        )}
-
-        <form onSubmit={handleSaveSettings} className="space-y-4 font-mono text-xs">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 rounded-xl bg-obsidian-950 border border-obsidian-800">
-            {/* Registration toggle */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="font-bold text-slate-200">Public Self-Registration</span>
-                <button
-                  type="button"
-                  onClick={() => setAllowRegistration(!allowRegistration)}
-                  className="text-emerald-400 focus:outline-none"
-                >
-                  {allowRegistration ? (
-                    <ToggleRight className="w-6 h-6 text-emerald-400" />
-                  ) : (
-                    <ToggleLeft className="w-6 h-6 text-slate-600" />
-                  )}
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                {allowRegistration
-                  ? 'Enabled: Visitors can register accounts at /register and receive the Default Plan.'
-                  : 'Disabled: New user accounts can only be created by administrators.'}
-              </p>
-            </div>
-
-            {/* Heartbeat seconds */}
-            <div>
-              <label className="block text-slate-200 font-bold mb-1.5">
-                Heartbeat Ping Interval (seconds)
-              </label>
-              <input
-                type="number"
-                min="3"
-                max="120"
-                value={heartbeatSec}
-                onChange={(e) => setHeartbeatSec(parseInt(e.target.value) || 10)}
-                className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
-              />
-              <p className="text-[11px] text-slate-400 mt-1">
-                Interval for client IP renewal during network roaming.
-              </p>
-            </div>
-
-            {/* CurseForge API Key */}
-            <div className="md:col-span-2 border-t border-obsidian-800/80 pt-4">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="font-bold text-slate-200">CurseForge API Key (Eternal API)</span>
-                {curseForgeConfigured && (
-                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
-                    Configured
-                  </span>
-                )}
-              </div>
-              <input
-                type="password"
-                placeholder={curseForgeConfigured ? '•••••••••••••••• (Leave blank to keep existing key)' : 'Enter CurseForge API Key'}
-                value={curseforgeApiKey}
-                onChange={(e) => setCurseforgeApiKey(e.target.value)}
-                className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
-              />
-              <p className="text-[11px] text-slate-400 mt-1">
-                Required for in-app CurseForge marketplace search &amp; 1-click install. Register a free API key at console.curseforge.com.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex justify-end">
-            <button
-              type="submit"
-              disabled={savingSettings}
-              className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center space-x-1.5 transition-colors"
-            >
-              {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-              <span>Save System Settings</span>
-            </button>
-          </div>
-        </form>
-      </div>
-
-      {/* BDS & WINDOWS HOST SETTINGS CARD */}
-      {bdsStatus && (
-        <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 space-y-6">
-          <div>
-            <h3 className="font-mono text-base font-bold text-slate-100 mb-1 flex items-center gap-2">
-              <Box className="w-4 h-4 text-emerald-400" />
-              <span>Mojang Bedrock Dedicated Server (BDS) &amp; Host Configuration</span>
-            </h3>
-            <p className="text-xs text-slate-400 font-mono">
-              Manage official Mojang BDS engine settings, version caches, EULA compliance, and host integrations.
-            </p>
-          </div>
-
-          {bdsMessage && (
-            <div
-              className={`p-3 rounded-lg border font-mono text-xs flex items-center justify-between ${
-                bdsMessage.type === 'success'
-                  ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
-                  : 'bg-rose-950/40 border-rose-500/40 text-rose-300'
-              }`}
-            >
-              <span>{bdsMessage.text}</span>
-              <button onClick={() => setBdsMessage(null)} className="opacity-70 hover:opacity-100 font-bold ml-2">
-                ✕
-              </button>
-            </div>
-          )}
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs">
-            {/* BDS EULA Compliance */}
-            <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-200 flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  <span>Minecraft BDS EULA</span>
-                </span>
-                {bdsStatus.eula_accepted ? (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                    Accepted
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                    Not Accepted
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Official BDS binaries require agreement to the{' '}
-                <a
-                  href={bdsStatus.eula_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-0.5"
-                >
-                  Minecraft EULA <ExternalLink className="w-3 h-3" />
-                </a>{' '}
-                and{' '}
-                <a
-                  href={bdsStatus.privacy_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-0.5"
-                >
-                  Privacy Statement <ExternalLink className="w-3 h-3" />
-                </a>.
-              </p>
-              {bdsStatus.eula_accepted ? (
-                <div className="text-[10px] text-slate-500">
-                  Accepted {bdsStatus.eula_accepted_at ? `on ${new Date(bdsStatus.eula_accepted_at).toLocaleString()}` : ''}{' '}
-                  {bdsStatus.eula_accepted_by ? `by ${bdsStatus.eula_accepted_by}` : ''}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleAcceptEula}
-                  disabled={bdsActionLoading === 'eula'}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
-                >
-                  {bdsActionLoading === 'eula' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>Agree &amp; Accept EULA</span>
-                </button>
-              )}
-            </div>
-
-            {/* Visual C++ Runtime Status */}
-            <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-200 flex items-center gap-1.5">
-                  <Cpu className="w-4 h-4 text-emerald-400" />
-                  <span>Visual C++ 2015–2022 Runtime</span>
-                </span>
-                {bdsStatus.vc_installed ? (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                    Installed
-                  </span>
-                ) : (
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                    Missing
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                {bdsStatus.vc_installed
-                  ? 'MSVC v14 runtime library detected in registry / system folder. Native BDS can launch normally.'
-                  : 'bedrock_server.exe requires the x64 Microsoft Visual C++ Redistributable to execute on Windows.'}
-              </p>
-              {!bdsStatus.vc_installed && (
-                <div>
-                  <a
-                    href="https://aka.ms/vs/17/release/vc_redist.x64.exe"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold text-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Download vc_redist.x64.exe</span>
-                  </a>
-                </div>
-              )}
-            </div>
-
-            {/* BDS Cache & Versions */}
-            <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-slate-200 flex items-center gap-1.5">
-                  <HardDrive className="w-4 h-4 text-emerald-400" />
-                  <span>BDS Binary Cache</span>
-                </span>
-                <span className="text-[10px] text-slate-400">
-                  {bdsStatus.cache_count} cached ({(bdsStatus.cache_bytes / (1024 * 1024)).toFixed(1)} MB)
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Cached versions:{' '}
-                {bdsStatus.cached_versions && bdsStatus.cached_versions.length > 0 ? (
-                  <span className="text-slate-300">{bdsStatus.cached_versions.join(', ')}</span>
-                ) : (
-                  <span className="text-slate-500 italic">None yet downloaded</span>
-                )}
-              </p>
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handlePurgeCache}
-                  disabled={bdsActionLoading === 'purge' || bdsStatus.cache_count === 0}
-                  className="px-3 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
-                >
-                  {bdsActionLoading === 'purge' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <Trash2 className="w-3.5 h-3.5 text-rose-400" />
-                  <span>Purge Unused Versions</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleCheckVersions}
-                  disabled={bdsActionLoading === 'versions'}
-                  className="px-3 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
-                >
-                  {bdsActionLoading === 'versions' ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
-                  )}
-                  <span>Check BDS Releases</span>
-                </button>
-              </div>
-              {bdsVersions && (
-                <div className="text-[10px] text-slate-400 pt-1 border-t border-obsidian-800/60 flex flex-col gap-0.5">
-                  <div>Latest Stable: <span className="text-emerald-400 font-bold">{bdsVersions.latest?.version || 'N/A'}</span></div>
-                  <div>Latest Preview: <span className="text-cyber-cyan font-bold">{bdsVersions.preview?.version || 'N/A'}</span></div>
-                </div>
-              )}
-            </div>
-
-            {/* Windows Host Integrations */}
-            {bdsStatus.is_windows && (
-              <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-slate-200 flex items-center gap-1.5">
-                    <Shield className="w-4 h-4 text-emerald-400" />
-                    <span>Windows Host Optimizations</span>
-                  </span>
-                  <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
-                    Host: Windows
-                  </span>
-                </div>
-                <div className="space-y-3 pt-1">
-                  <div>
-                    <div className="text-[11px] font-bold text-slate-300 mb-1">
-                      Local Client Loopback Exemption
-                    </div>
-                    <p className="text-[10px] text-slate-400 mb-1.5">
-                      Enables the local Minecraft UWP app on this PC to connect to local servers via 127.0.0.1.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleSetLoopback}
-                      disabled={bdsActionLoading === 'loopback'}
-                      className="px-3 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
-                    >
-                      {bdsActionLoading === 'loopback' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      <span>Enable UWP Loopback</span>
-                    </button>
-                  </div>
-
-                  <div className="border-t border-obsidian-800/80 pt-2.5">
-                    <div className="text-[11px] font-bold text-slate-300 mb-1">
-                      Windows Defender Exclusion
-                    </div>
-                    <p className="text-[10px] text-slate-400 mb-1.5">
-                      Adds data directory exclusion to prevent antivirus real-time scan lockups during world saves.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleAddDefender}
-                      disabled={bdsActionLoading === 'defender'}
-                      className="px-3 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-300 font-bold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-40"
-                    >
-                      {bdsActionLoading === 'defender' && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      <span>Add Defender Exclusion</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* CREATE USER MODAL */}
       {showAddModal && (

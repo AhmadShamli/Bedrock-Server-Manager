@@ -1,4 +1,4 @@
-import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AddonServerConfig, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary, BDSStatus, BDSVersionsResponse } from '../types';
+import { Server, User, Plan, UserPlanStatus, KnockConfig, Backup, Task, AddonPack, AddonServerConfig, MarketplaceSearchResult, MarketplaceConfig, MarketplaceItemDetails, AuditLog, PortGateLease, PortGateKey, PortGateAllowRule, PortGateBanRule, BannedPlayer, GlobalPlayer, MetricsData, Preset, SeedPreset, ActivePlayerInfo, ServerPlayer, DashboardSummary, BDSStatus, BDSVersionsResponse, SystemInfo, TurnstileConfig, TurnstileTestResult, DDNSConfig, DDNSStatus, DDNSSyncResponse } from '../types';
 
 class APIClient {
   private token: string | null = localStorage.getItem('bsm_token');
@@ -59,7 +59,7 @@ class APIClient {
     return this.request('/api/setup/status');
   }
 
-  async setup(payload: { username: string; password: string }): Promise<{ token: string; user: User }> {
+  async setup(payload: { username: string; password: string; turnstile_token?: string }): Promise<{ token: string; user: User }> {
     const res = await this.request<{ token: string; user: User }>('/api/setup', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -68,7 +68,7 @@ class APIClient {
     return res;
   }
 
-  async login(payload: { username: string; password: string; remember_me?: boolean }): Promise<{ token: string; user: User }> {
+  async login(payload: { username: string; password: string; remember_me?: boolean; turnstile_token?: string }): Promise<{ token: string; user: User }> {
     const res = await this.request<{ token: string; user: User }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -85,7 +85,7 @@ class APIClient {
     }
   }
 
-  async register(payload: { username: string; password: string; email?: string }): Promise<{ token: string; user: User }> {
+  async register(payload: { username: string; password: string; email?: string; turnstile_token?: string }): Promise<{ token: string; user: User }> {
     const res = await this.request<{ token: string; user: User }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -362,7 +362,7 @@ class APIClient {
     return this.request(`/api/knock/${serverId}/config`);
   }
 
-  async knock(serverId: string, payload: { gamertag?: string; passphrase?: string }): Promise<{
+  async knock(serverId: string, payload: { gamertag?: string; passphrase?: string; turnstile_token?: string }): Promise<{
     success: boolean;
     ip_address: string;
     expires_at: string;
@@ -817,6 +817,17 @@ class APIClient {
     });
   }
 
+  async getSystemInfo(): Promise<SystemInfo> {
+    return this.request('/api/system/info');
+  }
+
+  async testDiscordWebhook(webhookUrl?: string): Promise<{ status: string; message?: string }> {
+    return this.request('/api/system/webhook/test', {
+      method: 'POST',
+      body: JSON.stringify({ webhook_url: webhookUrl }),
+    });
+  }
+
   // --- BDS & Windows Host ---
   async getBDSStatus(): Promise<BDSStatus> {
     return this.request('/api/system/bds/status');
@@ -1015,6 +1026,48 @@ class APIClient {
   async getDashboardSummary(): Promise<DashboardSummary> {
     return this.request('/api/dashboard/summary');
   }
+
+  // Cloudflare Turnstile Protection
+  async getTurnstileConfig(): Promise<TurnstileConfig> {
+    return this.request('/api/system/turnstile-config');
+  }
+
+  async testTurnstile(payload: { site_key?: string; secret_key?: string; token: string }): Promise<TurnstileTestResult> {
+    return this.request('/api/system/turnstile/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // --- Dynamic DNS (DDNS) & Public IP ---
+  async getDDNSStatus(): Promise<DDNSStatus> {
+    return this.request('/api/ddns/status');
+  }
+
+  async getDDNSConfig(): Promise<DDNSConfig> {
+    return this.request('/api/ddns/config');
+  }
+
+  async updateDDNSConfig(config: DDNSConfig): Promise<DDNSConfig> {
+    return this.request('/api/ddns/config', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async syncDDNS(): Promise<DDNSSyncResponse> {
+    return this.request('/api/ddns/sync', {
+      method: 'POST',
+    });
+  }
+
+  async testDDNS(config: DDNSConfig): Promise<{ success: boolean; error?: string; result?: any }> {
+    return this.request('/api/ddns/test', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
 }
 
 export const api = new APIClient();
+

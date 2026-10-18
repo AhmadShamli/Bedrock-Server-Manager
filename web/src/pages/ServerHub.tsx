@@ -6,7 +6,7 @@ import {
   Download, UserPlus, ShieldAlert, Check, Lock, Unlock, Package, Archive,
   Upload, Trash2, Share2, Crown, Globe, UserMinus, Key, KeyRound, Compass,
   ChevronDown, ChevronRight, Plus, Activity, UserCog, Ban, X, Sparkles,
-  Network, Search, Clock, History, Save, Eye, Image, FileText, MessageCircle, ArrowUp, ArrowDown, MapPin
+  Network, Search, Clock, History, Eye, Image, FileText, MessageCircle, ArrowUp, ArrowDown, MapPin
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Server, User, Backup, AddonPack, AddonServerConfig, MarketplaceItem, MarketplaceItemDetails, MarketplaceFile, PortGateLease, PortGateKey, GlobalPlayer, MetricsData, PortGateAllowRule, BannedPlayer, ServerPlayer } from '../types';
@@ -280,9 +280,6 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
   const [updatingAddonConfig, setUpdatingAddonConfig] = useState(false);
   const [packActivationChanged, setPackActivationChanged] = useState(false);
 
-  const [marketplaceConfigModalOpen, setMarketplaceConfigModalOpen] = useState(false);
-  const [curseForgeKeyInput, setCurseForgeKeyInput] = useState('');
-  const [savingCfKey, setSavingCfKey] = useState(false);
   const [curseForgeConfigured, setCurseForgeConfigured] = useState(false);
 
   const [marketplaceItems, setMarketplaceItems] = useState<MarketplaceItem[]>([]);
@@ -1595,23 +1592,6 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
     }
   };
 
-  const handleSaveCurseForgeKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!curseForgeKeyInput.trim()) return;
-    setSavingCfKey(true);
-    try {
-      const res = await api.updateMarketplaceConfig(curseForgeKeyInput.trim());
-      setCurseForgeConfigured(!!res.curseforge_configured);
-      setMarketplaceConfigModalOpen(false);
-      setCurseForgeKeyInput('');
-      alert('CurseForge API Key updated successfully!');
-      handleSearchMarketplace();
-    } catch (err: any) {
-      alert(err.message || 'Failed to save CurseForge API Key');
-    } finally {
-      setSavingCfKey(false);
-    }
-  };
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -3240,20 +3220,24 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   </button>
                 )}
 
-                {/* Configure CurseForge Key (Admin only) */}
+                {/* Configure CurseForge Key in Settings (Admin only) */}
                 {user.role === 'admin' && (
                   <button
-                    onClick={() => setMarketplaceConfigModalOpen(true)}
+                    onClick={() => navigate('/settings')}
                     className={`px-3 py-2 rounded-lg border font-mono text-xs font-bold flex items-center space-x-1.5 transition-colors ${
                       curseForgeConfigured
                         ? 'bg-obsidian-800/80 hover:bg-obsidian-700 border-obsidian-700 text-slate-300'
                         : 'bg-amber-950/30 hover:bg-amber-900/40 border-amber-600/40 text-amber-300'
                     }`}
-                    title="CurseForge API Key Configuration"
+                    title="Configure CurseForge API Key in System Settings"
                   >
                     <Key className={`w-3.5 h-3.5 ${curseForgeConfigured ? 'text-emerald-400' : 'text-amber-400'}`} />
                     <span>CurseForge Key</span>
-                    {curseForgeConfigured && <Check className="w-3 h-3 text-emerald-400 ml-0.5" />}
+                    {curseForgeConfigured ? (
+                      <Check className="w-3 h-3 text-emerald-400 ml-0.5" />
+                    ) : (
+                      <Settings className="w-3 h-3 text-amber-400 ml-0.5" />
+                    )}
                   </button>
                 )}
               </div>
@@ -3525,10 +3509,11 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                     </div>
                     {user.role === 'admin' && (
                       <button
-                        onClick={() => setMarketplaceConfigModalOpen(true)}
-                        className="px-3 py-1 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold shrink-0 text-[11px]"
+                        onClick={() => navigate('/settings')}
+                        className="px-3 py-1 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 font-bold shrink-0 text-[11px] flex items-center gap-1"
                       >
-                        Set API Key
+                        <span>Configure in Settings</span>
+                        <Settings className="w-3 h-3" />
                       </button>
                     )}
                   </div>
@@ -4164,77 +4149,6 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
         </div>
       )}
 
-      {/* CURSEFORGE API KEY CONFIGURATION MODAL (Admin only) */}
-      {marketplaceConfigModalOpen && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-obsidian-900 border border-obsidian-700 rounded-xl max-w-lg w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-base font-mono font-bold text-slate-100 flex items-center gap-2">
-                <Key className="w-4 h-4 text-amber-400" />
-                <span>Configure CurseForge API Key</span>
-              </h3>
-              <button
-                onClick={() => setMarketplaceConfigModalOpen(false)}
-                className="text-slate-400 hover:text-slate-200"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-400 font-mono mb-4 leading-relaxed">
-              CurseForge uses the Eternal API to search Bedrock Addons and resolve direct CDN downloads. Register a free account at{' '}
-              <a
-                href="https://console.curseforge.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-emerald-400 hover:underline inline-flex items-center"
-              >
-                console.curseforge.com <ExternalLink className="w-3 h-3 ml-0.5 inline" />
-              </a>{' '}
-              to obtain your personal API key.
-            </p>
-
-            <form onSubmit={handleSaveCurseForgeKey} className="space-y-4 font-mono text-xs">
-              <div>
-                <label className="block text-slate-200 font-bold mb-1.5 flex items-center justify-between">
-                  <span>API Key</span>
-                  {curseForgeConfigured && (
-                    <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
-                      Currently Configured
-                    </span>
-                  )}
-                </label>
-                <input
-                  type="password"
-                  required
-                  placeholder="Enter your CurseForge API key"
-                  value={curseForgeKeyInput}
-                  onChange={(e) => setCurseForgeKeyInput(e.target.value)}
-                  className="w-full px-3 py-2 bg-obsidian-950 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <div className="flex justify-end space-x-3 pt-3 border-t border-obsidian-800">
-                <button
-                  type="button"
-                  onClick={() => setMarketplaceConfigModalOpen(false)}
-                  className="px-4 py-2 rounded-lg bg-obsidian-800 text-slate-300 hover:bg-obsidian-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingCfKey}
-                  className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold flex items-center space-x-1.5"
-                >
-                  {savingCfKey ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                  <span>Save Key</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* CONFIGURATION EDITOR TAB */}
       {activeTab === 'settings' && (

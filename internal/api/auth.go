@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -9,12 +10,19 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/auth"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/database"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/turnstile"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/webhook"
 )
 
 type AuthHandler struct {
-	db          *database.ManagerDB
-	rateLimiter *auth.RateLimiter
-	jwtSecret   []byte
+	db                *database.ManagerDB
+	rateLimiter       *auth.RateLimiter
+	jwtSecret         []byte
+	turnstileVerifier *turnstile.Verifier
+}
+
+func (h *AuthHandler) SetTurnstileVerifier(tv *turnstile.Verifier) {
+	h.turnstileVerifier = tv
 }
 
 func NewAuthHandler(db *database.ManagerDB, rateLimiter *auth.RateLimiter, jwtSecret []byte) *AuthHandler {
@@ -41,8 +49,9 @@ func (h *AuthHandler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 
 // SetupRequest payload for initial wizard.
 type SetupRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 // Setup initializes the primary administrator account.
@@ -62,6 +71,14 @@ func (h *AuthHandler) Setup(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request body"})
+		return
+	}
+
+	clientIP := GetClientIP(r).String()
+	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "setup", req.TurnstileToken, clientIP); !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
 		return
 	}
 
@@ -93,7 +110,6 @@ func (h *AuthHandler) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	clientIP := GetClientIP(r).String()
 	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 		UserID:    &user.ID,
 		ActorType: "user",
@@ -123,9 +139,10 @@ func (h *AuthHandler) Setup(w http.ResponseWriter, r *http.Request) {
 
 // RegisterRequest payload for self-registration.
 type RegisterRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Email    string `json:"email"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	Email          string `json:"email"`
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 // Register creates a new normal user account if registration is enabled.
@@ -154,6 +171,22 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request body"})
+		return
+	}
+
+	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "register", req.TurnstileToken, clientIP); !ok {
+		lockedOut := h.rateLimiter.RecordLoginFailure(clientIP, req.Username, now)
+		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+			ActorType: "user",
+			ActorName: req.Username,
+			Action:    "turnstile_register_failed",
+			Target:    "auth",
+			Details:   fmt.Sprintf(`{"error": "%s", "locked_out": %t}`, reason, lockedOut),
+			ClientIP:  clientIP,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
 		return
 	}
 
@@ -229,9 +262,10 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 // LoginRequest payload.
 type LoginRequest struct {
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	RememberMe bool   `json:"remember_me"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	RememberMe     bool   `json:"remember_me"`
+	TurnstileToken string `json:"turnstile_token,omitempty"`
 }
 
 // Login authenticates a user and returns a JWT token.
@@ -257,17 +291,41 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if ok, reason, _ := turnstile.Check(r.Context(), h.db, h.turnstileVerifier, "login", req.TurnstileToken, clientIP); !ok {
+		lockedOut := h.rateLimiter.RecordLoginFailure(clientIP, req.Username, now)
+		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
+			ActorType: "user",
+			ActorName: req.Username,
+			Action:    "turnstile_login_failed",
+			Target:    "auth",
+			Details:   fmt.Sprintf(`{"error": "%s", "locked_out": %t}`, reason, lockedOut),
+			ClientIP:  clientIP,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": reason})
+		return
+	}
+
 	user, err := h.db.GetUserByUsername(r.Context(), req.Username)
 	if err != nil || !auth.CheckPassword(user.PasswordHash, req.Password) {
-		h.rateLimiter.RecordLoginFailure(clientIP, req.Username, now)
+		lockedOut := h.rateLimiter.RecordLoginFailure(clientIP, req.Username, now)
 		_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 			ActorType: "user",
 			ActorName: req.Username,
 			Action:    "login_failed",
 			Target:    "auth",
-			Details:   `{"error": "Invalid credentials"}`,
+			Details:   fmt.Sprintf(`{"error": "Invalid credentials", "locked_out": %t}`, lockedOut),
 			ClientIP:  clientIP,
 		})
+
+		// Dispatch security alert to Discord if configured
+		if secAlert, _ := h.db.GetSetting(r.Context(), "security_alert_discord"); secAlert == "true" || secAlert == "1" {
+			if webhookURL, _ := h.db.GetSetting(r.Context(), "discord_webhook_url"); webhookURL != "" {
+				dispatcher := webhook.NewDispatcher()
+				_ = dispatcher.NotifyFailedLogin(r.Context(), webhookURL, req.Username, clientIP, lockedOut)
+			}
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)

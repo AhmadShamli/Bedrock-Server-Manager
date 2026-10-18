@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { UserPlus, AlertCircle, Loader2 } from 'lucide-react';
 import { api } from '../api/client';
-import { User } from '../types';
+import { User, TurnstileConfig } from '../types';
+import { TurnstileWidget, TurnstileWidgetRef } from '../components/TurnstileWidget';
 
 interface RegisterProps {
   onRegisterSuccess: (user: User) => void;
@@ -16,6 +17,19 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Turnstile state
+  const [turnstileConfig, setTurnstileConfig] = useState<TurnstileConfig | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState<string>('');
+  const turnstileRef = useRef<TurnstileWidgetRef>(null);
+
+  useEffect(() => {
+    api.getTurnstileConfig()
+      .then((cfg) => setTurnstileConfig(cfg))
+      .catch(() => null);
+  }, []);
+
+  const isTurnstileRequired = !!(turnstileConfig?.enabled && turnstileConfig.register_enabled && turnstileConfig.site_key);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -31,6 +45,11 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
       return;
     }
 
+    if (isTurnstileRequired && !turnstileToken) {
+      setError('Please complete the security challenge verification.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -38,11 +57,16 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
         username: username.trim(),
         email: email.trim(),
         password,
+        turnstile_token: turnstileToken || undefined,
       });
       onRegisterSuccess(res.user);
       navigate('/');
     } catch (err: any) {
       setError(err.message || 'Registration failed');
+      if (isTurnstileRequired) {
+        setTurnstileToken('');
+        turnstileRef.current?.reset();
+      }
     } finally {
       setLoading(false);
     }
@@ -124,10 +148,21 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
             />
           </div>
 
+          {isTurnstileRequired && (
+            <TurnstileWidget
+              ref={turnstileRef}
+              siteKey={turnstileConfig!.site_key}
+              action="register"
+              onVerify={(token) => setTurnstileToken(token)}
+              onExpire={() => setTurnstileToken('')}
+              onError={() => setTurnstileToken('')}
+            />
+          )}
+
           <button
             type="submit"
-            disabled={loading}
-            className="w-full mt-2 py-3 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] disabled:opacity-50 flex items-center justify-center space-x-2"
+            disabled={loading || (isTurnstileRequired && !turnstileToken)}
+            className="w-full mt-2 py-3 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:shadow-[0_0_25px_rgba(16,185,129,0.5)] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
           >
             {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <span>Create Account</span>}
           </button>
