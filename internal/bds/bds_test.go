@@ -174,3 +174,101 @@ func TestCacheManagerAndInstaller(t *testing.T) {
 		t.Fatalf("expected 1.21.50.07 to remain cached")
 	}
 }
+
+func TestResolverWithMockServiceAPI(t *testing.T) {
+	mockResponse := `{
+		"result": {
+			"links": [
+				{
+					"downloadType": "serverBedrockWindows",
+					"downloadUrl": "https://www.minecraft.net/bedrockdedicatedserver/bin-win/bedrock-server-1.26.52.3.zip"
+				},
+				{
+					"downloadType": "serverBedrockPreviewWindows",
+					"downloadUrl": "https://www.minecraft.net/bedrockdedicatedserver/bin-win-preview/bedrock-server-1.26.70.20.zip"
+				}
+			]
+		}
+	}`
+
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(mockResponse))
+	}))
+	defer mockServer.Close()
+
+	resolver := NewResolver(mockServer.Client())
+	ctx := context.Background()
+
+	// Direct call to fetchFromServiceAPI
+	relVer, prevVer, err := resolver.fetchFromServiceAPI(ctx, mockServer.URL)
+	if err != nil {
+		t.Fatalf("fetchFromServiceAPI failed: %v", err)
+	}
+	if relVer == nil || relVer.Version != "1.26.52.3" {
+		t.Fatalf("expected release version 1.26.52.3, got %+v", relVer)
+	}
+	if prevVer == nil || prevVer.Version != "1.26.70.20" {
+		t.Fatalf("expected preview version 1.26.70.20, got %+v", prevVer)
+	}
+	if !prevVer.IsPreview {
+		t.Fatalf("expected preview version to have IsPreview=true")
+	}
+}
+
+func TestResolverPinnedVersions(t *testing.T) {
+	resolver := NewResolver(nil)
+	ctx := context.Background()
+
+	// Pinned release version
+	res, err := resolver.ResolveVersion(ctx, "1.26.52.3", false)
+	if err != nil {
+		t.Fatalf("failed to resolve pinned version: %v", err)
+	}
+	if res.Version != "1.26.52.3" || res.IsPreview {
+		t.Fatalf("unexpected pinned result: %+v", res)
+	}
+	expectedURL := "https://www.minecraft.net/bedrockdedicatedserver/bin-win/bedrock-server-1.26.52.3.zip"
+	if res.DownloadURL != expectedURL {
+		t.Fatalf("expected download URL %s, got %s", expectedURL, res.DownloadURL)
+	}
+
+	// Pinned preview version
+	prevRes, err := resolver.ResolveVersion(ctx, "preview:1.26.70.20", false)
+	if err != nil {
+		t.Fatalf("failed to resolve pinned preview: %v", err)
+	}
+	if prevRes.Version != "1.26.70.20" || !prevRes.IsPreview {
+		t.Fatalf("unexpected pinned preview result: %+v", prevRes)
+	}
+	expectedPrevURL := "https://www.minecraft.net/bedrockdedicatedserver/bin-win-preview/bedrock-server-1.26.70.20.zip"
+	if prevRes.DownloadURL != expectedPrevURL {
+		t.Fatalf("expected preview URL %s, got %s", expectedPrevURL, prevRes.DownloadURL)
+	}
+}
+
+func TestResolverLiveEndpoint(t *testing.T) {
+	resolver := NewResolver(nil)
+	ctx := context.Background()
+
+	// Resolve latest
+	rel, err := resolver.ResolveVersion(ctx, "latest", true)
+	if err != nil {
+		t.Fatalf("failed to resolve latest live: %v", err)
+	}
+	if rel == nil || rel.Version == "" || rel.DownloadURL == "" {
+		t.Fatalf("invalid live release resolution: %+v", rel)
+	}
+	t.Logf("Live Latest BDS: version=%s, url=%s", rel.Version, rel.DownloadURL)
+
+	// Resolve preview
+	prev, err := resolver.ResolveVersion(ctx, "preview", false)
+	if err != nil {
+		t.Fatalf("failed to resolve preview live: %v", err)
+	}
+	if prev == nil || prev.Version == "" || prev.DownloadURL == "" || !prev.IsPreview {
+		t.Fatalf("invalid live preview resolution: %+v", prev)
+	}
+	t.Logf("Live Preview BDS: version=%s, url=%s", prev.Version, prev.DownloadURL)
+}
