@@ -5,7 +5,7 @@ set -euo pipefail
 # Supported: Debian/Ubuntu, RHEL/Rocky/Fedora, Arch Linux, Alpine
 
 REPO="AhmadShamli/Bedrock-Server-Manager"
-DEFAULT_FALLBACK_TAG="v1.7.1"
+DEFAULT_FALLBACK_TAG="v2.0.0-beta.8"
 
 # Ensure standard binary directories are in PATH (important under sudo/secure_path)
 for extra_path in /usr/local/go/bin /usr/local/bin /usr/bin; do
@@ -73,10 +73,11 @@ Usage:
 
 Options:
   -u, --upgrade            Run in upgrade mode (automatically detected if BSM is already installed)
-  -v, --version <tag>      Specify target release version (e.g. v1.2.1 or latest)
+  -v, --version <tag>      Specify target release version (e.g. v2.0.0-beta.7, v1.9.9, latest, stable)
+                           (If omitted during interactive run, available releases are presented for selection)
   -m, --method <method>    Installation method: 'download' (GitHub release), 'build' (compile from source), or 'local'
-  -y, --yes                Automatic yes to confirmation prompt (run non-interactively)
-  --check                  Check currently installed version against latest release without upgrading
+  -y, --yes                Automatic yes to confirmation prompt (run non-interactively with latest release)
+  --check                  Check currently installed version against available releases without upgrading
   --skip-backup            Skip pre-upgrade database and configuration backup
   -f, --force              Force reinstall/upgrade without confirmation prompt
   -h, --help               Show this help message
@@ -88,11 +89,11 @@ Environment Variables:
   BSM_SKIP_BACKUP          Set to 'true' to skip pre-upgrade backups
 
 Examples:
-  sudo ./install.sh                                 # Interactive install or upgrade with diagnostics
-  sudo ./install.sh -y                              # Non-interactive automated install/upgrade
+  sudo ./install.sh                                 # Interactive install/upgrade with version selection menu
+  sudo ./install.sh -y                              # Non-interactive automated install/upgrade (latest release)
   sudo ./install.sh --upgrade                       # Explicit upgrade with automated backup
-  sudo ./install.sh -v v1.2.1                       # Upgrade or install specific version
-  sudo ./install.sh --check                         # Check for available updates
+  sudo ./install.sh -v v1.9.9                       # Upgrade, install, or rollback to specific version
+  sudo ./install.sh --check                         # Check installed version against available releases
   sudo ./install.sh -m build                        # Compile latest binary from local source
 EOF
 }
@@ -117,6 +118,11 @@ fi
 
 # Parse Command-line Options
 TARGET_VERSION="${BSM_VERSION:-${VERSION:-}}"
+EXPLICIT_VERSION=false
+if [ -n "${TARGET_VERSION}" ]; then
+    EXPLICIT_VERSION=true
+fi
+VERSION_INTERACTIVELY_SELECTED=false
 INSTALL_METHOD="${BSM_INSTALL_METHOD:-${INSTALL_METHOD:-}}"
 ASSUME_YES="${BSM_ASSUME_YES:-false}"
 FORCE_UPGRADE=false
@@ -136,10 +142,11 @@ while [ $# -gt 0 ]; do
             ;;
         -v|--version)
             if [ -z "${2:-}" ]; then
-                log_error "Option '$1' requires a version argument (e.g. v1.0.0)."
+                log_error "Option '$1' requires a version argument (e.g. v2.0.0-beta.7, v1.9.9, or latest)."
                 exit 1
             fi
             TARGET_VERSION="$2"
+            EXPLICIT_VERSION=true
             shift 2
             ;;
         -m|--method)
@@ -184,20 +191,39 @@ is_systemd_active() {
     return 1
 }
 
-# Helper: Query latest release tag from GitHub
+# Helper: Query latest overall release tag from GitHub (including pre-releases)
 get_latest_release_tag() {
     local tag=""
+    local auth_header=()
+    local gh_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    if [ -z "${gh_token}" ] && [ -n "${SUDO_USER:-}" ]; then
+        gh_token="$(sudo -u "${SUDO_USER}" gh auth token 2>/dev/null || true)"
+    fi
+    if [ -z "${gh_token}" ] && command -v gh >/dev/null 2>&1; then
+        gh_token="$(gh auth token 2>/dev/null || true)"
+    fi
+    if [ -n "${gh_token}" ]; then
+        auth_header=(-H "Authorization: Bearer ${gh_token}")
+    fi
+
     if command -v curl >/dev/null 2>&1; then
-        tag="$(curl -fsSL --connect-timeout 2 -m 3 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || true)"
-        if [ -z "${tag}" ]; then
-            local effective_url
-            effective_url="$(curl -sIL --connect-timeout 2 -m 3 -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null || true)"
-            local base
-            base="$(basename "${effective_url}")"
-            if [ -n "${base}" ] && [ "${base}" != "latest" ] && [ "${base}" != "releases" ]; then
-                tag="${base}"
-            fi
+        tag="$(curl -fsSL --connect-timeout 2 -m 3 "${auth_header[@]}" "https://api.github.com/repos/${REPO}/releases?per_page=1" 2>/dev/null | grep '"tag_name":' | head -n1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/' || true)"
+    fi
+    if [ -z "${tag}" ]; then
+        if [ -n "${SUDO_USER:-}" ] && sudo -u "${SUDO_USER}" command -v gh >/dev/null 2>&1; then
+            tag="$(sudo -u "${SUDO_USER}" gh release list --repo "${REPO}" --limit 1 2>/dev/null | awk 'NR==2 {print $3}' || true)"
+        elif command -v gh >/dev/null 2>&1; then
+            tag="$(gh release list --repo "${REPO}" --limit 1 2>/dev/null | awk 'NR==2 {print $3}' || true)"
         fi
+    fi
+    if [ -z "${tag}" ] && command -v curl >/dev/null 2>&1; then
+        tag="$(curl -fsSL --connect-timeout 2 -m 3 "${auth_header[@]}" "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name":' | head -n1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/' || true)"
+    fi
+    if [ -z "${tag}" ] && [ -n "${REPO_ROOT:-}" ] && [ -d "${REPO_ROOT}/.git" ] && command -v git >/dev/null 2>&1; then
+        tag="$(git -C "${REPO_ROOT}" tag -l | sort -V -r | head -n1 || true)"
+    fi
+    if [ -z "${tag}" ] && [ -f "${REPO_ROOT:-}/internal/version/version.go" ]; then
+        tag="$(grep -E '^\s*var\s+Version\s*=' "${REPO_ROOT}/internal/version/version.go" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || true)"
     fi
     if [ -z "${tag}" ]; then
         tag="${DEFAULT_FALLBACK_TAG}"
@@ -206,6 +232,224 @@ get_latest_release_tag() {
         tag="v${tag}"
     fi
     echo "${tag}"
+}
+
+# Helper: Query latest official stable release tag from GitHub (excluding pre-releases)
+get_latest_stable_release_tag() {
+    local tag=""
+    local auth_header=()
+    local gh_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    if [ -z "${gh_token}" ] && [ -n "${SUDO_USER:-}" ]; then
+        gh_token="$(sudo -u "${SUDO_USER}" gh auth token 2>/dev/null || true)"
+    fi
+    if [ -z "${gh_token}" ] && command -v gh >/dev/null 2>&1; then
+        gh_token="$(gh auth token 2>/dev/null || true)"
+    fi
+    if [ -n "${gh_token}" ]; then
+        auth_header=(-H "Authorization: Bearer ${gh_token}")
+    fi
+
+    if command -v curl >/dev/null 2>&1; then
+        tag="$(curl -fsSL --connect-timeout 2 -m 3 "${auth_header[@]}" "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name":' | head -n1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/' || true)"
+    fi
+    if [ -z "${tag}" ]; then
+        tag="${DEFAULT_FALLBACK_TAG}"
+    fi
+    if [[ "${tag}" =~ ^[0-9]+\.[0-9]+ ]]; then
+        tag="v${tag}"
+    fi
+    echo "${tag}"
+}
+
+# Helper: Fetch list of available release tags and pre-release flags
+fetch_available_releases() {
+    local max_count="${1:-10}"
+    local auth_header=()
+    local gh_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    if [ -z "${gh_token}" ] && [ -n "${SUDO_USER:-}" ]; then
+        gh_token="$(sudo -u "${SUDO_USER}" gh auth token 2>/dev/null || true)"
+    fi
+    if [ -z "${gh_token}" ] && command -v gh >/dev/null 2>&1; then
+        gh_token="$(gh auth token 2>/dev/null || true)"
+    fi
+    if [ -n "${gh_token}" ]; then
+        auth_header=(-H "Authorization: Bearer ${gh_token}")
+    fi
+
+    local raw_data=""
+    if command -v curl >/dev/null 2>&1; then
+        raw_data="$(curl -fsSL --connect-timeout 2 -m 4 "${auth_header[@]}" "https://api.github.com/repos/${REPO}/releases?per_page=30" 2>/dev/null || true)"
+    fi
+
+    if [ -z "${raw_data}" ]; then
+        if [ -n "${SUDO_USER:-}" ] && sudo -u "${SUDO_USER}" command -v gh >/dev/null 2>&1; then
+            raw_data="$(sudo -u "${SUDO_USER}" gh api "repos/${REPO}/releases?per_page=30" 2>/dev/null || true)"
+        elif command -v gh >/dev/null 2>&1; then
+            raw_data="$(gh api "repos/${REPO}/releases?per_page=30" 2>/dev/null || true)"
+        fi
+    fi
+
+    if [ -n "${raw_data}" ]; then
+        echo "${raw_data}" | \
+        grep -E '"(tag_name|prerelease)":' | \
+        sed -E 's/.*"tag_name":\s*"([^"]+)".*/TAG \1/; s/.*"prerelease":\s*(true|false).*/PRE \1/' | \
+        awk -v max="${max_count}" '
+            /^TAG/ { tag=$2 }
+            /^PRE/ {
+                pre=$2
+                if (tag != "" && count < max) {
+                    print tag, pre
+                    count++
+                    tag=""
+                }
+            }
+        '
+        return 0
+    fi
+
+    # Fallback to local git tags
+    if [ -n "${REPO_ROOT:-}" ] && [ -d "${REPO_ROOT}/.git" ] && command -v git >/dev/null 2>&1; then
+        git -C "${REPO_ROOT}" tag -l | sort -V -r | head -n "${max_count}" | while read -r t; do
+            if [ -n "${t}" ]; then
+                echo "${t} false"
+            fi
+        done
+        return 0
+    fi
+
+    echo "${DEFAULT_FALLBACK_TAG} false"
+}
+
+# Helper: Interactive Release Version Selection Prompt
+prompt_version_selection() {
+    print_ascii_banner "Release Version Selection"
+    echo "Select which release version of Bedrock Server Manager to install:"
+    echo ""
+
+    if [ "${IS_INSTALLED}" = true ] && [ "${CURRENT_VERSION}" != "unknown" ]; then
+        echo -e "  ${BOLD}Installed Version:${RESET} ${CYAN}${CURRENT_VERSION}${RESET}"
+        echo ""
+    fi
+
+    log_info "Fetching available releases..."
+    local -a rel_tags=()
+    local -a rel_labels=()
+    local stable_seen=false
+
+    while read -r tag is_pre; do
+        [ -z "${tag}" ] && continue
+        rel_tags+=("${tag}")
+        local label=""
+        if [ "${is_pre}" = "true" ]; then
+            if [ ${#rel_tags[@]} -eq 1 ]; then
+                label="Latest Pre-release"
+            else
+                label="Pre-release"
+            fi
+        else
+            if [ "${stable_seen}" = false ]; then
+                label="Latest Stable"
+                stable_seen=true
+            fi
+        fi
+        rel_labels+=("${label}")
+    done < <(fetch_available_releases 10)
+
+    if [ ${#rel_tags[@]} -eq 0 ]; then
+        local fallback
+        fallback="$(get_latest_release_tag)"
+        rel_tags=("${fallback}")
+        rel_labels=("Latest Release")
+    fi
+
+    echo ""
+    echo -e "${BOLD}Available Versions:${RESET}"
+    for i in "${!rel_tags[@]}"; do
+        local num=$((i + 1))
+        local ver="${rel_tags[$i]}"
+        local lbl="${rel_labels[$i]}"
+        local tag_info=""
+        if [ -n "${lbl}" ]; then
+            tag_info=" (${lbl})"
+        fi
+        if [ "${ver}" = "${CURRENT_VERSION}" ]; then
+            tag_info="${tag_info} ${GREEN}[Installed]${RESET}"
+        fi
+        if [ $num -eq 1 ]; then
+            tag_info="${tag_info} ${EMERALD}[Default]${RESET}"
+        fi
+        printf "  %2d) ${BOLD}%-16s${RESET}%b\n" "${num}" "${ver}" "${tag_info}"
+    done
+    echo "   c) Custom version    (Enter any specific version tag or release number)"
+    echo ""
+
+    local prompt_text="Enter selection [1-${#rel_tags[@]}, c, or version tag] (default: 1): "
+    local choice=""
+
+    while true; do
+        if [ -t 0 ]; then
+            read -r -p "${prompt_text}" choice
+        elif read -r choice 2>/dev/null; then
+            :
+        elif [ -r /dev/tty ]; then
+            read -r -p "${prompt_text}" choice < /dev/tty
+        else
+            choice="1"
+        fi
+        choice="$(echo "${choice}" | xargs)"
+
+        # Default (Enter or 1)
+        if [ -z "${choice}" ] || [ "${choice}" = "1" ]; then
+            TARGET_VERSION="${rel_tags[0]}"
+            break
+        fi
+
+        # Numeric menu choice
+        if [[ "${choice}" =~ ^[0-9]+$ ]] && [ "${choice}" -ge 1 ] && [ "${choice}" -le "${#rel_tags[@]}" ]; then
+            local idx=$((choice - 1))
+            TARGET_VERSION="${rel_tags[$idx]}"
+            break
+        fi
+
+        # Custom version prompt
+        if [[ "${choice}" =~ ^(c|C|custom|other)$ ]]; then
+            local custom_prompt="Enter target release version (e.g. v1.8.0 or 1.8.0): "
+            local custom_input=""
+            if [ -t 0 ]; then
+                read -r -p "${custom_prompt}" custom_input
+            elif read -r custom_input 2>/dev/null; then
+                :
+            elif [ -r /dev/tty ]; then
+                read -r -p "${custom_prompt}" custom_input < /dev/tty
+            fi
+            custom_input="$(echo "${custom_input}" | xargs)"
+            if [ -n "${custom_input}" ]; then
+                if [[ "${custom_input}" =~ ^[0-9]+\.[0-9]+ ]]; then
+                    custom_input="v${custom_input}"
+                fi
+                TARGET_VERSION="${custom_input}"
+                break
+            else
+                log_warn "No version entered. Please select an option from the menu."
+                continue
+            fi
+        fi
+
+        # Direct tag entry (e.g. v1.8.0 or 1.8.0)
+        if [[ "${choice}" =~ ^v?[0-9]+\.[0-9]+ ]]; then
+            if [[ "${choice}" =~ ^[0-9]+\.[0-9]+ ]]; then
+                choice="v${choice}"
+            fi
+            TARGET_VERSION="${choice}"
+            break
+        fi
+
+        log_warn "Invalid selection '${choice}'. Please enter a number between 1 and ${#rel_tags[@]}, 'c' for custom, or a version tag."
+    done
+
+    echo ""
+    log_success "Target Bedrock Server Manager version set to: ${BOLD}${EMERALD}${TARGET_VERSION}${RESET}"
+    echo ""
 }
 
 # Detect existing installation status
@@ -249,7 +493,15 @@ esac
 # Helper: Resolve target/new version to be installed
 resolve_target_version() {
     local target="${TARGET_VERSION:-}"
-    if [ -n "${target}" ] && [ "${target}" != "latest" ]; then
+    if [ -n "${target}" ]; then
+        if [ "${target}" = "latest" ]; then
+            get_latest_release_tag
+            return 0
+        fi
+        if [ "${target}" = "stable" ]; then
+            get_latest_stable_release_tag
+            return 0
+        fi
         if [[ "${target}" =~ ^[0-9]+\.[0-9]+ ]]; then
             target="v${target}"
         fi
@@ -312,21 +564,22 @@ resolve_target_version() {
     echo "${DEFAULT_FALLBACK_TAG}"
 }
 
-TARGET_VERSION="$(resolve_target_version)"
-
 # Handle --check flag
 if [ "${CHECK_ONLY}" = true ]; then
     LATEST_TAG="$(get_latest_release_tag)"
+    LATEST_STABLE="$(get_latest_stable_release_tag)"
+    TARGET_VERSION="$(resolve_target_version)"
     print_ascii_banner "Version Check"
     echo "Installed version       : ${CURRENT_VERSION}"
-    echo "Latest release          : ${LATEST_TAG}"
+    echo "Latest release (overall): ${LATEST_TAG}"
+    echo "Latest stable release   : ${LATEST_STABLE}"
     echo "Target for install      : ${TARGET_VERSION}"
     echo "--------------------------------------------------------------------------------"
     if [ "${CURRENT_VERSION}" != "unknown" ] && [ "${CURRENT_VERSION}" = "${LATEST_TAG}" ]; then
         log_success "Bedrock Server Manager is already at the latest release (${LATEST_TAG})."
     else
         log_info "A different or newer release is available (${LATEST_TAG})."
-        echo "To upgrade, run:"
+        echo "To upgrade or select another version, run:"
         echo "  sudo ./install.sh --upgrade"
     fi
     echo "================================================================================"
@@ -472,6 +725,33 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Interactive Release Version Selection (if not specified via CLI/env)
+# -----------------------------------------------------------------------------
+if [ "${EXPLICIT_VERSION}" = false ] && [ "${ASSUME_YES}" = false ] && [ "${FORCE_ACTION}" = false ]; then
+    prompt_version_selection
+    VERSION_INTERACTIVELY_SELECTED=true
+else
+    TARGET_VERSION="$(resolve_target_version)"
+fi
+
+# Determine operation mode label based on selected target version and current installation
+if [ "${IS_INSTALLED}" = true ]; then
+    MODE="upgrade"
+    if [ "${CURRENT_VERSION}" != "unknown" ]; then
+        if [ "${CURRENT_VERSION}" = "${TARGET_VERSION}" ]; then
+            OP_MODE_LABEL="Reinstall (${CURRENT_VERSION})"
+        else
+            OP_MODE_LABEL="Upgrade/Change (${CURRENT_VERSION} -> ${TARGET_VERSION})"
+        fi
+    else
+        OP_MODE_LABEL="Upgrade"
+    fi
+else
+    MODE="install"
+    OP_MODE_LABEL="Fresh Installation (${TARGET_VERSION})"
+fi
+
+# -----------------------------------------------------------------------------
 # Display Host Summary & Diagnostics
 # -----------------------------------------------------------------------------
 if [ "${MODE}" = "upgrade" ]; then
@@ -491,8 +771,8 @@ echo -e "  Storage Space         : ${HOST_DISK_STR}"
 echo "--------------------------------------------------------------------------------"
 echo -e "  Container Engine      : ${DOCKER_STATUS}"
 echo -e "  Existing BSM Status   : ${BSM_STATUS}"
-echo -e "  Target BSM Version    : ${TARGET_VERSION}"
-echo -e "  Operation Mode        : $([ "${MODE}" = "upgrade" ] && echo "Upgrade" || echo "Fresh Installation")"
+echo -e "  Target BSM Version    : ${BOLD}${EMERALD}${TARGET_VERSION}${RESET}"
+echo -e "  Operation Mode        : ${OP_MODE_LABEL}"
 METHOD_DESC="Interactive Selection"
 if [ -n "${INSTALL_METHOD}" ]; then
     case "${INSTALL_METHOD}" in
@@ -516,11 +796,7 @@ echo "==========================================================================
 # -----------------------------------------------------------------------------
 if [ "${ASSUME_YES}" = false ] && [ "${FORCE_ACTION}" = false ]; then
     echo ""
-    if [ "${MODE}" = "upgrade" ]; then
-        PROMPT_TEXT="Proceed with Upgrade to ${TARGET_VERSION}? [Y/n] "
-    else
-        PROMPT_TEXT="Proceed with Fresh Installation of ${TARGET_VERSION}? [Y/n] "
-    fi
+    PROMPT_TEXT="Proceed with ${OP_MODE_LABEL}? [Y/n] "
 
     CONFIRM_REPLY=""
     if [ -t 0 ]; then
@@ -568,6 +844,8 @@ if [ -z "${INSTALL_METHOD}" ]; then
         METHOD_CHOICE=""
         if [ -t 0 ]; then
             read -r -p "${PROMPT_STR}" METHOD_CHOICE
+        elif read -r METHOD_CHOICE 2>/dev/null; then
+            :
         elif [ -r /dev/tty ]; then
             read -r -p "${PROMPT_STR}" METHOD_CHOICE < /dev/tty
         else
@@ -772,14 +1050,11 @@ if [ "${BINARY_STAGED}" = false ] && [ "${INSTALL_METHOD}" = "download" ]; then
         RELEASE_TAG="v${RELEASE_TAG}"
     fi
 
-    # 1. Check bundled dist archive in local repo
+    # 1. Check bundled dist archive in local repo matching exact requested release
     if [ -n "${ARCH}" ]; then
         DIST_MATCH="${REPO_ROOT}/dist/bedrock-server-manager-${RELEASE_TAG}-linux-${ARCH}.tar.gz"
-        if [ ! -f "${DIST_MATCH}" ]; then
-            DIST_MATCH="$(ls -1 "${REPO_ROOT}/dist/"*"-linux-${ARCH}.tar.gz" 2>/dev/null | sort -V | tail -n1 || true)"
-        fi
         if [ -n "${DIST_MATCH}" ] && [ -f "${DIST_MATCH}" ]; then
-            log_info "Found release archive in dist/ (${DIST_MATCH##*/}). Extracting..."
+            log_info "Found matching release archive in dist/ (${DIST_MATCH##*/}). Extracting..."
             if tar -xzf "${DIST_MATCH}" -C "${STAGING_DIR}" 2>/dev/null; then
                 FOUND_BIN="$(find "${STAGING_DIR}" -type f -name bedrock-server-manager | head -n 1)"
                 if [ -n "${FOUND_BIN}" ] && [ -f "${FOUND_BIN}" ]; then
@@ -932,15 +1207,38 @@ if [ "${BINARY_STAGED}" = false ] && [ "${INSTALL_METHOD}" = "build" ]; then
     fi
 
     BUILD_DIR=""
-    if [ -f "${REPO_ROOT}/cmd/manager/main.go" ]; then
-        BUILD_DIR="${REPO_ROOT}"
-    elif [ -f "./cmd/manager/main.go" ]; then
-        BUILD_DIR="$(pwd)"
+    # If compiling from source and a specific tag was requested, use source tree for that tag
+    if [ -n "${TARGET_VERSION}" ] && [ -n "${REPO_ROOT:-}" ] && [ -d "${REPO_ROOT}/.git" ] && command -v git >/dev/null 2>&1; then
+        if git -C "${REPO_ROOT}" rev-parse "${TARGET_VERSION}" >/dev/null 2>&1; then
+            local_ver="$(grep -E '^\s*var\s+Version\s*=' "${REPO_ROOT}/internal/version/version.go" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+            if [ "v${local_ver#v}" = "${TARGET_VERSION}" ] && [ -f "${REPO_ROOT}/cmd/manager/main.go" ]; then
+                BUILD_DIR="${REPO_ROOT}"
+            else
+                log_info "Extracting clean source tree for selected release tag ${TARGET_VERSION}..."
+                mkdir -p "${STAGING_DIR}/repo"
+                if git -C "${REPO_ROOT}" archive "${TARGET_VERSION}" 2>/dev/null | tar -x -C "${STAGING_DIR}/repo" 2>/dev/null; then
+                    if [ -f "${STAGING_DIR}/repo/cmd/manager/main.go" ]; then
+                        BUILD_DIR="${STAGING_DIR}/repo"
+                    fi
+                fi
+            fi
+        fi
     fi
 
     if [ -z "${BUILD_DIR}" ]; then
-        log_info "Cloning repository source from https://github.com/${REPO}.git to build..."
-        git clone --depth 1 "https://github.com/${REPO}.git" "${STAGING_DIR}/repo"
+        if [ -f "${REPO_ROOT}/cmd/manager/main.go" ]; then
+            BUILD_DIR="${REPO_ROOT}"
+        elif [ -f "./cmd/manager/main.go" ]; then
+            BUILD_DIR="$(pwd)"
+        fi
+    fi
+
+    if [ -z "${BUILD_DIR}" ]; then
+        log_info "Cloning repository source from https://github.com/${REPO}.git for tag ${TARGET_VERSION} to build..."
+        mkdir -p "${STAGING_DIR}/repo"
+        if ! git clone --depth 1 --branch "${TARGET_VERSION}" "https://github.com/${REPO}.git" "${STAGING_DIR}/repo" 2>/dev/null; then
+            git clone --depth 1 "https://github.com/${REPO}.git" "${STAGING_DIR}/repo"
+        fi
         BUILD_DIR="${STAGING_DIR}/repo"
     fi
 
@@ -985,8 +1283,8 @@ fi
 CANDIDATE_VERSION="$(echo "${CANDIDATE_OUT}" | grep -oE 'v?[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9.]+)?' | head -n1 || true)"
 log_success "Candidate binary verified (${CANDIDATE_VERSION:-valid})."
 
-# Check if already on the same version during upgrade
-if [ "${MODE}" = "upgrade" ] && [ "${CURRENT_VERSION}" != "unknown" ] && [ "${CURRENT_VERSION}" = "${CANDIDATE_VERSION}" ] && [ "${FORCE_ACTION}" = false ]; then
+# Check if already on the same version during upgrade (skip re-asking if interactively chosen)
+if [ "${MODE}" = "upgrade" ] && [ "${VERSION_INTERACTIVELY_SELECTED}" = false ] && [ "${EXPLICIT_VERSION}" = false ] && [ "${CURRENT_VERSION}" != "unknown" ] && [ "${CURRENT_VERSION}" = "${CANDIDATE_VERSION}" ] && [ "${FORCE_ACTION}" = false ]; then
     if [ -t 0 ]; then
         echo ""
         log_warn "Bedrock Server Manager is already at version ${CURRENT_VERSION}."
