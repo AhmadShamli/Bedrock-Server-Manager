@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Settings as SettingsIcon, Save, Check, Loader2, AlertCircle, Clock,
   ToggleLeft, ToggleRight, Box, ShieldCheck, Cpu, HardDrive, Download,
-  RefreshCw, ExternalLink, Trash2, Shield, Activity, Bell, Send,
+  RefreshCw, ExternalLink, Trash2, Shield, Activity, Bell, Send, Mail,
   Server, Database, ShieldAlert, Package, Key, Eye, EyeOff, Globe,
   ChevronDown, ChevronUp
 } from 'lucide-react';
@@ -104,6 +104,32 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
   const [discordConfigured, setDiscordConfigured] = useState(false);
   const [testingWebhook, setTestingWebhook] = useState(false);
   const [webhookTestMessage, setWebhookTestMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  // Form State: SMTP Email Delivery
+  const [smtpEnabled, setSmtpEnabled] = useState(false);
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState(587);
+  const [smtpEncryption, setSmtpEncryption] = useState('starttls');
+  const [smtpAuthType, setSmtpAuthType] = useState('plain');
+  const [smtpUsername, setSmtpUsername] = useState('');
+  const [smtpPassword, setSmtpPassword] = useState('');
+  const [smtpPasswordConfigured, setSmtpPasswordConfigured] = useState(false);
+  const [smtpFromEmail, setSmtpFromEmail] = useState('');
+  const [smtpFromName, setSmtpFromName] = useState('Bedrock Server Manager');
+  const [smtpSkipTlsVerify, setSmtpSkipTlsVerify] = useState(false);
+  const [appUrl, setAppUrl] = useState('');
+  const [smtpRequireEmailVerification, setSmtpRequireEmailVerification] = useState(false);
+  const [smtpSendWelcomeEmail, setSmtpSendWelcomeEmail] = useState(false);
+  const [smtpAlertRecipients, setSmtpAlertRecipients] = useState('');
+  const [smtpAlertCrashes, setSmtpAlertCrashes] = useState(false);
+  const [smtpAlertSecurity, setSmtpAlertSecurity] = useState(false);
+  const [smtpAlertResources, setSmtpAlertResources] = useState(false);
+  const [smtpTestRecipient, setSmtpTestRecipient] = useState('');
+  const [testingSMTP, setTestingSMTP] = useState(false);
+  const [smtpTestMessage, setSmtpTestMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [showSmtpPassword, setShowSmtpPassword] = useState(false);
+  const [smtpDetailsOpen, setSmtpDetailsOpen] = useState<boolean | null>(null);
+  const isSmtpOpen = smtpDetailsOpen !== null ? smtpDetailsOpen : smtpEnabled;
 
   // Form State: Backup Retention Defaults
   const [backupRetentionMaxCount, setBackupRetentionMaxCount] = useState(10);
@@ -243,6 +269,61 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
         setDiscordConfigured(true);
       }
 
+      // Populate SMTP Settings
+      if (settingsRes['smtp_enabled'] !== undefined) {
+        setSmtpEnabled(settingsRes['smtp_enabled'] === 'true' || settingsRes['smtp_enabled'] === '1');
+      }
+      if (settingsRes['smtp_host']) {
+        setSmtpHost(settingsRes['smtp_host']);
+      }
+      if (settingsRes['smtp_port']) {
+        const val = parseInt(settingsRes['smtp_port'], 10);
+        if (!isNaN(val) && val > 0) setSmtpPort(val);
+      }
+      if (settingsRes['smtp_encryption']) {
+        setSmtpEncryption(settingsRes['smtp_encryption']);
+      }
+      if (settingsRes['smtp_auth_type']) {
+        setSmtpAuthType(settingsRes['smtp_auth_type']);
+      }
+      if (settingsRes['smtp_username']) {
+        setSmtpUsername(settingsRes['smtp_username']);
+      }
+      if (settingsRes['smtp_password']) {
+        setSmtpPassword(settingsRes['smtp_password']);
+        setSmtpPasswordConfigured(settingsRes['smtp_password'] === '******' || settingsRes['smtp_password'].length > 0);
+      }
+      if (settingsRes['smtp_from_email']) {
+        setSmtpFromEmail(settingsRes['smtp_from_email']);
+      }
+      if (settingsRes['smtp_from_name']) {
+        setSmtpFromName(settingsRes['smtp_from_name']);
+      }
+      if (settingsRes['smtp_skip_tls_verify'] !== undefined) {
+        setSmtpSkipTlsVerify(settingsRes['smtp_skip_tls_verify'] === 'true' || settingsRes['smtp_skip_tls_verify'] === '1');
+      }
+      if (settingsRes['app_url']) {
+        setAppUrl(settingsRes['app_url']);
+      }
+      if (settingsRes['smtp_require_email_verification'] !== undefined) {
+        setSmtpRequireEmailVerification(settingsRes['smtp_require_email_verification'] === 'true' || settingsRes['smtp_require_email_verification'] === '1');
+      }
+      if (settingsRes['smtp_send_welcome_email'] !== undefined) {
+        setSmtpSendWelcomeEmail(settingsRes['smtp_send_welcome_email'] === 'true' || settingsRes['smtp_send_welcome_email'] === '1');
+      }
+      if (settingsRes['smtp_alert_recipients'] !== undefined) {
+        setSmtpAlertRecipients(settingsRes['smtp_alert_recipients']);
+      }
+      if (settingsRes['smtp_alert_crashes'] !== undefined) {
+        setSmtpAlertCrashes(settingsRes['smtp_alert_crashes'] === 'true' || settingsRes['smtp_alert_crashes'] === '1');
+      }
+      if (settingsRes['smtp_alert_security'] !== undefined) {
+        setSmtpAlertSecurity(settingsRes['smtp_alert_security'] === 'true' || settingsRes['smtp_alert_security'] === '1');
+      }
+      if (settingsRes['smtp_alert_resources'] !== undefined) {
+        setSmtpAlertResources(settingsRes['smtp_alert_resources'] === 'true' || settingsRes['smtp_alert_resources'] === '1');
+      }
+
       // Populate Backup Retention
       if (settingsRes['backup_retention_max_count']) {
         const val = parseInt(settingsRes['backup_retention_max_count'], 10);
@@ -326,6 +407,29 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
       }
 
       updates.push(
+        api.updateSetting('smtp_enabled', smtpEnabled ? 'true' : 'false'),
+        api.updateSetting('smtp_host', smtpHost.trim()),
+        api.updateSetting('smtp_port', smtpPort.toString()),
+        api.updateSetting('smtp_encryption', smtpEncryption),
+        api.updateSetting('smtp_auth_type', smtpAuthType),
+        api.updateSetting('smtp_username', smtpUsername.trim()),
+        api.updateSetting('smtp_from_email', smtpFromEmail.trim()),
+        api.updateSetting('smtp_from_name', smtpFromName.trim()),
+        api.updateSetting('smtp_skip_tls_verify', smtpSkipTlsVerify ? 'true' : 'false'),
+        api.updateSetting('app_url', appUrl.trim()),
+        api.updateSetting('smtp_require_email_verification', smtpRequireEmailVerification ? 'true' : 'false'),
+        api.updateSetting('smtp_send_welcome_email', smtpSendWelcomeEmail ? 'true' : 'false'),
+        api.updateSetting('smtp_alert_recipients', smtpAlertRecipients.trim()),
+        api.updateSetting('smtp_alert_crashes', smtpAlertCrashes ? 'true' : 'false'),
+        api.updateSetting('smtp_alert_security', smtpAlertSecurity ? 'true' : 'false'),
+        api.updateSetting('smtp_alert_resources', smtpAlertResources ? 'true' : 'false')
+      );
+
+      if (smtpPassword.trim() && smtpPassword !== '******') {
+        updates.push(api.updateSetting('smtp_password', smtpPassword.trim()));
+      }
+
+      updates.push(
         api.updateDDNSConfig({
           enabled: ddnsEnabled,
           provider: ddnsProvider,
@@ -344,6 +448,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
       );
 
       await Promise.all(updates);
+
+      if (smtpPassword.trim() && smtpPassword !== '******') {
+        setSmtpPasswordConfigured(true);
+        setSmtpPassword('******');
+      }
 
       if (turnstileSecretKey.trim()) {
         setTurnstileConfigured(true);
@@ -532,6 +641,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
       });
     } finally {
       setTestingWebhook(false);
+    }
+  };
+
+  const handleTestSMTP = async () => {
+    setTestingSMTP(true);
+    setSmtpTestMessage(null);
+    try {
+      const res = await api.testSMTP({
+        recipient: smtpTestRecipient.trim() || undefined,
+        host: smtpHost.trim() || undefined,
+        port: smtpPort || undefined,
+        encryption: smtpEncryption || undefined,
+        auth_type: smtpAuthType || undefined,
+        username: smtpUsername.trim() || undefined,
+        password: smtpPassword.trim() && smtpPassword !== '******' ? smtpPassword.trim() : undefined,
+        from_email: smtpFromEmail.trim() || undefined,
+        from_name: smtpFromName.trim() || undefined,
+        skip_tls_verify: smtpSkipTlsVerify,
+      });
+      setSmtpTestMessage({
+        text: res.message || 'Test email dispatched successfully! Please check the recipient inbox.',
+        type: 'success',
+      });
+    } catch (err: any) {
+      setSmtpTestMessage({
+        text: err.message || 'SMTP test execution failed.',
+        type: 'error',
+      });
+    } finally {
+      setTestingSMTP(false);
     }
   };
 
@@ -1865,7 +2004,421 @@ export const SettingsPage: React.FC<SettingsPageProps> = () => {
           </div>
         </div>
 
-        {/* 8. AUTOMATED BACKUP RETENTION POLICIES */}
+        {/* 8. SMTP & OUTBOUND EMAIL DELIVERY */}
+        <div className={`bg-obsidian-900 border border-obsidian-700/80 rounded-xl transition-all ${isSmtpOpen ? 'p-6 space-y-6' : 'p-5'}`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="font-mono text-base font-bold text-slate-100 mb-1 flex items-center gap-2">
+                <Mail className="w-4 h-4 text-emerald-400" />
+                <span>SMTP & Outbound Email Delivery</span>
+              </h3>
+              <p className="text-xs text-slate-400 font-mono">
+                Configure mail transport credentials for password resets, email verification, and administrative alerts.
+              </p>
+            </div>
+            <div className="flex items-center gap-2.5 flex-shrink-0">
+              <span className={`px-2.5 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border ${
+                !smtpEnabled
+                  ? 'bg-slate-800 text-slate-400 border-slate-700'
+                  : smtpHost
+                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+              }`}>
+                {!smtpEnabled ? 'Disabled' : smtpHost ? 'Active' : 'Incomplete'}
+              </span>
+
+              <label className="inline-flex items-center gap-2 cursor-pointer select-none px-3 py-1.5 rounded-lg bg-obsidian-950 border border-obsidian-800 hover:border-obsidian-700 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={smtpEnabled}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setSmtpEnabled(checked);
+                    setSmtpDetailsOpen(checked);
+                  }}
+                  className="w-4 h-4 rounded border-obsidian-700 bg-obsidian-900 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-0 accent-emerald-500 cursor-pointer"
+                />
+                <span className={`text-xs font-mono font-bold ${smtpEnabled ? 'text-emerald-400' : 'text-slate-400'}`}>
+                  {smtpEnabled ? 'Enabled' : 'Enable'}
+                </span>
+              </label>
+
+              <button
+                type="button"
+                onClick={() => setSmtpDetailsOpen(!isSmtpOpen)}
+                className="p-1.5 rounded-lg bg-obsidian-950 border border-obsidian-800 hover:border-obsidian-700 text-slate-400 hover:text-slate-200 transition-colors flex items-center gap-1 text-xs font-mono"
+                title={isSmtpOpen ? 'Collapse card' : 'Configure settings'}
+                aria-label={isSmtpOpen ? 'Collapse SMTP settings' : 'Configure SMTP settings'}
+              >
+                <span className="hidden sm:inline text-[11px]">{isSmtpOpen ? 'Hide' : 'Configure'}</span>
+                {isSmtpOpen ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+              </button>
+            </div>
+          </div>
+
+          {isSmtpOpen && (
+            <div className="space-y-6">
+              {/* Test Status Banner */}
+              {smtpTestMessage && (
+                <div
+                  className={`p-3.5 rounded-xl border font-mono text-xs flex items-center justify-between gap-3 ${
+                    smtpTestMessage.type === 'success'
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-red-500/10 border-red-500/30 text-red-400'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {smtpTestMessage.type === 'success' ? (
+                      <Check className="w-4 h-4 flex-shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    )}
+                    <span>{smtpTestMessage.text}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSmtpTestMessage(null)}
+                    className="opacity-70 hover:opacity-100 font-bold ml-2"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+
+              {/* 1. Connection & Encryption */}
+              <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 font-mono text-xs space-y-4">
+                <div className="text-slate-200 font-bold flex items-center gap-2">
+                  <Globe className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Mail Transport & Server Connection</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1.5">
+                      SMTP Host / Relay
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. smtp.mailgun.org or smtp.gmail.com"
+                      value={smtpHost}
+                      onChange={(e) => setSmtpHost(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Hostname or IP of outbound mail server.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1.5">
+                      Port
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="65535"
+                      value={smtpPort}
+                      onChange={(e) => setSmtpPort(parseInt(e.target.value, 10) || 587)}
+                      className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Common: 587 (STARTTLS), 465 (SSL/TLS), 25 (Plain).</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1.5">
+                      Transport Encryption
+                    </label>
+                    <select
+                      value={smtpEncryption}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSmtpEncryption(val);
+                        if (val === 'tls' && smtpPort === 587) setSmtpPort(465);
+                        if (val === 'starttls' && smtpPort === 465) setSmtpPort(587);
+                        if (val === 'none' && (smtpPort === 587 || smtpPort === 465)) setSmtpPort(25);
+                      }}
+                      className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="starttls">STARTTLS (Standard / Port 587)</option>
+                      <option value="tls">Direct SSL / TLS (SMTPS / Port 465)</option>
+                      <option value="none">None (Plaintext / Port 25)</option>
+                    </select>
+                    <p className="text-[11px] text-slate-500 mt-1">STARTTLS recommended for modern relays.</p>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-obsidian-850">
+                  <label className="inline-flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={smtpSkipTlsVerify}
+                      onChange={(e) => setSmtpSkipTlsVerify(e.target.checked)}
+                      className="w-4 h-4 rounded border-obsidian-700 bg-obsidian-900 text-amber-500 focus:ring-amber-500/20 focus:ring-offset-0 accent-amber-500 cursor-pointer"
+                    />
+                    <span className="text-xs text-slate-300">
+                      Skip TLS Certificate Verification (Insecure / Self-Signed)
+                    </span>
+                  </label>
+                  {smtpSkipTlsVerify && (
+                    <p className="text-[11px] text-amber-400 mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      Certificate validation disabled. Use only for internal or self-hosted test relays.
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Authentication & Credentials */}
+              <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 font-mono text-xs space-y-4">
+                <div className="text-slate-200 font-bold flex items-center gap-2">
+                  <Key className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Authentication & Sender Identity</span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1.5">
+                      Authentication Method
+                    </label>
+                    <select
+                      value={smtpAuthType}
+                      onChange={(e) => setSmtpAuthType(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="plain">Standard Credentials (PLAIN / LOGIN)</option>
+                      <option value="none">Anonymous (No Authentication / Local Relay)</option>
+                    </select>
+                    <p className="text-[11px] text-slate-500 mt-1">Select Anonymous for intranet Postfix / Exim relays.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1.5">
+                      Public Application Base URL (app_url)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="https://bsm.yourdomain.com (auto-inferred if blank)"
+                      value={appUrl}
+                      onChange={(e) => setAppUrl(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Used to craft password reset and verification links.</p>
+                  </div>
+                </div>
+
+                {smtpAuthType !== 'none' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-obsidian-850">
+                    <div>
+                      <label className="block text-slate-300 font-bold mb-1.5">
+                        SMTP Username / API Key
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. postmaster@yourdomain.com or apikey"
+                        value={smtpUsername}
+                        onChange={(e) => setSmtpUsername(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-bold mb-1.5 flex items-center justify-between">
+                        <span>SMTP Password / Secret</span>
+                        {smtpPasswordConfigured && (
+                          <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">
+                            Configured
+                          </span>
+                        )}
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showSmtpPassword ? 'text' : 'password'}
+                          placeholder={smtpPasswordConfigured ? '•••••••••••••••• (Leave blank to keep existing password)' : 'Enter SMTP password or API token'}
+                          value={smtpPassword}
+                          onChange={(e) => setSmtpPassword(e.target.value)}
+                          className="w-full px-3 py-1.5 pr-10 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500 font-mono text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowSmtpPassword(!showSmtpPassword)}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-1"
+                        >
+                          {showSmtpPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-obsidian-850">
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1.5">
+                      From Email Address
+                    </label>
+                    <input
+                      type="email"
+                      placeholder="e.g. noreply@yourdomain.com"
+                      value={smtpFromEmail}
+                      onChange={(e) => setSmtpFromEmail(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Sender address for outbound messages.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-bold mb-1.5">
+                      From Display Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Bedrock Server Manager"
+                      value={smtpFromName}
+                      onChange={(e) => setSmtpFromName(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">Display name shown in user email clients.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Account Verification & Welcome Workflow Policies */}
+              <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 font-mono text-xs space-y-4">
+                <div className="text-slate-200 font-bold flex items-center gap-2">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Account Workflows & User Lifecycle</span>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="flex items-start gap-3 p-3 rounded-lg bg-obsidian-900/60 border border-obsidian-800 cursor-pointer hover:border-obsidian-700 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={smtpRequireEmailVerification}
+                      onChange={(e) => setSmtpRequireEmailVerification(e.target.checked)}
+                      className="w-4 h-4 mt-0.5 rounded border-obsidian-700 bg-obsidian-900 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-0 accent-emerald-500 cursor-pointer"
+                    />
+                    <div className="flex-1">
+                      <span className="block font-bold text-slate-200">Require Email Verification on Registration</span>
+                      <span className="block text-[11px] text-slate-400 mt-0.5">
+                        New standard users must click a secure verification link sent to their inbox before logging in. Administrator accounts bypass this restriction.
+                      </span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-3 p-3 rounded-lg bg-obsidian-900/60 border border-obsidian-800 cursor-pointer hover:border-obsidian-700 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={smtpSendWelcomeEmail}
+                      onChange={(e) => setSmtpSendWelcomeEmail(e.target.checked)}
+                      className="w-4 h-4 mt-0.5 rounded border-obsidian-700 bg-obsidian-900 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-0 accent-emerald-500 cursor-pointer"
+                    />
+                    <div className="flex-1">
+                      <span className="block font-bold text-slate-200">Send Welcome Onboarding Email</span>
+                      <span className="block text-[11px] text-slate-400 mt-0.5">
+                        Sends a welcome email with quick-start dashboard tips when a new user joins or verifies their account.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* 4. Incident & Event Alert Routing */}
+              <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 font-mono text-xs space-y-4">
+                <div className="text-slate-200 font-bold flex items-center gap-2">
+                  <Bell className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>System Incident Email Routing</span>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-bold mb-1.5">
+                    Alert Recipient Email Addresses
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. alerts@yourdomain.com, oncall@example.com (comma-separated; defaults to all admins)"
+                    value={smtpAlertRecipients}
+                    onChange={(e) => setSmtpAlertRecipients(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Recipients for operational alerts. Leave empty to automatically notify all registered Admin users.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-obsidian-850">
+                  <label className="flex items-start gap-2.5 p-3 rounded-lg bg-obsidian-900/60 border border-obsidian-800 cursor-pointer hover:border-obsidian-700 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={smtpAlertCrashes}
+                      onChange={(e) => setSmtpAlertCrashes(e.target.checked)}
+                      className="w-4 h-4 mt-0.5 rounded border-obsidian-700 bg-obsidian-900 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-0 accent-emerald-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="block font-bold text-slate-200">Server Crashes</span>
+                      <span className="block text-[10px] text-slate-400 mt-0.5">Instance crashes or non-zero exits</span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 p-3 rounded-lg bg-obsidian-900/60 border border-obsidian-800 cursor-pointer hover:border-obsidian-700 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={smtpAlertSecurity}
+                      onChange={(e) => setSmtpAlertSecurity(e.target.checked)}
+                      className="w-4 h-4 mt-0.5 rounded border-obsidian-700 bg-obsidian-900 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-0 accent-emerald-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="block font-bold text-slate-200">Security & Lockouts</span>
+                      <span className="block text-[10px] text-slate-400 mt-0.5">Rate limiter & circuit breaker trips</span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 p-3 rounded-lg bg-obsidian-900/60 border border-obsidian-800 cursor-pointer hover:border-obsidian-700 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={smtpAlertResources}
+                      onChange={(e) => setSmtpAlertResources(e.target.checked)}
+                      className="w-4 h-4 mt-0.5 rounded border-obsidian-700 bg-obsidian-900 text-emerald-500 focus:ring-emerald-500/20 focus:ring-offset-0 accent-emerald-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="block font-bold text-slate-200">Resource Warnings</span>
+                      <span className="block text-[10px] text-slate-400 mt-0.5">Host CPU or RAM exceeds threshold</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* 5. Synchronous Test Email Dispatcher */}
+              <div className="p-4 rounded-xl bg-obsidian-950 border border-obsidian-800 font-mono text-xs space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-200 flex items-center gap-1.5">
+                    <Send className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Send Test Email</span>
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Executes synchronously with live SMTP server response
+                  </span>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  <input
+                    type="email"
+                    placeholder="recipient@example.com (defaults to logged-in user or From email)"
+                    value={smtpTestRecipient}
+                    onChange={(e) => setSmtpTestRecipient(e.target.value)}
+                    className="flex-1 px-3 py-1.5 bg-obsidian-900 border border-obsidian-700 rounded-lg text-slate-200 focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestSMTP}
+                    disabled={testingSMTP || (!smtpHost && !smtpEnabled)}
+                    className="px-4 py-1.5 rounded-lg bg-obsidian-850 hover:bg-obsidian-750 border border-obsidian-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition-colors disabled:opacity-40 flex-shrink-0"
+                  >
+                    {testingSMTP ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5 text-emerald-400" />}
+                    <span>{testingSMTP ? 'Dispatching...' : 'Send Test Email'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 9. AUTOMATED BACKUP RETENTION POLICIES */}
         <div className="bg-obsidian-900 border border-obsidian-700/80 rounded-xl p-6 space-y-6">
           <div>
             <h3 className="font-mono text-base font-bold text-slate-100 mb-1 flex items-center gap-2">

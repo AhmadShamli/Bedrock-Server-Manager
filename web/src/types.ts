@@ -2,6 +2,7 @@ export interface User {
   id: number;
   username: string;
   email?: string;
+  email_verified?: boolean;
   role: 'admin' | 'operator' | 'user';
   plan_id?: number;
   plan_name?: string;

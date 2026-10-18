@@ -17,6 +17,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/mail"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/turnstile"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/version"
@@ -32,11 +33,16 @@ type SystemHandler struct {
 	ipResolver  *ipresolver.Resolver
 	rateLimiter       *auth.RateLimiter
 	turnstileVerifier *turnstile.Verifier
+	mailer            *mail.Mailer
 	startTime         time.Time
 }
 
 func (h *SystemHandler) SetTurnstileVerifier(tv *turnstile.Verifier) {
 	h.turnstileVerifier = tv
+}
+
+func (h *SystemHandler) SetMailer(m *mail.Mailer) {
+	h.mailer = m
 }
 
 func NewSystemHandler(db *database.ManagerDB, dataDir string, bdsCache *bds.CacheManager, bdsResolver *bds.Resolver, fw firewall.FirewallDriver, ipRes *ipresolver.Resolver, rl *auth.RateLimiter) *SystemHandler {
@@ -143,7 +149,7 @@ func (h *SystemHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	// Redact sensitive settings
 	safeSettings := make(map[string]string)
 	for k, v := range settings {
-		if k == "jwt_secret" || k == "pepper" || k == "curseforge_api_key" || k == turnstile.SettingTurnstileSecretKey || k == "ddns_auth_token" || k == "ddns_password" {
+		if k == "jwt_secret" || k == "pepper" || k == "curseforge_api_key" || k == turnstile.SettingTurnstileSecretKey || k == "ddns_auth_token" || k == "ddns_password" || k == mail.SettingSMTPPassword {
 			if v != "" {
 				safeSettings[k] = "******"
 			} else {
@@ -176,7 +182,7 @@ func (h *SystemHandler) UpdateSetting(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ignore placeholder masked values
-	if (payload.Key == "curseforge_api_key" || payload.Key == turnstile.SettingTurnstileSecretKey || payload.Key == "ddns_auth_token" || payload.Key == "ddns_password") && payload.Value == "******" {
+	if (payload.Key == "curseforge_api_key" || payload.Key == turnstile.SettingTurnstileSecretKey || payload.Key == "ddns_auth_token" || payload.Key == "ddns_password" || payload.Key == mail.SettingSMTPPassword) && payload.Value == "******" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ignored"})
 		return
@@ -418,6 +424,111 @@ func (h *SystemHandler) TestDiscordWebhook(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "success", "message": "Test notification sent successfully!"})
+}
+
+// TestSMTP sends a synchronous test notification to verify SMTP credentials and connectivity.
+func (h *SystemHandler) TestSMTP(w http.ResponseWriter, r *http.Request) {
+	if h.mailer == nil {
+		http.Error(w, `{"error": "Mailer service is not initialized"}`, http.StatusInternalServerError)
+		return
+	}
+
+	var payload struct {
+		Recipient     string `json:"recipient"`
+		Host          string `json:"host"`
+		Port          int    `json:"port"`
+		Encryption    string `json:"encryption"`
+		AuthType      string `json:"auth_type"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		FromEmail     string `json:"from_email"`
+		FromName      string `json:"from_name"`
+		SkipTLSVerify bool   `json:"skip_tls_verify"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&payload)
+
+	recipient := strings.TrimSpace(payload.Recipient)
+	if recipient == "" {
+		claims := GetUserClaims(r)
+		if claims != nil {
+			if u, err := h.db.GetUserByID(r.Context(), claims.UserID); err == nil && u.Email != "" {
+				recipient = u.Email
+			}
+		}
+	}
+	if recipient == "" {
+		adminEmails, _ := h.db.GetAdminEmails(r.Context())
+		if len(adminEmails) > 0 {
+			recipient = adminEmails[0]
+		}
+	}
+	if recipient == "" && payload.FromEmail != "" {
+		recipient = payload.FromEmail
+	}
+	if recipient == "" {
+		storedFrom, _ := h.db.GetSetting(r.Context(), mail.SettingSMTPFromEmail)
+		recipient = storedFrom
+	}
+
+	if recipient == "" {
+		http.Error(w, `{"error": "Please provide a recipient email address to receive the test notification"}`, http.StatusBadRequest)
+		return
+	}
+
+	var overrideCfg *mail.Config
+	if payload.Host != "" {
+		pwd := payload.Password
+		if pwd == "******" || pwd == "" {
+			storedPwd, _ := h.db.GetSetting(r.Context(), mail.SettingSMTPPassword)
+			pwd = storedPwd
+		}
+		port := payload.Port
+		if port <= 0 {
+			port = 587
+		}
+		enc := payload.Encryption
+		if enc == "" {
+			enc = "starttls"
+		}
+		authT := payload.AuthType
+		if authT == "" {
+			authT = "plain"
+		}
+		fromN := payload.FromName
+		if fromN == "" {
+			fromN = "Bedrock Server Manager"
+		}
+		overrideCfg = &mail.Config{
+			Enabled:       true,
+			Host:          strings.TrimSpace(payload.Host),
+			Port:          port,
+			Encryption:    enc,
+			AuthType:      authT,
+			Username:      strings.TrimSpace(payload.Username),
+			Password:      pwd,
+			FromEmail:     strings.TrimSpace(payload.FromEmail),
+			FromName:      fromN,
+			SkipTLSVerify: payload.SkipTLSVerify,
+		}
+	}
+
+	serverTime := time.Now().UTC().Format(time.RFC3339)
+	htmlBody, textBody := mail.TestEmailTemplate(serverTime)
+
+	if err := h.mailer.SendDirect(r.Context(), []string{recipient}, "BSM SMTP Test Notification", htmlBody, textBody, overrideCfg); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": fmt.Sprintf("Failed to send test email: %s", err.Error()),
+		})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":  "success",
+		"message": fmt.Sprintf("Test email sent successfully to %s!", recipient),
+	})
 }
 
 // GetTurnstilePublicConfig returns public Cloudflare Turnstile configuration (enabled state, site key, and per-flow flags).

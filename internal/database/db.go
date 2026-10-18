@@ -101,11 +101,25 @@ func (db *ManagerDB) Migrate(ctx context.Context) error {
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN previous_bds_version TEXT NOT NULL DEFAULT ''")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE servers ADD COLUMN owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_id INTEGER REFERENCES plans(id) ON DELETE SET NULL")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_status TEXT NOT NULL DEFAULT 'active'")
 	_, _ = db.ExecContext(ctx, "ALTER TABLE users ADD COLUMN plan_expires_at TEXT NULL")
 	_, _ = db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_users_plan ON users(plan_id)")
 	_, _ = db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_servers_owner ON servers(owner_user_id)")
+	_, _ = db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS auth_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			token_type TEXT NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			consumed_at TEXT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash ON auth_tokens(token_hash);
+		CREATE INDEX IF NOT EXISTS idx_auth_tokens_user_type ON auth_tokens(user_id, token_type);
+	`)
 
 	// Ensure at least one default plan exists
 	var planCount int
@@ -183,10 +197,10 @@ func (db *ManagerDB) CountUsers(ctx context.Context) (int, error) {
 }
 
 func (db *ManagerDB) CreateUser(ctx context.Context, username, passwordHash, role string) (*models.User, error) {
-	return db.CreateUserExtended(ctx, username, "", passwordHash, role, nil, "active", nil)
+	return db.CreateUserExtended(ctx, username, "", passwordHash, role, nil, "active", nil, true)
 }
 
-func (db *ManagerDB) CreateUserExtended(ctx context.Context, username, email, passwordHash, role string, planID *int64, planStatus string, planExpiresAt *time.Time) (*models.User, error) {
+func (db *ManagerDB) CreateUserExtended(ctx context.Context, username, email, passwordHash, role string, planID *int64, planStatus string, planExpiresAt *time.Time, emailVerified bool) (*models.User, error) {
 	now := time.Now().UTC()
 	nowStr := FormatTime(now)
 
@@ -208,9 +222,14 @@ func (db *ManagerDB) CreateUserExtended(ctx context.Context, username, email, pa
 		expVal = nil
 	}
 
+	emailVerifiedInt := 0
+	if emailVerified {
+		emailVerifiedInt = 1
+	}
+
 	res, err := db.ExecContext(ctx,
-		"INSERT INTO users (username, email, password_hash, role, plan_id, plan_status, plan_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-		username, email, passwordHash, role, planID, planStatus, expVal, nowStr,
+		"INSERT INTO users (username, email, email_verified, password_hash, role, plan_id, plan_status, plan_expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		username, email, emailVerifiedInt, passwordHash, role, planID, planStatus, expVal, nowStr,
 	)
 	if err != nil {
 		return nil, err
@@ -223,6 +242,7 @@ func (db *ManagerDB) CreateUserExtended(ctx context.Context, username, email, pa
 		ID:            id,
 		Username:      username,
 		Email:         email,
+		EmailVerified: emailVerified,
 		PasswordHash:  passwordHash,
 		Role:          role,
 		PlanID:        planID,
@@ -243,17 +263,19 @@ func (db *ManagerDB) GetUserByUsername(ctx context.Context, username string) (*m
 	var planID sql.NullInt64
 	var planName, planStatus, planExpStr sql.NullString
 	var createdAtStr string
+	var emailVerifiedInt int
 
 	err := db.QueryRowContext(ctx, `
-		SELECT u.id, u.username, u.email, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		SELECT u.id, u.username, u.email, u.email_verified, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
 		FROM users u
 		LEFT JOIN plans p ON u.plan_id = p.id
 		WHERE u.username = ?`,
 		username,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr)
+	).Scan(&u.ID, &u.Username, &u.Email, &emailVerifiedInt, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr)
 	if err != nil {
 		return nil, err
 	}
+	u.EmailVerified = (emailVerifiedInt != 0)
 	if planID.Valid {
 		u.PlanID = &planID.Int64
 	}
@@ -277,17 +299,100 @@ func (db *ManagerDB) GetUserByID(ctx context.Context, id int64) (*models.User, e
 	var planID sql.NullInt64
 	var planName, planStatus, planExpStr sql.NullString
 	var createdAtStr string
+	var emailVerifiedInt int
 
 	err := db.QueryRowContext(ctx, `
-		SELECT u.id, u.username, u.email, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		SELECT u.id, u.username, u.email, u.email_verified, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
 		FROM users u
 		LEFT JOIN plans p ON u.plan_id = p.id
 		WHERE u.id = ?`,
 		id,
-	).Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr)
+	).Scan(&u.ID, &u.Username, &u.Email, &emailVerifiedInt, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr)
 	if err != nil {
 		return nil, err
 	}
+	u.EmailVerified = (emailVerifiedInt != 0)
+	if planID.Valid {
+		u.PlanID = &planID.Int64
+	}
+	if planName.Valid {
+		u.PlanName = planName.String
+	}
+	if planStatus.Valid && planStatus.String != "" {
+		u.PlanStatus = planStatus.String
+	} else {
+		u.PlanStatus = "active"
+	}
+	u.PlanExpiresAt = ParseNullTime(planExpStr)
+	if t, err := ParseTime(createdAtStr); err == nil {
+		u.CreatedAt = t
+	}
+	return &u, nil
+}
+
+func (db *ManagerDB) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	if email == "" {
+		return nil, sql.ErrNoRows
+	}
+	var u models.User
+	var planID sql.NullInt64
+	var planName, planStatus, planExpStr sql.NullString
+	var createdAtStr string
+	var emailVerifiedInt int
+
+	err := db.QueryRowContext(ctx, `
+		SELECT u.id, u.username, u.email, u.email_verified, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		FROM users u
+		LEFT JOIN plans p ON u.plan_id = p.id
+		WHERE LOWER(u.email) = ?`,
+		email,
+	).Scan(&u.ID, &u.Username, &u.Email, &emailVerifiedInt, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr)
+	if err != nil {
+		return nil, err
+	}
+	u.EmailVerified = (emailVerifiedInt != 0)
+	if planID.Valid {
+		u.PlanID = &planID.Int64
+	}
+	if planName.Valid {
+		u.PlanName = planName.String
+	}
+	if planStatus.Valid && planStatus.String != "" {
+		u.PlanStatus = planStatus.String
+	} else {
+		u.PlanStatus = "active"
+	}
+	u.PlanExpiresAt = ParseNullTime(planExpStr)
+	if t, err := ParseTime(createdAtStr); err == nil {
+		u.CreatedAt = t
+	}
+	return &u, nil
+}
+
+func (db *ManagerDB) GetUserByUsernameOrEmail(ctx context.Context, identifier string) (*models.User, error) {
+	trimmed := strings.TrimSpace(identifier)
+	if trimmed == "" {
+		return nil, sql.ErrNoRows
+	}
+	lower := strings.ToLower(trimmed)
+	var u models.User
+	var planID sql.NullInt64
+	var planName, planStatus, planExpStr sql.NullString
+	var createdAtStr string
+	var emailVerifiedInt int
+
+	err := db.QueryRowContext(ctx, `
+		SELECT u.id, u.username, u.email, u.email_verified, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		FROM users u
+		LEFT JOIN plans p ON u.plan_id = p.id
+		WHERE u.username = ? OR (u.email != '' AND LOWER(u.email) = ?)`,
+		trimmed, lower,
+	).Scan(&u.ID, &u.Username, &u.Email, &emailVerifiedInt, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr)
+	if err != nil {
+		return nil, err
+	}
+	u.EmailVerified = (emailVerifiedInt != 0)
 	if planID.Valid {
 		u.PlanID = &planID.Int64
 	}
@@ -308,7 +413,7 @@ func (db *ManagerDB) GetUserByID(ctx context.Context, id int64) (*models.User, e
 
 func (db *ManagerDB) ListUsers(ctx context.Context) ([]models.User, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT u.id, u.username, u.email, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		SELECT u.id, u.username, u.email, u.email_verified, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
 		FROM users u
 		LEFT JOIN plans p ON u.plan_id = p.id
 		ORDER BY u.id ASC`)
@@ -323,10 +428,12 @@ func (db *ManagerDB) ListUsers(ctx context.Context) ([]models.User, error) {
 		var planID sql.NullInt64
 		var planName, planStatus, planExpStr sql.NullString
 		var createdAtStr string
+		var emailVerifiedInt int
 
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &emailVerifiedInt, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr); err != nil {
 			return nil, err
 		}
+		u.EmailVerified = (emailVerifiedInt != 0)
 		if planID.Valid {
 			u.PlanID = &planID.Int64
 		}
@@ -355,11 +462,16 @@ func (db *ManagerDB) UpdateUser(ctx context.Context, u *models.User) error {
 		expVal = nil
 	}
 
+	emailVerifiedInt := 0
+	if u.EmailVerified {
+		emailVerifiedInt = 1
+	}
+
 	_, err := db.ExecContext(ctx, `
 		UPDATE users SET
-			email = ?, role = ?, plan_id = ?, plan_status = ?, plan_expires_at = ?
+			email = ?, email_verified = ?, role = ?, plan_id = ?, plan_status = ?, plan_expires_at = ?
 		WHERE id = ?`,
-		u.Email, u.Role, u.PlanID, u.PlanStatus, expVal, u.ID,
+		u.Email, emailVerifiedInt, u.Role, u.PlanID, u.PlanStatus, expVal, u.ID,
 	)
 	return err
 }
@@ -390,6 +502,96 @@ func (db *ManagerDB) UpdateUserPassword(ctx context.Context, id int64, newHash s
 
 func (db *ManagerDB) DeleteUser(ctx context.Context, id int64) error {
 	_, err := db.ExecContext(ctx, "DELETE FROM users WHERE id = ?", id)
+	return err
+}
+
+func (db *ManagerDB) SetUserEmailVerified(ctx context.Context, userID int64, verified bool) error {
+	val := 0
+	if verified {
+		val = 1
+	}
+	_, err := db.ExecContext(ctx, "UPDATE users SET email_verified = ? WHERE id = ?", val, userID)
+	return err
+}
+
+func (db *ManagerDB) GetAdminEmails(ctx context.Context) ([]string, error) {
+	rows, err := db.QueryContext(ctx, "SELECT email FROM users WHERE role = 'admin' AND email != ''")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var emails []string
+	for rows.Next() {
+		var em string
+		if err := rows.Scan(&em); err == nil && em != "" {
+			emails = append(emails, em)
+		}
+	}
+	return emails, rows.Err()
+}
+
+func (db *ManagerDB) CreateAuthToken(ctx context.Context, userID int64, tokenType, tokenHash string, expiresAt time.Time) error {
+	nowStr := FormatTime(time.Now().UTC())
+	expStr := FormatTime(expiresAt.UTC())
+	_, err := db.ExecContext(ctx,
+		"INSERT INTO auth_tokens (user_id, token_type, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+		userID, tokenType, tokenHash, expStr, nowStr,
+	)
+	return err
+}
+
+func (db *ManagerDB) GetAuthTokenByHash(ctx context.Context, tokenHash, tokenType string) (*models.AuthToken, error) {
+	var tok models.AuthToken
+	var expStr, createdStr string
+	var consumedStr sql.NullString
+
+	err := db.QueryRowContext(ctx, `
+		SELECT id, user_id, token_type, token_hash, expires_at, created_at, consumed_at
+		FROM auth_tokens
+		WHERE token_hash = ? AND token_type = ?`,
+		tokenHash, tokenType,
+	).Scan(&tok.ID, &tok.UserID, &tok.TokenType, &tok.TokenHash, &expStr, &createdStr, &consumedStr)
+	if err != nil {
+		return nil, err
+	}
+
+	if t, err := ParseTime(expStr); err == nil {
+		tok.ExpiresAt = t
+	}
+	if t, err := ParseTime(createdStr); err == nil {
+		tok.CreatedAt = t
+	}
+	tok.ConsumedAt = ParseNullTime(consumedStr)
+
+	return &tok, nil
+}
+
+func (db *ManagerDB) ConsumeAuthToken(ctx context.Context, tokenHash string) error {
+	nowStr := FormatTime(time.Now().UTC())
+	res, err := db.ExecContext(ctx,
+		"UPDATE auth_tokens SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL",
+		nowStr, tokenHash,
+	)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("token already consumed or not found")
+	}
+	return nil
+}
+
+func (db *ManagerDB) InvalidateUserTokens(ctx context.Context, userID int64, tokenType string) error {
+	nowStr := FormatTime(time.Now().UTC())
+	_, err := db.ExecContext(ctx,
+		"UPDATE auth_tokens SET consumed_at = ? WHERE user_id = ? AND token_type = ? AND consumed_at IS NULL",
+		nowStr, userID, tokenType,
+	)
 	return err
 }
 
@@ -981,7 +1183,7 @@ func (db *ManagerDB) CountUsersByPlanID(ctx context.Context, planID int64) (int,
 
 func (db *ManagerDB) ListCollaboratorUsers(ctx context.Context, serverID string) ([]models.User, error) {
 	rows, err := db.QueryContext(ctx, `
-		SELECT u.id, u.username, u.email, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
+		SELECT u.id, u.username, u.email, u.email_verified, u.password_hash, u.role, u.plan_id, COALESCE(p.name, ''), u.plan_status, u.plan_expires_at, u.created_at
 		FROM users u
 		JOIN user_server_access usa ON u.id = usa.user_id
 		LEFT JOIN plans p ON u.plan_id = p.id
@@ -998,10 +1200,12 @@ func (db *ManagerDB) ListCollaboratorUsers(ctx context.Context, serverID string)
 		var planID sql.NullInt64
 		var planName, planStatus, planExpStr sql.NullString
 		var createdAtStr string
+		var emailVerifiedInt int
 
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &emailVerifiedInt, &u.PasswordHash, &u.Role, &planID, &planName, &planStatus, &planExpStr, &createdAtStr); err != nil {
 			return nil, err
 		}
+		u.EmailVerified = (emailVerifiedInt != 0)
 		if planID.Valid {
 			u.PlanID = &planID.Int64
 		}

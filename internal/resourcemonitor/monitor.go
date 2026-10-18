@@ -54,6 +54,11 @@ type WebhookSender interface {
 	NotifyResourceAlert(ctx context.Context, webhookURL, serverName, serverID string, ramUsed, ramLimit int64, ramPct float64, cpuUsed, cpuLimitCores, cpuPct float64) error
 }
 
+// MailAlertSender dispatches notification emails for resource alerts.
+type MailAlertSender interface {
+	SendSystemAlert(ctx context.Context, category, alertType, alertTitle, alertDescription string, fields map[string]string, dashboardURL string)
+}
+
 // Config configures the resource monitoring thresholds and intervals.
 type Config struct {
 	ThresholdPercent float64       // Usage percentage (e.g. 85.0 = 85%) considered nearly full
@@ -83,12 +88,17 @@ type ResourceMonitor struct {
 	chatBroadcaster ChatBroadcaster
 	db              DBStore
 	webhook         WebhookSender
+	mailer          MailAlertSender
 	cfg             Config
 
 	mu           sync.RWMutex
 	lastAlert    map[string]time.Time
 	latestStatus map[string]*ResourceStatus
 	idleSince    map[string]time.Time
+}
+
+func (rm *ResourceMonitor) SetMailer(m MailAlertSender) {
+	rm.mailer = m
 }
 
 // NewResourceMonitor creates a new ResourceMonitor instance.
@@ -374,7 +384,27 @@ func (rm *ResourceMonitor) broadcastAlert(ctx context.Context, server *models.Se
 		}
 	}
 
-	// 4. Record audit log
+	// 4. Dispatch outbound email alert if configured
+	if rm.mailer != nil && rm.db != nil {
+		appURL, _ := rm.db.GetSetting(ctx, "app_url")
+		dashURL := ""
+		if appURL != "" {
+			dashURL = strings.TrimRight(appURL, "/") + "/servers/" + server.ID
+		}
+		rm.mailer.SendSystemAlert(ctx, "resource", "RESOURCE_ALERT",
+			fmt.Sprintf("Resource Warning: %s", server.Name),
+			fmt.Sprintf("Server '%s' (%s) allocated resources are nearly full!", server.Name, server.ID),
+			map[string]string{
+				"Server Name": server.Name,
+				"Server ID":   server.ID,
+				"RAM Usage":   fmt.Sprintf("%.1f%%", status.RAMPercent),
+				"CPU Usage":   fmt.Sprintf("%.1f%%", status.CPUPercent),
+			},
+			dashURL,
+		)
+	}
+
+	// 5. Record audit log
 	if rm.db != nil {
 		detailsMap := map[string]interface{}{
 			"server_id":           server.ID,

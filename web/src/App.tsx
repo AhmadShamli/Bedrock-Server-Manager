@@ -16,6 +16,9 @@ import { UsersPage } from './pages/Users';
 import { PortGateManager } from './pages/PortGateManager';
 import { Plans } from './pages/Plans';
 import { Register } from './pages/Register';
+import { ForgotPassword } from './pages/ForgotPassword';
+import { ResetPassword } from './pages/ResetPassword';
+import { VerifyEmail } from './pages/VerifyEmail';
 import { SettingsPage } from './pages/Settings';
 import { Footer } from './components/Footer';
 import { Loader2 } from 'lucide-react';
@@ -104,6 +107,9 @@ export const App: React.FC = () => {
               user ? <Navigate to="/" replace /> : <Register onRegisterSuccess={(u) => setUser(u)} />
             }
           />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
 
           {/* Protected Routes */}
           <Route

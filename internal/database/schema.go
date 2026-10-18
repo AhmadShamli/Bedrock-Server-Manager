@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE NOT NULL,
     email TEXT NOT NULL DEFAULT '',
+    email_verified INTEGER NOT NULL DEFAULT 1,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'admin',
     plan_id INTEGER REFERENCES plans(id) ON DELETE SET NULL,
@@ -265,4 +266,16 @@ CREATE TABLE IF NOT EXISTS metrics_1h (
     sample_count INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_metrics_1h_server_ts ON metrics_1h(server_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_type TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    consumed_at TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_auth_tokens_hash ON auth_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_auth_tokens_user_type ON auth_tokens(user_id, token_type);
 `

@@ -85,13 +85,43 @@ class APIClient {
     }
   }
 
-  async register(payload: { username: string; password: string; email?: string; turnstile_token?: string }): Promise<{ token: string; user: User }> {
-    const res = await this.request<{ token: string; user: User }>('/api/auth/register', {
+  async register(payload: { username: string; password: string; email?: string; turnstile_token?: string }): Promise<{ token?: string; user: User; requires_verification?: boolean; message?: string }> {
+    const res = await this.request<{ token?: string; user: User; requires_verification?: boolean; message?: string }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    this.setToken(res.token);
+    if (res.token) {
+      this.setToken(res.token);
+    }
     return res;
+  }
+
+  async forgotPassword(payload: { email_or_username: string; turnstile_token?: string }): Promise<{ success: boolean; message: string }> {
+    return this.request('/api/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async resetPassword(payload: { token: string; password: string }): Promise<{ success: boolean; message: string }> {
+    return this.request('/api/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async verifyEmail(token: string): Promise<{ success: boolean; message: string }> {
+    return this.request('/api/auth/verify-email', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
+  }
+
+  async resendVerification(payload: { email_or_username: string; turnstile_token?: string }): Promise<{ success: boolean; message: string }> {
+    return this.request('/api/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 
   async getMe(): Promise<{ user: User; allowed_servers: string[] }> {
@@ -825,6 +855,24 @@ class APIClient {
     return this.request('/api/system/webhook/test', {
       method: 'POST',
       body: JSON.stringify({ webhook_url: webhookUrl }),
+    });
+  }
+
+  async testSMTP(payload: {
+    recipient?: string;
+    host?: string;
+    port?: number;
+    encryption?: string;
+    auth_type?: string;
+    username?: string;
+    password?: string;
+    from_email?: string;
+    from_name?: string;
+    skip_tls_verify?: boolean;
+  }): Promise<{ status: string; message: string }> {
+    return this.request('/api/system/smtp/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/mail"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/resourcemonitor"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/scheduler"
@@ -42,6 +43,7 @@ type RouterOptions struct {
 	BDSResolver        *bds.Resolver
 	TurnstileVerifier  *turnstile.Verifier
 	DDNSManager        *ddns.Manager
+	Mailer             *mail.Mailer
 }
 
 // NewRouter constructs and configures the Chi router.
@@ -52,9 +54,18 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 		opts.PlayerManager = player.NewManager(nil, nil)
 	}
 
+	if opts.Mailer == nil && opts.DB != nil {
+		opts.Mailer = mail.NewMailer(opts.DB)
+	}
+
 	mw := NewMiddleware(opts.DB, opts.IPResolver, opts.RateLimiter, opts.JWTSecret)
 	authHandler := NewAuthHandler(opts.DB, opts.RateLimiter, opts.JWTSecret)
 	systemHandler := NewSystemHandler(opts.DB, opts.DataDir, opts.BDSCache, opts.BDSResolver, opts.Firewall, opts.IPResolver, opts.RateLimiter)
+
+	if opts.Mailer != nil {
+		authHandler.SetMailer(opts.Mailer)
+		systemHandler.SetMailer(opts.Mailer)
+	}
 
 	if opts.TurnstileVerifier == nil {
 		opts.TurnstileVerifier = turnstile.NewVerifier()
@@ -109,6 +120,11 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 		// Public Auth
 		api.With(mw.RateLimitLoginMiddleware).Post("/auth/login", authHandler.Login)
 		api.With(mw.RateLimitLoginMiddleware).Post("/auth/register", authHandler.Register)
+		api.With(mw.RateLimitLoginMiddleware).Post("/auth/forgot-password", authHandler.ForgotPassword)
+		api.Post("/auth/reset-password", authHandler.ResetPassword)
+		api.Get("/auth/verify-email", authHandler.VerifyEmail)
+		api.Post("/auth/verify-email", authHandler.VerifyEmail)
+		api.With(mw.RateLimitLoginMiddleware).Post("/auth/resend-verification", authHandler.ResendVerification)
 		api.Post("/auth/logout", authHandler.Logout)
 
 		// Authenticated Routes
@@ -274,6 +290,7 @@ func NewRouter(opts RouterOptions) *chi.Mux {
 				adminGroup.Get("/system/settings", systemHandler.GetSettings)
 				adminGroup.Post("/system/settings", systemHandler.UpdateSetting)
 				adminGroup.Post("/system/webhook/test", systemHandler.TestDiscordWebhook)
+				adminGroup.Post("/system/smtp/test", systemHandler.TestSMTP)
 				adminGroup.Post("/system/turnstile/test", systemHandler.TestTurnstile)
 				adminGroup.Get("/system/bds/status", systemHandler.GetBDSStatus)
 				adminGroup.Post("/system/bds/eula", systemHandler.AcceptBDSEULA)

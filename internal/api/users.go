@@ -85,7 +85,7 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.db.CreateUserExtended(r.Context(), req.Username, req.Email, pwHash, req.Role, req.PlanID, req.PlanStatus, req.PlanExpiresAt)
+	user, err := h.db.CreateUserExtended(r.Context(), req.Username, req.Email, pwHash, req.Role, req.PlanID, req.PlanStatus, req.PlanExpiresAt, true)
 	if err != nil {
 		http.Error(w, `{"error": "Failed to create user"}`, http.StatusInternalServerError)
 		return

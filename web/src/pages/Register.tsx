@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { UserPlus, AlertCircle, Loader2 } from 'lucide-react';
+import { UserPlus, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
 import { api } from '../api/client';
 import { User, TurnstileConfig } from '../types';
 import { TurnstileWidget, TurnstileWidgetRef } from '../components/TurnstileWidget';
@@ -17,6 +17,8 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [verificationRequired, setVerificationRequired] = useState(false);
 
   // Turnstile state
   const [turnstileConfig, setTurnstileConfig] = useState<TurnstileConfig | null>(null);
@@ -59,6 +61,12 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
         password,
         turnstile_token: turnstileToken || undefined,
       });
+
+      if (res.requires_verification) {
+        setVerificationRequired(true);
+        return;
+      }
+
       onRegisterSuccess(res.user);
       navigate('/');
     } catch (err: any) {
@@ -85,7 +93,25 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
           <p className="text-sm text-slate-400 mt-1">Create an account to deploy your game servers</p>
         </div>
 
-        {error && (
+        {verificationRequired ? (
+          <div className="space-y-6 text-center">
+            <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 text-sm flex flex-col items-center gap-3">
+              <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+              <p className="font-bold text-base text-slate-100">Verification Email Sent!</p>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Your account was created successfully. A verification link has been sent to <strong className="text-emerald-400">{email}</strong>. Please check your inbox and verify your email before logging in.
+              </p>
+            </div>
+            <Link
+              to="/login"
+              className="inline-flex items-center justify-center w-full py-3 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold font-mono text-sm transition-all"
+            >
+              Proceed to Login
+            </Link>
+          </div>
+        ) : (
+          <>
+            {error && (
           <div className="mb-6 p-3 rounded-lg bg-rose-950/40 border border-rose-500/50 flex items-start space-x-3 text-rose-300 text-sm">
             <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-400" />
             <span>{error}</span>
@@ -174,6 +200,8 @@ export const Register: React.FC<RegisterProps> = ({ onRegisterSuccess }) => {
             Sign In
           </Link>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

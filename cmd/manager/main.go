@@ -25,6 +25,7 @@ import (
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/engine"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/firewall"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/ipresolver"
+	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/mail"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/models"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/player"
 	"github.com/AhmadShamli/Bedrock-Server-Manager/internal/raknet"
@@ -159,8 +160,10 @@ func main() {
 		_ = mgrDB.SetSetting(ctx, "heartbeat_interval_seconds", strconv.Itoa(int(cfg.HeartbeatInterval.Seconds())))
 	}
 
-	// 6. Initialize Webhook Dispatcher
+	// 6. Initialize Webhook Dispatcher & Mailer
 	webhookDispatcher := webhook.NewDispatcher()
+	mailerInstance := mail.NewMailer(mgrDB)
+	defer mailerInstance.Close()
 
 	var serverEngine engine.ServerEngine
 
@@ -270,6 +273,7 @@ func main() {
 
 	// Initialize Resource Alert Monitor (monitors usage vs allocated, broadcasts alert every 1m if nearly full)
 	resourceMonitor := resourcemonitor.NewResourceMonitor(serverEngine, playerMgr, mgrDB, webhookDispatcher)
+	resourceMonitor.SetMailer(mailerInstance)
 
 	// Background metrics sampler (every 2s default)
 	go func() {
@@ -282,8 +286,26 @@ func main() {
 			}
 			for _, s := range servers {
 				if st, err := serverEngine.GetServerStatus(context.Background(), &s); err == nil && st != s.Status {
+					oldStatus := s.Status
 					s.Status = st
 					_ = mgrDB.UpdateServerStatus(context.Background(), s.ID, st, s.ContainerID)
+
+					if st == models.ServerStatusCrashed && oldStatus == models.ServerStatusRunning {
+						if webhookURL, _ := mgrDB.GetSetting(context.Background(), "discord_webhook_url"); webhookURL != "" {
+							_ = webhookDispatcher.NotifyServerCrashed(context.Background(), webhookURL, s.Name, s.ID, "Server process exited unexpectedly.")
+						}
+						appURL, _ := mgrDB.GetSetting(context.Background(), mail.SettingAppURL)
+						mailerInstance.SendSystemAlert(context.Background(), "crash", "SERVER_CRASH",
+							fmt.Sprintf("Server Crashed: %s", s.Name),
+							fmt.Sprintf("Server '%s' (%s) exited unexpectedly.", s.Name, s.ID),
+							map[string]string{
+								"Server Name": s.Name,
+								"Server ID":   s.ID,
+								"Status":      "Crashed",
+							},
+							appURL+"/servers/"+s.ID,
+						)
+					}
 				}
 				if s.Status == models.ServerStatusRunning {
 					playerCount := len(playerMgr.GetOnlinePlayers(s.ID))
@@ -411,6 +433,7 @@ func main() {
 		BDSCache:           bdsCache,
 		BDSResolver:        bdsResolver,
 		DDNSManager:        ddnsManager,
+		Mailer:             mailerInstance,
 	})
 
 	// 16. Start HTTP Server

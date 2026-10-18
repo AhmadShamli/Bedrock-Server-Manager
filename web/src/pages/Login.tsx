@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { KeyRound, AlertCircle, Loader2 } from 'lucide-react';
+import { KeyRound, AlertCircle, Loader2, MailCheck } from 'lucide-react';
 import { api } from '../api/client';
 import { User, TurnstileConfig } from '../types';
 import { TurnstileWidget, TurnstileWidgetRef } from '../components/TurnstileWidget';
@@ -16,6 +16,9 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unverified, setUnverified] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendNotice, setResendNotice] = useState<string | null>(null);
 
   // Turnstile state
   const [turnstileConfig, setTurnstileConfig] = useState<TurnstileConfig | null>(null);
@@ -33,6 +36,8 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setUnverified(false);
+    setResendNotice(null);
 
     if (isTurnstileRequired && !turnstileToken) {
       setError('Please complete the security challenge verification.');
@@ -51,13 +56,33 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       onLoginSuccess(res.user);
       navigate('/');
     } catch (err: any) {
-      setError(err.message || 'Login failed');
+      const msg = err.message || 'Login failed';
+      setError(msg);
+      if (msg.includes('verification is required') || msg.includes('EMAIL_NOT_VERIFIED')) {
+        setUnverified(true);
+      } else {
+        setUnverified(false);
+      }
       if (isTurnstileRequired) {
         setTurnstileToken('');
         turnstileRef.current?.reset();
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (!username.trim()) return;
+    setResending(true);
+    setResendNotice(null);
+    try {
+      const res = await api.resendVerification({ email_or_username: username.trim() });
+      setResendNotice(res.message || 'Verification link sent to your email.');
+    } catch (err: any) {
+      setResendNotice(err.message || 'Failed to resend verification email.');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -74,7 +99,35 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           <p className="text-sm text-slate-400 mt-1">Bedrock Dedicated Server Manager</p>
         </div>
 
-        {error && (
+        {unverified ? (
+          <div className="mb-6 p-4 rounded-xl bg-amber-950/40 border border-amber-500/50 space-y-3 text-amber-200 text-xs">
+            <div className="flex items-start space-x-2.5">
+              <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5 text-amber-400" />
+              <div>
+                <p className="font-bold text-amber-300">Email Verification Required</p>
+                <p className="mt-0.5 text-slate-300">
+                  Your account requires email verification before logging in. Please check your inbox for the activation link.
+                </p>
+              </div>
+            </div>
+
+            {resendNotice && (
+              <div className="p-2.5 rounded bg-emerald-950/60 border border-emerald-500/30 text-emerald-300">
+                {resendNotice}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={handleResendVerification}
+              disabled={resending}
+              className="w-full py-2 px-3 rounded bg-amber-900/60 hover:bg-amber-900 border border-amber-500/40 text-amber-200 font-mono text-xs font-bold transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              {resending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MailCheck className="w-3.5 h-3.5" />}
+              <span>Resend Verification Email</span>
+            </button>
+          </div>
+        ) : error && (
           <div className="mb-6 p-3 rounded-lg bg-rose-950/40 border border-rose-500/50 flex items-start space-x-3 text-rose-300 text-sm">
             <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-rose-400" />
             <span>{error}</span>
@@ -118,8 +171,11 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 onChange={(e) => setRememberMe(e.target.checked)}
                 className="rounded bg-obsidian-950 border-obsidian-700 text-emerald-500 focus:ring-emerald-500/30"
               />
-              <span>Remember session (30 days)</span>
+              <span>Remember session</span>
             </label>
+            <Link to="/forgot-password" className="text-emerald-400 hover:underline font-medium">
+              Forgot Password?
+            </Link>
           </div>
 
           {isTurnstileRequired && (

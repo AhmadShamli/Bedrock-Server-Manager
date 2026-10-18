@@ -57,6 +57,7 @@ type User struct {
 	ID            int64      `json:"id"`
 	Username      string     `json:"username"`
 	Email         string     `json:"email"`
+	EmailVerified bool       `json:"email_verified"`
 	PasswordHash  string     `json:"-"`
 	Role          string     `json:"role"`
 	PlanID        *int64     `json:"plan_id,omitempty"`
@@ -64,6 +65,17 @@ type User struct {
 	PlanStatus    string     `json:"plan_status"` // active, trial, expired
 	PlanExpiresAt *time.Time `json:"plan_expires_at,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
+}
+
+// AuthToken represents a temporary one-time token for password reset or email verification.
+type AuthToken struct {
+	ID         int64      `json:"id"`
+	UserID     int64      `json:"user_id"`
+	TokenType  string     `json:"token_type"` // "password_reset" or "email_verification"
+	TokenHash  string     `json:"-"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ConsumedAt *time.Time `json:"consumed_at,omitempty"`
 }
 
 // UserServerAccess maps operator or collaborator access to specific servers.
