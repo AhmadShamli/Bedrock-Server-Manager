@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -214,6 +215,17 @@ func (rm *ResourceMonitor) CheckServer(
 ) (*ResourceStatus, bool, error) {
 	if server == nil || !rm.cfg.Enabled {
 		return nil, false, nil
+	}
+
+	// Sanitize CPU & RAM metric inputs against NaN, Inf, negative, and corrupt spikes
+	if math.IsNaN(cpuPercent) || math.IsInf(cpuPercent, 0) || cpuPercent < 0.0 {
+		cpuPercent = 0.0
+	} else if cpuPercent > 10000.0 {
+		log.Printf("[ResourceMonitor] WARN: Ignoring corrupt CPU percent anomaly for server %s: %.1f%%", server.ID, cpuPercent)
+		cpuPercent = 0.0
+	}
+	if ramBytes < 0 {
+		ramBytes = 0
 	}
 
 	// 1. Calculate allocated RAM

@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -90,12 +90,6 @@ type processMemoryCounters struct {
 	quotaNonPagedPoolUsage     uintptr
 	pagefileUsage              uintptr
 	peakPagefileUsage          uintptr
-}
-
-type nativeCPUSample struct {
-	timestamp   time.Time
-	kernelTicks uint64
-	userTicks   uint64
 }
 
 type nativeProcess struct {
@@ -412,6 +406,10 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 	}
 	e.mu.Unlock()
 
+	e.prevCPUMu.Lock()
+	delete(e.prevCPUSamples, server.ID)
+	e.prevCPUMu.Unlock()
+
 	// Console log file rotation
 	logDir := filepath.Join(serverDir, "logs")
 	_ = os.MkdirAll(logDir, 0750)
@@ -483,6 +481,10 @@ func (e *NativeEngine) supervise(server *models.Server, proc *nativeProcess, log
 	e.mu.Lock()
 	delete(e.processes, server.ID)
 	e.mu.Unlock()
+
+	e.prevCPUMu.Lock()
+	delete(e.prevCPUSamples, server.ID)
+	e.prevCPUMu.Unlock()
 
 	if proc.stopRequested {
 		return // Clean expected shutdown
@@ -567,12 +569,18 @@ func (e *NativeEngine) StopServer(ctx context.Context, server *models.Server, ti
 
 	select {
 	case <-proc.exitedChan:
+		e.prevCPUMu.Lock()
+		delete(e.prevCPUSamples, server.ID)
+		e.prevCPUMu.Unlock()
 		return nil
 	case <-time.After(time.Duration(timeoutSeconds) * time.Second):
 		log.Printf("[WARN] [NativeEngine] Server %s did not terminate in %ds, killing process", server.ID, timeoutSeconds)
 		if proc.cmd != nil && proc.cmd.Process != nil {
 			_ = proc.cmd.Process.Kill()
 		}
+		e.prevCPUMu.Lock()
+		delete(e.prevCPUSamples, server.ID)
+		e.prevCPUMu.Unlock()
 		return nil
 	}
 }
@@ -594,6 +602,10 @@ func (e *NativeEngine) RemoveServer(ctx context.Context, server *models.Server, 
 	delete(e.processes, server.ID)
 	delete(e.ringBuffers, server.ID)
 	e.mu.Unlock()
+
+	e.prevCPUMu.Lock()
+	delete(e.prevCPUSamples, server.ID)
+	e.prevCPUMu.Unlock()
 
 	return nil
 }
@@ -659,26 +671,21 @@ func (e *NativeEngine) GetContainerStats(ctx context.Context, server *models.Ser
 		now := time.Now().UTC()
 
 		e.prevCPUMu.Lock()
-		prev, ok := e.prevCPUSamples[server.ID]
-		e.prevCPUSamples[server.ID] = nativeCPUSample{
-			timestamp:   now,
-			kernelTicks: curKernel,
-			userTicks:   curUser,
+		prev, hasPrev := e.prevCPUSamples[server.ID]
+		computedCPU, nextSample, updateSample := computeNativeProcessCPUPercent(
+			proc.processID,
+			curKernel,
+			curUser,
+			now,
+			prev,
+			hasPrev,
+			runtime.NumCPU(),
+		)
+		if updateSample {
+			e.prevCPUSamples[server.ID] = nextSample
 		}
+		cpuPercent = computedCPU
 		e.prevCPUMu.Unlock()
-
-		if ok && now.After(prev.timestamp) {
-			wallMs := now.Sub(prev.timestamp).Milliseconds()
-			if wallMs > 0 {
-				totalProcessTicksDelta := (curKernel - prev.kernelTicks) + (curUser - prev.userTicks)
-				// 1 tick = 100ns = 0.0001ms
-				processMs := float64(totalProcessTicksDelta) / 10000.0
-				cpuPercent = (processMs / float64(wallMs)) * 100.0
-				if math.IsNaN(cpuPercent) || math.IsInf(cpuPercent, 0) || cpuPercent < 0 {
-					cpuPercent = 0
-				}
-			}
-		}
 	}
 
 	return &models.MetricRaw{
@@ -784,6 +791,9 @@ func (e *NativeEngine) StopAllGracefully(timeoutSeconds int) {
 		}(p)
 	}
 	wg.Wait()
+	e.prevCPUMu.Lock()
+	e.prevCPUSamples = make(map[string]nativeCPUSample)
+	e.prevCPUMu.Unlock()
 	log.Println("[NativeEngine] All native Bedrock instances stopped.")
 }
 

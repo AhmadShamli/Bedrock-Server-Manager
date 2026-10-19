@@ -425,3 +425,29 @@ func TestResourceMonitor_DynamicConfigFromDB(t *testing.T) {
 		t.Errorf("expected IsNearlyFull=true for 92%%")
 	}
 }
+
+func TestCheckServer_CorruptCPUAnomaly(t *testing.T) {
+	mon := NewResourceMonitor(nil, nil, nil, nil)
+	server := &models.Server{
+		ID:          "server1",
+		Name:        "Test Server",
+		MemoryLimit: "2G",
+		CPULimit:    2.0,
+	}
+
+	// Simulated uint64 underflow anomaly (95 trillion percent CPU)
+	status, alerted, err := mon.CheckServer(context.Background(), server, 95727784502553.5, 200*1024*1024)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if alerted {
+		t.Errorf("expected corrupt CPU reading to NOT trigger alert, got alerted=true")
+	}
+	if status.IsNearlyFull {
+		t.Errorf("expected IsNearlyFull=false when CPU reading is an anomaly")
+	}
+	if status.CPUUsedPercent != 0.0 {
+		t.Errorf("expected CPUUsedPercent to be sanitized to 0.0, got %f", status.CPUUsedPercent)
+	}
+}
+
