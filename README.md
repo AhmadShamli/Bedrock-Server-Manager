@@ -254,7 +254,7 @@ Administrators can configure the following features live from the Web UI under *
 ```mermaid
 flowchart TD
     Client["Client Browser / Mobile Client<br/>(React 18 + Tailwind SPA)"] -->|HTTPS Dashboard & Console WS| Server["Bedrock Server Manager (BSM Daemon)"]
-    Client -->|HTTP Knock Heartbeat (10s)| Server
+    Client -->|HTTP Knock Heartbeat 10s| Server
 
     subgraph BSM["Bedrock Server Manager Runtime"]
         Server --> Auth["Auth & RBAC<br/>(JWT + HMAC-SHA256)"]
