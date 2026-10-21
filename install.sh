@@ -5,7 +5,7 @@ set -euo pipefail
 # Supported: Debian/Ubuntu, RHEL/Rocky/Fedora, Arch Linux, Alpine
 
 REPO="AhmadShamli/Bedrock-Server-Manager"
-DEFAULT_FALLBACK_TAG="v2.0.0-beta.9"
+DEFAULT_FALLBACK_TAG="v2.0.0"
 
 # Ensure standard binary directories are in PATH (important under sudo/secure_path)
 for extra_path in /usr/local/go/bin /usr/local/bin /usr/bin; do
@@ -73,7 +73,7 @@ Usage:
 
 Options:
   -u, --upgrade            Run in upgrade mode (automatically detected if BSM is already installed)
-  -v, --version <tag>      Specify target release version (e.g. v2.0.0-beta.7, v1.9.9, latest, stable)
+  -v, --version <tag>      Specify target release version (e.g. v2.0.0, v1.9.9, latest, stable)
                            (If omitted during interactive run, available releases are presented for selection)
   -m, --method <method>    Installation method: 'download' (GitHub release), 'build' (compile from source), or 'local'
   -y, --yes                Automatic yes to confirmation prompt (run non-interactively with latest release)
@@ -142,7 +142,7 @@ while [ $# -gt 0 ]; do
             ;;
         -v|--version)
             if [ -z "${2:-}" ]; then
-                log_error "Option '$1' requires a version argument (e.g. v2.0.0-beta.7, v1.9.9, or latest)."
+                log_error "Option '$1' requires a version argument (e.g. v2.0.0, v1.9.9, or latest)."
                 exit 1
             fi
             TARGET_VERSION="$2"
