@@ -50,14 +50,24 @@ func (m *MockEngine) StartServer(ctx context.Context, server *models.Server) err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.circuitBreaker.IsTripped(server.ID) {
-		return fmt.Errorf("circuit breaker tripped for server %s", server.ID)
-	}
+	m.circuitBreaker.Reset(server.ID)
 
 	m.statuses[server.ID] = models.ServerStatusRunning
 	if rb, ok := m.ringBuffers[server.ID]; ok {
-		rb.Write("[MOCK] Dedicated Bedrock Server started on UDP port " + fmt.Sprint(server.Port))
-		rb.Write("[MOCK] Server opened on port " + fmt.Sprint(server.Port))
+		line1 := "[MOCK] Dedicated Bedrock Server started on UDP port " + fmt.Sprint(server.Port)
+		line2 := "[MOCK] Server opened on port " + fmt.Sprint(server.Port)
+		rb.Write(line1)
+		rb.Write(line2)
+		for _, ch := range m.logChans[server.ID] {
+			select {
+			case ch <- line1:
+			default:
+			}
+			select {
+			case ch <- line2:
+			default:
+			}
+		}
 	}
 	return nil
 }
@@ -66,9 +76,17 @@ func (m *MockEngine) StopServer(ctx context.Context, server *models.Server, time
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.circuitBreaker.Reset(server.ID)
 	m.statuses[server.ID] = models.ServerStatusStopped
 	if rb, ok := m.ringBuffers[server.ID]; ok {
-		rb.Write("[MOCK] Dedicated Bedrock Server stopped.")
+		line := "[MOCK] Dedicated Bedrock Server stopped."
+		rb.Write(line)
+		for _, ch := range m.logChans[server.ID] {
+			select {
+			case ch <- line:
+			default:
+			}
+		}
 	}
 	return nil
 }

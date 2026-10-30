@@ -126,12 +126,12 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 	isHostNet := networkMode == "host"
 
 	serverPort := "19132"
-	serverPortV6 := "19133"
-	if isHostNet {
+	if server.Port > 0 {
 		serverPort = strconv.Itoa(server.Port)
-		if server.PortV6 > 0 {
-			serverPortV6 = strconv.Itoa(server.PortV6)
-		}
+	}
+	serverPortV6 := "19133"
+	if server.PortV6 > 0 {
+		serverPortV6 = strconv.Itoa(server.PortV6)
 	}
 
 	envVars := []string{
@@ -141,6 +141,8 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 		fmt.Sprintf("DIFFICULTY=%s", server.Difficulty),
 		fmt.Sprintf("SERVER_PORT=%s", serverPort),
 		fmt.Sprintf("SERVER_PORT_V6=%s", serverPortV6),
+		fmt.Sprintf("SERVER_UDP_PORTS=%s", serverPort),
+		"TRANSPORT=nethernet",
 	}
 	if server.Seed != "" {
 		envVars = append(envVars, fmt.Sprintf("LEVEL_SEED=%s", server.Seed))
@@ -155,8 +157,10 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 	}
 	if !isHostNet {
 		config.ExposedPorts = nat.PortSet{
-			"19132/udp": struct{}{},
-			"19133/udp": struct{}{},
+			nat.Port(serverPort + "/udp"):   struct{}{},
+			nat.Port(serverPort + "/tcp"):   struct{}{},
+			nat.Port(serverPortV6 + "/udp"): struct{}{},
+			nat.Port(serverPortV6 + "/tcp"): struct{}{},
 		}
 	}
 
@@ -176,11 +180,17 @@ func (e *DockerEngine) CreateServer(ctx context.Context, server *models.Server, 
 	}
 	if !isHostNet {
 		hostConfig.PortBindings = nat.PortMap{
-			"19132/udp": []nat.PortBinding{
-				{HostIP: "0.0.0.0", HostPort: strconv.Itoa(server.Port)},
+			nat.Port(serverPort + "/udp"): []nat.PortBinding{
+				{HostIP: "0.0.0.0", HostPort: serverPort},
 			},
-			"19133/udp": []nat.PortBinding{
-				{HostIP: "0.0.0.0", HostPort: strconv.Itoa(server.PortV6)},
+			nat.Port(serverPort + "/tcp"): []nat.PortBinding{
+				{HostIP: "0.0.0.0", HostPort: serverPort},
+			},
+			nat.Port(serverPortV6 + "/udp"): []nat.PortBinding{
+				{HostIP: "0.0.0.0", HostPort: serverPortV6},
+			},
+			nat.Port(serverPortV6 + "/tcp"): []nat.PortBinding{
+				{HostIP: "0.0.0.0", HostPort: serverPortV6},
 			},
 		}
 	}
@@ -199,25 +209,57 @@ func (e *DockerEngine) clearCPUSample(serverID string) {
 	e.prevCPUMu.Unlock()
 }
 
+func (e *DockerEngine) emitConsoleLine(serverID, line string) {
+	e.mu.Lock()
+	rb, exists := e.ringBuffers[serverID]
+	if !exists {
+		rb = NewRingBuffer(1000)
+		e.ringBuffers[serverID] = rb
+	}
+	rb.Write(line)
+	subscribers := make([]chan string, len(e.logChans[serverID]))
+	copy(subscribers, e.logChans[serverID])
+	listener := e.logListener
+	e.mu.Unlock()
+
+	for _, ch := range subscribers {
+		select {
+		case ch <- line:
+		default:
+		}
+	}
+	if listener != nil {
+		listener(serverID, line)
+	}
+}
+
 // StartServer launches the container and initiates console log capture.
 func (e *DockerEngine) StartServer(ctx context.Context, server *models.Server) error {
-	if e.circuitBreaker.IsTripped(server.ID) {
-		return fmt.Errorf("circuit breaker tripped for server %s (too many recent crashes)", server.ID)
-	}
+	// Reset crash circuit breaker on manual/explicit start so crashed servers can be started
+	e.circuitBreaker.Reset(server.ID)
 
+	canonicalName := fmt.Sprintf("bsm-%s", server.ID)
 	containerID := server.ContainerID
 	if containerID == "" {
-		containerID = fmt.Sprintf("bsm-%s", server.ID)
+		containerID = canonicalName
 	}
 
 	e.clearCPUSample(server.ID)
+	e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] Starting server instance '%s'...", server.ID))
 
 	if err := e.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
-		return fmt.Errorf("failed to start container: %w", err)
+		if dockerclient.IsErrNotFound(err) && containerID != canonicalName {
+			if err2 := e.cli.ContainerStart(ctx, canonicalName, container.StartOptions{}); err2 == nil {
+				containerID = canonicalName
+				server.ContainerID = canonicalName
+				err = nil
+			}
+		}
+		if err != nil {
+			e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] ERROR: Failed to start container: %v", err))
+			return fmt.Errorf("failed to start container: %w", err)
+		}
 	}
-
-	// Reset crash circuit breaker on manual start
-	e.circuitBreaker.Reset(server.ID)
 
 	// Attach log reader loop
 	go e.captureContainerLogs(server.ID, containerID)
@@ -230,30 +272,57 @@ func (e *DockerEngine) StopServer(ctx context.Context, server *models.Server, ti
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 15
 	}
+	e.circuitBreaker.Reset(server.ID)
+
+	canonicalName := fmt.Sprintf("bsm-%s", server.ID)
 	containerID := server.ContainerID
 	if containerID == "" {
-		containerID = fmt.Sprintf("bsm-%s", server.ID)
+		containerID = canonicalName
 	}
 
 	e.clearCPUSample(server.ID)
+	e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] Stopping server instance '%s'...", server.ID))
 
 	stopTimeout := timeoutSeconds
-	return e.cli.ContainerStop(ctx, containerID, container.StopOptions{
+	err := e.cli.ContainerStop(ctx, containerID, container.StopOptions{
 		Timeout: &stopTimeout,
 	})
+	if err != nil && dockerclient.IsErrNotFound(err) && containerID != canonicalName {
+		err = e.cli.ContainerStop(ctx, canonicalName, container.StopOptions{
+			Timeout: &stopTimeout,
+		})
+	}
+	return err
 }
 
 // RestartServer restarts the container.
 func (e *DockerEngine) RestartServer(ctx context.Context, server *models.Server) error {
+	// Reset crash circuit breaker on manual/explicit restart so crashed servers can be restarted
+	e.circuitBreaker.Reset(server.ID)
+
+	canonicalName := fmt.Sprintf("bsm-%s", server.ID)
 	containerID := server.ContainerID
 	if containerID == "" {
-		containerID = fmt.Sprintf("bsm-%s", server.ID)
+		containerID = canonicalName
 	}
 	e.clearCPUSample(server.ID)
+	e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] Restarting server instance '%s'...", server.ID))
+
 	stopTimeout := 15
-	if err := e.cli.ContainerRestart(ctx, containerID, container.StopOptions{
+	err := e.cli.ContainerRestart(ctx, containerID, container.StopOptions{
 		Timeout: &stopTimeout,
-	}); err != nil {
+	})
+	if err != nil && dockerclient.IsErrNotFound(err) && containerID != canonicalName {
+		if err2 := e.cli.ContainerRestart(ctx, canonicalName, container.StopOptions{
+			Timeout: &stopTimeout,
+		}); err2 == nil {
+			containerID = canonicalName
+			server.ContainerID = canonicalName
+			err = nil
+		}
+	}
+	if err != nil {
+		e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] ERROR: Failed to restart container: %v", err))
 		return err
 	}
 	go e.captureContainerLogs(server.ID, containerID)
@@ -262,6 +331,7 @@ func (e *DockerEngine) RestartServer(ctx context.Context, server *models.Server)
 
 // RemoveServer stops and removes the container.
 func (e *DockerEngine) RemoveServer(ctx context.Context, server *models.Server, removeData bool) error {
+	e.circuitBreaker.Reset(server.ID)
 	containerID := server.ContainerID
 	if containerID == "" {
 		containerID = fmt.Sprintf("bsm-%s", server.ID)
@@ -277,10 +347,6 @@ func (e *DockerEngine) RemoveServer(ctx context.Context, server *models.Server, 
 
 // GetServerStatus returns current Docker container status (running, stopped, crashed).
 func (e *DockerEngine) GetServerStatus(ctx context.Context, server *models.Server) (string, error) {
-	if e.circuitBreaker.IsTripped(server.ID) {
-		return models.ServerStatusCrashed, nil
-	}
-
 	containerID := server.ContainerID
 	canonicalName := fmt.Sprintf("bsm-%s", server.ID)
 	if containerID == "" {
@@ -305,15 +371,15 @@ func (e *DockerEngine) GetServerStatus(ctx context.Context, server *models.Serve
 	}
 
 	if inspect.State.Running {
+		e.circuitBreaker.Reset(server.ID)
 		return models.ServerStatusRunning, nil
 	}
 	if inspect.State.Restarting {
 		return models.ServerStatusStarting, nil
 	}
-	if inspect.State.ExitCode != 0 {
-		if e.circuitBreaker.RecordCrash(server.ID, time.Now()) {
-			return models.ServerStatusCrashed, nil
-		}
+	if inspect.State.ExitCode != 0 || e.circuitBreaker.IsTripped(server.ID) {
+		e.circuitBreaker.RecordCrash(server.ID, time.Now())
+		return models.ServerStatusCrashed, nil
 	}
 
 	return models.ServerStatusStopped, nil

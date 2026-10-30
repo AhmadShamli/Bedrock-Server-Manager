@@ -64,12 +64,14 @@ Status: active
      --                         ------      ----
 [ 1] 22/tcp                     ALLOW IN    Anywhere
 [ 2] 19132/udp                  ALLOW IN    198.51.100.12 # bsm_srv1_101
-[ 3] 19133/udp                  ALLOW IN    2001:db8::1 # bsm_srv1_102
-[ 4] 80/tcp                     ALLOW IN    Anywhere
+[ 3] 19132/tcp                  ALLOW IN    198.51.100.12 # bsm_srv1_101
+[ 4] 19133/udp                  ALLOW IN    2001:db8::1 # bsm_srv1_102
+[ 5] 19133/tcp                  ALLOW IN    2001:db8::1 # bsm_srv1_102
+[ 6] 80/tcp                     ALLOW IN    Anywhere
 `
 	rules := parseUFWStatusLines(sampleOutput)
 	if len(rules) != 2 {
-		t.Fatalf("expected 2 UDP rules, got %d", len(rules))
+		t.Fatalf("expected 2 deduplicated BSM rules, got %d", len(rules))
 	}
 
 	if rules[0].Port != 19132 || rules[0].IP != "198.51.100.12" || rules[0].Comment != "bsm_srv1_101" {

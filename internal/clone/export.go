@@ -95,6 +95,7 @@ func CloneServer(
 			props["server-name"] = newName
 			props["server-port"] = fmt.Sprint(p4)
 			props["server-portv6"] = fmt.Sprint(p6)
+			props["server-udp-ports"] = fmt.Sprint(p4)
 			_ = configfile.WriteProperties(propPath, props, keys)
 		}
 	}

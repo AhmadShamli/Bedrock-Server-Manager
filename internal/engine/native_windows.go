@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -266,19 +267,59 @@ func (e *NativeEngine) CreateServer(ctx context.Context, server *models.Server, 
 	return fmt.Sprintf("native-%s", server.ID), nil
 }
 
+func (e *NativeEngine) emitConsoleLine(serverID, line string) {
+	e.mu.Lock()
+	rb, exists := e.ringBuffers[serverID]
+	if !exists {
+		rb = NewRingBuffer(1000)
+		e.ringBuffers[serverID] = rb
+	}
+	rb.Write(line)
+	subs := make([]chan string, len(e.logChans[serverID]))
+	copy(subs, e.logChans[serverID])
+	listener := e.logListener
+	e.mu.Unlock()
+
+	for _, ch := range subs {
+		select {
+		case ch <- line:
+		default:
+		}
+	}
+	if listener != nil {
+		listener(serverID, line)
+	}
+}
+
 func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) error {
+	// Reset crash circuit breaker on manual/explicit start so a crashed server can be started again
+	e.circuitBreaker.Reset(server.ID)
+	return e.startServerInternal(ctx, server, true)
+}
+
+func (e *NativeEngine) startServerInternal(ctx context.Context, server *models.Server, isManual bool) error {
 	_ = CheckVCRuntime()
 
-	if e.circuitBreaker.IsTripped(server.ID) {
+	if !isManual && e.circuitBreaker.IsTripped(server.ID) {
 		return fmt.Errorf("circuit breaker tripped for server %s (repeated crashes)", server.ID)
 	}
 
 	e.mu.Lock()
 	if proc, exists := e.processes[server.ID]; exists && proc.cmd != nil && proc.cmd.Process != nil {
-		e.mu.Unlock()
-		return nil // Already running
+		select {
+		case <-proc.exitedChan:
+			// Previous process has already exited; clean up stale entry and continue starting
+			delete(e.processes, server.ID)
+		default:
+			e.mu.Unlock()
+			return nil // Already running
+		}
 	}
 	e.mu.Unlock()
+
+	if isManual {
+		e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] Starting native Bedrock Dedicated Server '%s'...", server.ID))
+	}
 
 	serverDir := e.getServerDir(server.ID)
 	exePath := filepath.Join(serverDir, "bedrock_server.exe")
@@ -286,8 +327,10 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 	// If binary does not exist, provision it
 	if _, err := os.Stat(exePath); os.IsNotExist(err) {
 		log.Printf("[NativeEngine] bedrock_server.exe not found at %s. Provisioning instance for '%s'...", exePath, server.ID)
+		e.emitConsoleLine(server.ID, "[BSM] Provisioning Bedrock Dedicated Server files...")
 		if _, err := e.CreateServer(ctx, server, e.dataDir); err != nil {
 			log.Printf("[NativeEngine] ERROR: Auto-provisioning failed for '%s': %v", server.ID, err)
+			e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] ERROR: Auto-provisioning failed: %v", err))
 			return fmt.Errorf("failed to provision server files: %w", err)
 		}
 		if _, err := os.Stat(exePath); os.IsNotExist(err) {
@@ -298,6 +341,7 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 		resolved, err := e.bdsResolver.ResolveVersion(ctx, server.BDSVersion, false)
 		if err == nil && resolved.Version != "" && resolved.Version != server.InstalledBDSVersion {
 			log.Printf("[BDS] Auto-update found newer version %s for server %s (current: %s)", resolved.Version, server.ID, server.InstalledBDSVersion)
+			e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] Updating BDS from %s to %s...", server.InstalledBDSVersion, resolved.Version))
 			cacheDir, err := e.bdsCache.EnsureVersion(ctx, resolved, true)
 			if err == nil {
 				if err := bds.InstallServerFiles(serverDir, cacheDir, true); err == nil {
@@ -312,6 +356,14 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 	propsPath := filepath.Join(serverDir, "server.properties")
 	existingProps, existingKeys, _ := configfile.ReadProperties(propsPath)
 	mergedProps, mergedKeys := configfile.MergeDefaultProperties(existingProps, existingKeys, server)
+	if server.Port > 0 {
+		mergedProps["server-port"] = strconv.Itoa(server.Port)
+		mergedProps["server-udp-ports"] = strconv.Itoa(server.Port)
+	}
+	if server.PortV6 > 0 {
+		mergedProps["server-portv6"] = strconv.Itoa(server.PortV6)
+	}
+	mergedProps["transport"] = "nethernet"
 	_ = configfile.WriteProperties(propsPath, mergedProps, mergedKeys)
 
 	// Ensure absolute paths for working directory and executable
@@ -373,11 +425,13 @@ func (e *NativeEngine) StartServer(ctx context.Context, server *models.Server) e
 			windows.CloseHandle(hJob)
 		}
 		log.Printf("[NativeEngine] ERROR: Failed to start bedrock_server.exe for '%s': %v", server.ID, err)
+		e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] ERROR: Failed to start bedrock_server.exe: %v", err))
 		return fmt.Errorf("failed to start bedrock_server.exe: %w", err)
 	}
 
 	pid := cmd.Process.Pid
 	log.Printf("[NativeEngine] Server '%s' started successfully (PID: %d) at %s", server.ID, pid, serverDir)
+	e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] Process launched (PID: %d)", pid))
 
 	if hJob != 0 {
 		hProcess, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_INFORMATION, false, uint32(pid))
@@ -492,33 +546,16 @@ func (e *NativeEngine) supervise(server *models.Server, proc *nativeProcess, log
 
 	now := time.Now().UTC()
 	log.Printf("[WARN] [NativeEngine] Server %s exited unexpectedly (%v, exit code: %d / 0x%X)", server.ID, waitErr, exitCode, uint32(exitCode))
+	e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] WARN: Server process exited unexpectedly (exit code: %d / 0x%X)", exitCode, uint32(exitCode)))
 
 	isDllNotFound := uint32(exitCode) == 0xC0000135
 	if isDllNotFound {
 		errDllMsg := fmt.Sprintf("[NativeEngine] CRITICAL: Server '%s' crashed with 0xC0000135 (STATUS_DLL_NOT_FOUND). Microsoft Visual C++ 2015-2022 Redistributable (x64) is missing! Please install it from https://aka.ms/vs/17/release/vc_redist.x64.exe", server.ID)
 		log.Println(errDllMsg)
-
-		e.mu.RLock()
-		rb := e.ringBuffers[server.ID]
-		subs := e.logChans[server.ID]
-		listener := e.logListener
-		e.mu.RUnlock()
-
-		if rb != nil {
-			rb.Write(errDllMsg)
-		}
-		for _, ch := range subs {
-			select {
-			case ch <- errDllMsg:
-			default:
-			}
-		}
-		if listener != nil {
-			listener(server.ID, errDllMsg)
-		}
+		e.emitConsoleLine(server.ID, errDllMsg)
 	}
 
-	e.circuitBreaker.RecordCrash(server.ID, now)
+	tripped := e.circuitBreaker.RecordCrash(server.ID, now)
 
 	proc.crashHistory = append(proc.crashHistory, now)
 
@@ -532,6 +569,7 @@ func (e *NativeEngine) supervise(server *models.Server, proc *nativeProcess, log
 
 	if recentCount >= 3 && server.PreviousBDSVersion != "" {
 		log.Printf("[BDS] Server %s crashed %d times in 60s. Triggering automatic rollback to version %s", server.ID, recentCount, server.PreviousBDSVersion)
+		e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] WARN: Server crashed %d times in 60s; rolling back to version %s...", recentCount, server.PreviousBDSVersion))
 		prevDir := e.bdsCache.VersionDir(server.PreviousBDSVersion)
 		if e.bdsCache.IsVersionCached(server.PreviousBDSVersion) {
 			_ = bds.RollbackServerFiles(e.getServerDir(server.ID), prevDir)
@@ -540,10 +578,13 @@ func (e *NativeEngine) supervise(server *models.Server, proc *nativeProcess, log
 		}
 	}
 
-	if !isDllNotFound && !e.circuitBreaker.IsTripped(server.ID) {
+	if !isDllNotFound && !tripped {
 		// Backoff restart: 2s
+		e.emitConsoleLine(server.ID, "[BSM] Auto-restarting server in 2 seconds...")
 		time.Sleep(2 * time.Second)
-		_ = e.StartServer(context.Background(), server)
+		_ = e.startServerInternal(context.Background(), server, false)
+	} else if tripped {
+		e.emitConsoleLine(server.ID, "[BSM] ERROR: Crash loop detected (5 crashes in 5m). Automatic restart paused — click Start or Restart to try again.")
 	}
 }
 
@@ -551,6 +592,7 @@ func (e *NativeEngine) StopServer(ctx context.Context, server *models.Server, ti
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 15
 	}
+	e.circuitBreaker.Reset(server.ID)
 
 	e.mu.Lock()
 	proc, exists := e.processes[server.ID]
@@ -561,6 +603,7 @@ func (e *NativeEngine) StopServer(ctx context.Context, server *models.Server, ti
 	}
 
 	proc.stopRequested = true
+	e.emitConsoleLine(server.ID, fmt.Sprintf("[BSM] Stopping native server '%s'...", server.ID))
 
 	// Send graceful stop command to stdin
 	if proc.stdin != nil {

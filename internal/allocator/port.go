@@ -18,7 +18,8 @@ func NewPortAllocator() *PortAllocator {
 	return &PortAllocator{}
 }
 
-// IsUDPPortAvailable checks if a UDP port is open and can be bound on the host.
+// IsUDPPortAvailable checks if a port is open and can be bound on the host for both UDP and TCP
+// (NetherNet binds TCP on server-port for HTTP signaling and UDP on server-udp-ports for WebRTC transport).
 func (pa *PortAllocator) IsUDPPortAvailable(port int) bool {
 	addr := fmt.Sprintf(":%d", port)
 	pc, err := net.ListenPacket("udp", addr)
@@ -26,6 +27,12 @@ func (pa *PortAllocator) IsUDPPortAvailable(port int) bool {
 		return false
 	}
 	_ = pc.Close()
+
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	_ = ln.Close()
 	return true
 }
 

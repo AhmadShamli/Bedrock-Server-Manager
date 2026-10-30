@@ -137,6 +137,31 @@ func TestMockEngine(t *testing.T) {
 	if status != models.ServerStatusStopped {
 		t.Errorf("expected stopped status, got %s", status)
 	}
+
+	// Simulate crash loop tripping circuit breaker, then verify manual StartServer & RestartServer succeed and emit new logs
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		mock.circuitBreaker.RecordCrash(srv.ID, now)
+	}
+	if !mock.circuitBreaker.IsTripped(srv.ID) {
+		t.Fatalf("expected circuit breaker to be tripped after 5 crashes")
+	}
+
+	if err := mock.StartServer(ctx, srv); err != nil {
+		t.Fatalf("expected manual StartServer to reset tripped circuit breaker and succeed, got: %v", err)
+	}
+	if mock.circuitBreaker.IsTripped(srv.ID) {
+		t.Errorf("expected circuit breaker to be reset after manual StartServer")
+	}
+
+	select {
+	case line := <-ch:
+		if line == "" {
+			t.Errorf("expected non-empty log line on manual start after crash")
+		}
+	case <-time.After(1 * time.Second):
+		t.Errorf("timed out waiting for new log line after restarting crashed server")
+	}
 }
 
 func TestBootManager(t *testing.T) {

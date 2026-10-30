@@ -1,7 +1,9 @@
 package raknet
 
 import (
+	"net"
 	"testing"
+	"time"
 )
 
 func TestParsePongPayload(t *testing.T) {
@@ -53,5 +55,32 @@ func TestParsePongPayloadInvalid(t *testing.T) {
 	_, err := ParsePongPayload("invalid", 10)
 	if err == nil {
 		t.Fatalf("expected error for malformed payload")
+	}
+}
+
+func TestPingServerNetherNetTCP(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to open TCP listener: %v", err)
+	}
+	defer ln.Close()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	tcpAddr := ln.Addr().(*net.TCPAddr)
+	res, err := PingServer("127.0.0.1", tcpAddr.Port, 500*time.Millisecond)
+	if err != nil {
+		t.Fatalf("expected PingServer to succeed against NetherNet TCP signaling listener, got err: %v", err)
+	}
+	if res.PortIPv4 != tcpAddr.Port {
+		t.Errorf("expected PortIPv4 %d, got %d", tcpAddr.Port, res.PortIPv4)
 	}
 }

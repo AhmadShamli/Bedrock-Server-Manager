@@ -428,7 +428,8 @@ func (h *ServerHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 // EnsurePendingBaselineBeforeBoot ensures that an uninitialized server (where server.properties does not exist yet)
-// has a complete .pending_properties.json with transport=raknet and server defaults prior to first container boot.
+// has a complete .pending_properties.json with transport=nethernet and server defaults prior to first container boot.
+// For already-initialized servers, it ensures transport=nethernet and server-udp-ports are present in server.properties.
 func (h *ServerHandler) EnsurePendingBaselineBeforeBoot(server *models.Server) {
 	if server == nil {
 		return
@@ -436,7 +437,27 @@ func (h *ServerHandler) EnsurePendingBaselineBeforeBoot(server *models.Server) {
 	serverDir := filepath.Join(h.dataDir, "servers", server.ID)
 	propPath := filepath.Join(serverDir, "server.properties")
 	if _, err := os.Stat(propPath); err == nil {
-		return // Already initialized on disk
+		props, keys, readErr := configfile.ReadProperties(propPath)
+		if readErr == nil && props != nil {
+			updates := make(map[string]string)
+			if strings.TrimSpace(props["transport"]) == "" || strings.EqualFold(strings.TrimSpace(props["transport"]), "raknet") {
+				updates["transport"] = "nethernet"
+			}
+			if strings.TrimSpace(props["server-udp-ports"]) == "" {
+				if server.Port > 0 {
+					updates["server-udp-ports"] = strconv.Itoa(server.Port)
+				} else if pVal := strings.TrimSpace(props["server-port"]); pVal != "" {
+					updates["server-udp-ports"] = pVal
+				} else {
+					updates["server-udp-ports"] = "19132"
+				}
+			}
+			if len(updates) > 0 {
+				mergedProps, mergedKeys := configfile.MergeProperties(props, keys, updates)
+				_ = configfile.WriteProperties(propPath, mergedProps, mergedKeys)
+			}
+		}
+		return
 	}
 
 	pendingProps, pendingKeys, _, _ := configfile.ReadPendingProperties(serverDir)
@@ -450,7 +471,7 @@ func (h *ServerHandler) StartServerInstance(ctx context.Context, server *models.
 		return fmt.Errorf("server is nil")
 	}
 
-	// Ensure baseline properties (including transport=raknet) are queued if this is the very first boot
+	// Ensure baseline properties (including transport=nethernet) are queued if this is the very first boot
 	h.EnsurePendingBaselineBeforeBoot(server)
 
 	// Automatically update and merge from global and server list on start
@@ -661,6 +682,8 @@ func (h *ServerHandler) Restart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.EnsurePendingBaselineBeforeBoot(server)
+	_, _ = player.SyncServerWithGlobal(r.Context(), h.dataDir, server.ID, h.db, nil)
 	addon.SyncActivePacksToWorlds(filepath.Join(h.dataDir, "servers", server.ID))
 
 	if err := h.engine.RestartServer(r.Context(), server); err != nil {
@@ -673,7 +696,9 @@ func (h *ServerHandler) Restart(w http.ResponseWriter, r *http.Request) {
 		h.resourceMonitor.ResetIdleTimer(server.ID)
 	}
 
+	server.Status = models.ServerStatusRunning
 	_ = h.db.UpdateServerStatus(r.Context(), server.ID, models.ServerStatusRunning, server.ContainerID)
+	go h.applyPendingPropertiesOnStart(server.ID)
 	_ = h.db.CreateAuditLog(r.Context(), &models.AuditLog{
 		ActorType: "user",
 		ActorName: GetUserClaims(r).Username,
@@ -1065,6 +1090,21 @@ func (h *ServerHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		existing.Port = targetPort
 		existing.PortV6 = targetPortV6
+		if propPath, err := configfile.SafePath(h.dataDir, existing.ID, "server.properties"); err == nil {
+			portUpdates := map[string]string{
+				"server-port":      strconv.Itoa(existing.Port),
+				"server-portv6":    strconv.Itoa(existing.PortV6),
+				"server-udp-ports": strconv.Itoa(existing.Port),
+			}
+			updated, _ := configfile.UpdateExistingPropertyFile(propPath, portUpdates)
+			if !updated {
+				serverDir := filepath.Dir(propPath)
+				if pendingProps, pendingKeys, hasPending, _ := configfile.ReadPendingProperties(serverDir); hasPending {
+					mergedProps, mergedKeys := configfile.MergeProperties(pendingProps, pendingKeys, portUpdates)
+					_ = configfile.WritePendingProperties(serverDir, mergedProps, mergedKeys)
+				}
+			}
+		}
 	}
 
 	if req.Name != nil && *req.Name != "" {

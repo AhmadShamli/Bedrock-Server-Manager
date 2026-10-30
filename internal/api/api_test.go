@@ -2557,7 +2557,7 @@ func TestFirstBootTransportAndIdleAutoStopAndKnockStart(t *testing.T) {
 		t.Fatalf("CreateServer failed: %d %s", w.Code, w.Body.String())
 	}
 
-	// 2. Verify GET /api/servers/srv-idle-1/properties before first boot has transport=raknet and level-name=Bedrock level
+	// 2. Verify GET /api/servers/srv-idle-1/properties before first boot has transport=nethernet and level-name=Bedrock level
 	req = httptest.NewRequest("GET", "/api/servers/srv-idle-1/properties", nil)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	w = httptest.NewRecorder()
@@ -2569,14 +2569,17 @@ func TestFirstBootTransportAndIdleAutoStopAndKnockStart(t *testing.T) {
 		Properties map[string]string `json:"properties"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &propResp)
-	if propResp.Properties["transport"] != "raknet" {
-		t.Fatalf("expected pre-boot transport=raknet, got %q", propResp.Properties["transport"])
+	if propResp.Properties["transport"] != "nethernet" {
+		t.Fatalf("expected pre-boot transport=nethernet, got %q", propResp.Properties["transport"])
+	}
+	if propResp.Properties["server-udp-ports"] != "19152" {
+		t.Fatalf("expected pre-boot server-udp-ports=19152, got %q", propResp.Properties["server-udp-ports"])
 	}
 	if propResp.Properties["level-name"] != "Bedrock level" {
 		t.Fatalf("expected pre-boot level-name='Bedrock level', got %q", propResp.Properties["level-name"])
 	}
 
-	// 3. Start server and verify .pending_properties.json baseline was written with transport=raknet before first boot
+	// 3. Start server and verify .pending_properties.json baseline was written with transport=nethernet before first boot
 	req = httptest.NewRequest("POST", "/api/servers/srv-idle-1/start", nil)
 	req.Header.Set("Authorization", "Bearer "+adminToken)
 	w = httptest.NewRecorder()

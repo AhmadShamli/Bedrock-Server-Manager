@@ -50,6 +50,7 @@ func (c *CustomScriptDriver) execute(ctx context.Context, action, ip string, por
 		fmt.Sprintf("BSM_ACTION=%s", action),
 		fmt.Sprintf("BSM_IP=%s", ip),
 		fmt.Sprintf("BSM_PORT=%s", strconv.Itoa(port)),
+		"BSM_PROTO=tcp,udp",
 		fmt.Sprintf("BSM_COMMENT=%s", comment),
 	)
 

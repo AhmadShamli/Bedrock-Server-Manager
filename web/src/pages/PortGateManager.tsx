@@ -1016,7 +1016,7 @@ export const PortGateManager: React.FC = () => {
               <thead className="bg-obsidian-800/60 text-slate-400 uppercase tracking-wider text-[11px] border-b border-obsidian-700">
                 <tr>
                   <th className="px-4 py-3">Server Instance</th>
-                  <th className="px-4 py-3">UDP Port</th>
+                  <th className="px-4 py-3">Port (TCP/UDP)</th>
                   <th className="px-4 py-3">Game Address</th>
                   <th className="px-4 py-3">Port Gate Status</th>
                   <th className="px-4 py-3">Auth Mode</th>
@@ -1040,7 +1040,7 @@ export const PortGateManager: React.FC = () => {
                         </Link>
                       </td>
                       <td className="px-4 py-3 font-bold text-slate-300">
-                        UDP {srv.port} {srv.portv6 > 0 ? `/ ${srv.portv6}` : ''}
+                        TCP/UDP {srv.port} {srv.portv6 > 0 ? `/ ${srv.portv6}` : ''}
                       </td>
                       <td className="px-4 py-3">
                         {srv.game_server_address ? (

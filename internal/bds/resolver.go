@@ -20,10 +20,10 @@ const (
 	MojangUserAgent           = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 	DefaultCacheDuration      = 6 * time.Hour
 
-	FallbackReleaseVersion = "1.26.52.3"
-	FallbackReleaseURL     = "https://www.minecraft.net/bedrockdedicatedserver/bin-win/bedrock-server-1.26.52.3.zip"
-	FallbackPreviewVersion = "1.26.70.20"
-	FallbackPreviewURL     = "https://www.minecraft.net/bedrockdedicatedserver/bin-win-preview/bedrock-server-1.26.70.20.zip"
+	FallbackReleaseVersion = "1.26.61.1"
+	FallbackReleaseURL     = "https://www.minecraft.net/bedrockdedicatedserver/bin-win/bedrock-server-1.26.61.1.zip"
+	FallbackPreviewVersion = "1.26.70.22"
+	FallbackPreviewURL     = "https://www.minecraft.net/bedrockdedicatedserver/bin-win-preview/bedrock-server-1.26.70.22.zip"
 )
 
 var (

@@ -67,6 +67,10 @@ func ruleName(port int) string {
 	return fmt.Sprintf("%s%d", RulePrefix, port)
 }
 
+func ruleNameTCP(port int) string {
+	return fmt.Sprintf("%s%d_TCP", RulePrefix, port)
+}
+
 func (w *WindowsFirewallDriver) AllowPort(ctx context.Context, ip string, port int, comment string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -96,14 +100,17 @@ func (w *WindowsFirewallDriver) RevokePort(ctx context.Context, ip string, port 
 
 func (w *WindowsFirewallDriver) syncPortRule(ctx context.Context, port int) error {
 	rName := ruleName(port)
+	rNameTCP := ruleNameTCP(port)
 	ipSet := w.activeIPs[port]
 
 	if len(ipSet) == 0 {
 		// Zero Lease State Machine (Decision 37):
-		// When 0 leases exist, set enable=no on the rule so inbound UDP is blocked by default policy
+		// When 0 leases exist, set enable=no on the rules so inbound UDP & TCP are blocked by default policy
 		_ = w.ensureRuleExists(ctx, port)
 		cmd := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "set", "rule", fmt.Sprintf("name=%s", rName), "new", "enable=no")
 		_ = cmd.Run()
+		cmdTCP := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "set", "rule", fmt.Sprintf("name=%s", rNameTCP), "new", "enable=no")
+		_ = cmdTCP.Run()
 		return nil
 	}
 
@@ -120,29 +127,46 @@ func (w *WindowsFirewallDriver) syncPortRule(ctx context.Context, port int) erro
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to update firewall rule %s: %w (output: %s)", rName, err, string(out))
 	}
+	cmdTCP := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "set", "rule", fmt.Sprintf("name=%s", rNameTCP), "new", fmt.Sprintf("remoteip=%s", ipList), "enable=yes")
+	if out, err := cmdTCP.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to update firewall rule %s: %w (output: %s)", rNameTCP, err, string(out))
+	}
 
 	return nil
 }
 
 func (w *WindowsFirewallDriver) ensureRuleExists(ctx context.Context, port int) error {
 	rName := ruleName(port)
+	rNameTCP := ruleNameTCP(port)
 
-	// Check if rule already exists
+	// Check if UDP rule already exists
 	checkCmd := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "show", "rule", fmt.Sprintf("name=%s", rName))
-	if err := checkCmd.Run(); err == nil {
-		return nil
+	if err := checkCmd.Run(); err != nil {
+		// Add base UDP rule initially disabled
+		addCmd := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "add", "rule",
+			fmt.Sprintf("name=%s", rName),
+			"dir=in",
+			"action=allow",
+			"protocol=UDP",
+			fmt.Sprintf("localport=%d", port),
+			"enable=no",
+		)
+		_ = addCmd.Run()
 	}
 
-	// Add base rule initially disabled
-	addCmd := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "add", "rule",
-		fmt.Sprintf("name=%s", rName),
-		"dir=in",
-		"action=allow",
-		"protocol=UDP",
-		fmt.Sprintf("localport=%d", port),
-		"enable=no",
-	)
-	_ = addCmd.Run()
+	// Check if TCP rule already exists (NetherNet HTTP signaling)
+	checkTCPCmd := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "show", "rule", fmt.Sprintf("name=%s", rNameTCP))
+	if err := checkTCPCmd.Run(); err != nil {
+		addTCPCmd := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "add", "rule",
+			fmt.Sprintf("name=%s", rNameTCP),
+			"dir=in",
+			"action=allow",
+			"protocol=TCP",
+			fmt.Sprintf("localport=%d", port),
+			"enable=no",
+		)
+		_ = addTCPCmd.Run()
+	}
 	return nil
 }
 
@@ -155,6 +179,9 @@ func (w *WindowsFirewallDriver) FlushRules(ctx context.Context) error {
 		rName := ruleName(port)
 		delCmd := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "delete", "rule", fmt.Sprintf("name=%s", rName))
 		_ = delCmd.Run()
+		rNameTCP := ruleNameTCP(port)
+		delTCPCmd := exec.CommandContext(ctx, "netsh", "advfirewall", "firewall", "delete", "rule", fmt.Sprintf("name=%s", rNameTCP))
+		_ = delTCPCmd.Run()
 	}
 
 	w.activeIPs = make(map[int]map[string]bool)

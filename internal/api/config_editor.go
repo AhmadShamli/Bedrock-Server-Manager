@@ -105,6 +105,17 @@ func (h *ServerHandler) UpdateProperties(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if payload.Properties != nil {
+		if tVal, ok := payload.Properties["transport"]; !ok || tVal == "" || tVal == "raknet" {
+			payload.Properties["transport"] = "nethernet"
+		}
+		if pVal, ok := payload.Properties["server-port"]; ok && pVal != "" {
+			if uVal, hasUDP := payload.Properties["server-udp-ports"]; !hasUDP || uVal == "" {
+				payload.Properties["server-udp-ports"] = pVal
+			}
+		}
+	}
+
 	serverDir := filepath.Dir(propPath)
 	exists := true
 	if _, statErr := os.Stat(propPath); os.IsNotExist(statErr) {

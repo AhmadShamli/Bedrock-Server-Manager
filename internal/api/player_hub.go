@@ -325,7 +325,7 @@ func (h *PlayerHubHandler) DeopPlayer(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "deopped"})
 }
 
-// Ping performs a RakNet UDP Ping against the server.
+// Ping performs a NetherNet TCP / RakNet UDP Ping against the server.
 func (h *PlayerHubHandler) Ping(w http.ResponseWriter, r *http.Request) {
 	serverID := chi.URLParam(r, "id")
 	server, err := h.serverHandler.db.GetServer(r.Context(), serverID)
@@ -342,6 +342,43 @@ func (h *PlayerHubHandler) Ping(w http.ResponseWriter, r *http.Request) {
 			"error":     err.Error(),
 		})
 		return
+	}
+
+	// Enrich metadata when NetherNet TCP signaling probe succeeded (which does not return MCPE pong strings)
+	if res.ServerName == "" {
+		res.ServerName = server.Name
+		res.Version = server.InstalledBDSVersion
+		if res.Version == "" {
+			res.Version = server.BDSVersion
+		}
+		if res.Version == "" {
+			res.Version = server.Version
+		}
+		res.GameMode = server.Mode
+		res.PortIPv4 = server.Port
+		res.PortIPv6 = server.PortV6
+		res.MaxPlayers = 10
+		if h.playerManager != nil {
+			res.OnlinePlayers = len(h.playerManager.GetOnlinePlayers(serverID))
+		}
+		if h.serverHandler != nil && h.serverHandler.dataDir != "" {
+			if propPath, err := configfile.SafePath(h.serverHandler.dataDir, serverID, "server.properties"); err == nil {
+				if props, _, err := configfile.ReadProperties(propPath); err == nil {
+					if sn := strings.TrimSpace(props["server-name"]); sn != "" {
+						res.ServerName = sn
+					}
+					if mp, err := strconv.Atoi(strings.TrimSpace(props["max-players"])); err == nil && mp > 0 {
+						res.MaxPlayers = mp
+					}
+					if gm := strings.TrimSpace(props["gamemode"]); gm != "" {
+						res.GameMode = gm
+					}
+					if wn := strings.TrimSpace(props["level-name"]); wn != "" {
+						res.WorldName = wn
+					}
+				}
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

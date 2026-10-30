@@ -273,6 +273,18 @@ func CopyConfigs(
 				mergedProps["server-portv6"] = fmt.Sprint(tgtServer.PortV6)
 			}
 
+			if val, ok := tgtExistingProps["server-udp-ports"]; ok && val != "" {
+				mergedProps["server-udp-ports"] = val
+			} else if tgtServer.Port > 0 {
+				mergedProps["server-udp-ports"] = fmt.Sprint(tgtServer.Port)
+			} else {
+				mergedProps["server-udp-ports"] = mergedProps["server-port"]
+			}
+			if !keySet["server-udp-ports"] {
+				mergedKeys = append(mergedKeys, "server-udp-ports")
+				keySet["server-udp-ports"] = true
+			}
+
 			if val, ok := tgtExistingProps["server-name"]; ok && val != "" {
 				mergedProps["server-name"] = val
 			} else {

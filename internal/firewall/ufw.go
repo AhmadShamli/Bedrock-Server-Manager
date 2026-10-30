@@ -73,8 +73,13 @@ func (u *UFWDriver) AllowPort(ctx context.Context, ip string, port int, comment 
 		comment = fmt.Sprintf("bsm_%d", port)
 	}
 
-	args := []string{"allow", "proto", "udp", "from", ip, "to", "any", "port", strconv.Itoa(port), "comment", comment}
-	_, err := u.detector.RunCommand(ctx, "ufw", args...)
+	portStr := strconv.Itoa(port)
+	udpArgs := []string{"allow", "proto", "udp", "from", ip, "to", "any", "port", portStr, "comment", comment}
+	if _, err := u.detector.RunCommand(ctx, "ufw", udpArgs...); err != nil {
+		return err
+	}
+	tcpArgs := []string{"allow", "proto", "tcp", "from", ip, "to", "any", "port", portStr, "comment", comment}
+	_, err := u.detector.RunCommand(ctx, "ufw", tcpArgs...)
 	return err
 }
 
@@ -82,9 +87,12 @@ func (u *UFWDriver) RevokePort(ctx context.Context, ip string, port int, comment
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
-	args := []string{"delete", "allow", "proto", "udp", "from", ip, "to", "any", "port", strconv.Itoa(port)}
-	_, err := u.detector.RunCommand(ctx, "ufw", args...)
-	return err
+	portStr := strconv.Itoa(port)
+	udpArgs := []string{"delete", "allow", "proto", "udp", "from", ip, "to", "any", "port", portStr}
+	_, errUDP := u.detector.RunCommand(ctx, "ufw", udpArgs...)
+	tcpArgs := []string{"delete", "allow", "proto", "tcp", "from", ip, "to", "any", "port", portStr}
+	_, _ = u.detector.RunCommand(ctx, "ufw", tcpArgs...)
+	return errUDP
 }
 
 func (u *UFWDriver) FlushRules(ctx context.Context) error {
@@ -98,8 +106,11 @@ func (u *UFWDriver) FlushRules(ctx context.Context) error {
 
 	for _, r := range rules {
 		if strings.HasPrefix(r.Comment, "bsm") {
-			args := []string{"delete", "allow", "proto", "udp", "from", r.IP, "to", "any", "port", strconv.Itoa(r.Port)}
-			_, _ = u.detector.RunCommand(ctx, "ufw", args...)
+			portStr := strconv.Itoa(r.Port)
+			udpArgs := []string{"delete", "allow", "proto", "udp", "from", r.IP, "to", "any", "port", portStr}
+			_, _ = u.detector.RunCommand(ctx, "ufw", udpArgs...)
+			tcpArgs := []string{"delete", "allow", "proto", "tcp", "from", r.IP, "to", "any", "port", portStr}
+			_, _ = u.detector.RunCommand(ctx, "ufw", tcpArgs...)
 		}
 	}
 	return nil
@@ -122,6 +133,7 @@ func (u *UFWDriver) listRulesInternal(ctx context.Context) ([]ActiveRule, error)
 
 func parseUFWStatusLines(out string) []ActiveRule {
 	var rules []ActiveRule
+	seen := make(map[string]bool)
 	lines := strings.Split(out, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -137,7 +149,7 @@ func parseUFWStatusLines(out string) []ActiveRule {
 		if len(parts) < 4 {
 			continue
 		}
-		target := parts[0] // e.g. 19132/udp
+		target := parts[0] // e.g. 19132/udp or 19132/tcp
 		fromIP := parts[3]
 
 		comment := ""
@@ -146,15 +158,23 @@ func parseUFWStatusLines(out string) []ActiveRule {
 		}
 
 		targetParts := strings.Split(target, "/")
-		if len(targetParts) == 2 && strings.EqualFold(targetParts[1], "udp") {
-			port, _ := strconv.Atoi(targetParts[0])
-			if port > 0 {
-				rules = append(rules, ActiveRule{
-					Backend: "ufw",
-					IP:      fromIP,
-					Port:    port,
-					Comment: comment,
-				})
+		if len(targetParts) == 2 {
+			proto := strings.ToLower(targetParts[1])
+			// Include all UDP rules and BSM-managed TCP rules (NetherNet HTTP signaling)
+			if proto == "udp" || (proto == "tcp" && strings.HasPrefix(comment, "bsm")) {
+				port, _ := strconv.Atoi(targetParts[0])
+				if port > 0 {
+					dedupKey := fmt.Sprintf("%s|%d|%s", fromIP, port, comment)
+					if !seen[dedupKey] {
+						seen[dedupKey] = true
+						rules = append(rules, ActiveRule{
+							Backend: "ufw",
+							IP:      fromIP,
+							Port:    port,
+							Comment: comment,
+						})
+					}
+				}
 			}
 		}
 	}

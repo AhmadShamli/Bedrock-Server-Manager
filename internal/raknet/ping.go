@@ -36,13 +36,79 @@ type PingResponse struct {
 	PortIPv6       int    `json:"port_ipv6"`
 }
 
-// PingServer sends an Unconnected Ping packet to a Bedrock server and parses the response.
+// PingServer sends an Unconnected Ping packet to a Bedrock server (or probes its NetherNet TCP signaling listener) and parses the response.
 func PingServer(host string, port int, timeout time.Duration) (*PingResponse, error) {
 	if timeout <= 0 {
 		timeout = 2 * time.Second
 	}
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	type pingResult struct {
+		res *PingResponse
+		err error
+	}
+
+	udpCh := make(chan pingResult, 1)
+	tcpCh := make(chan pingResult, 1)
+
+	go func() {
+		res, err := pingRakNetUDP(host, port, timeout)
+		udpCh <- pingResult{res: res, err: err}
+	}()
+
+	go func() {
+		res, err := pingNetherNetTCP(host, port, timeout)
+		tcpCh <- pingResult{res: res, err: err}
+	}()
+
+	// Wait briefly to see if RakNet UDP responds first (or if NetherNet TCP succeeds quickly)
+	select {
+	case u := <-udpCh:
+		if u.err == nil {
+			return u.res, nil
+		}
+		t := <-tcpCh
+		if t.err == nil {
+			return t.res, nil
+		}
+		return nil, u.err
+	case t := <-tcpCh:
+		if t.err == nil {
+			// Give RakNet UDP a short grace window (50ms) in case both are open and UDP has rich metadata
+			select {
+			case u := <-udpCh:
+				if u.err == nil {
+					return u.res, nil
+				}
+			case <-time.After(50 * time.Millisecond):
+			}
+			return t.res, nil
+		}
+		u := <-udpCh
+		if u.err == nil {
+			return u.res, nil
+		}
+		return nil, u.err
+	}
+}
+
+func pingNetherNetTCP(host string, port int, timeout time.Duration) (*PingResponse, error) {
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	start := time.Now()
+	conn, err := net.DialTimeout("tcp", addr, timeout)
+	if err != nil {
+		return nil, err
+	}
+	latency := time.Since(start).Milliseconds()
+	_ = conn.Close()
+
+	return &PingResponse{
+		LatencyMs: latency,
+		PortIPv4:  port,
+	}, nil
+}
+
+func pingRakNetUDP(host string, port int, timeout time.Duration) (*PingResponse, error) {
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	conn, err := net.DialTimeout("udp", addr, timeout)
 	if err != nil {
 		return nil, err

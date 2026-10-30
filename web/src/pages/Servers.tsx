@@ -387,7 +387,7 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
                     <tr className="border-b border-obsidian-800 bg-obsidian-950/70 text-[11px] font-mono text-slate-400 uppercase tracking-wider">
                       <th className="py-3 px-4">Status</th>
                       <th className="py-3 px-4">Server</th>
-                      <th className="py-3 px-4">Port (UDP)</th>
+                      <th className="py-3 px-4">Port (TCP/UDP)</th>
                       <th className="py-3 px-4">Version</th>
                       <th className="py-3 px-4">Resources</th>
                       <th className="py-3 px-4">Port Gate</th>
@@ -583,7 +583,7 @@ export const Servers: React.FC<ServersProps> = ({ user }) => {
 
                       <div className="grid grid-cols-2 gap-2 my-4 text-xs font-mono text-slate-300">
                         <div className="bg-obsidian-950 p-2 rounded-lg border border-obsidian-800 flex items-center space-x-2">
-                          <span className="text-slate-500">UDP:</span>
+                          <span className="text-slate-500">TCP/UDP:</span>
                           <span className="text-slate-200">{s.port}</span>
                         </div>
                         <div className="bg-obsidian-950 p-2 rounded-lg border border-obsidian-800 flex items-center space-x-2">

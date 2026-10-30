@@ -792,7 +792,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
-                          <span>UDP Port (IPv4)</span>
+                          <span>Server Port (TCP/UDP)</span>
                           <span className="text-[10px] text-emerald-400">IPv6 Port: {Number(port) + 1}</span>
                         </label>
                         <input
@@ -1065,7 +1065,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
                       </div>
 
                       <div className="p-3 rounded-lg bg-obsidian-900 border border-obsidian-800">
-                        <span className="text-slate-500 block mb-0.5">UDP Ports:</span>
+                        <span className="text-slate-500 block mb-0.5">Server Ports (TCP/UDP):</span>
                         <span className="text-slate-200 font-bold">IPv4: {port} • IPv6: {Number(port) + 1}</span>
                       </div>
 
@@ -1231,7 +1231,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({ isOpen, onClose, onSuc
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
-                    <span>UDP Port</span>
+                    <span>Server Port (TCP/UDP)</span>
                     <span className="text-[10px] text-emerald-400">IPv6: {Number(port) + 1}</span>
                   </label>
                   <input

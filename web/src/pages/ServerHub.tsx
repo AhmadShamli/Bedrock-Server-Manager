@@ -55,7 +55,9 @@ const KNOWN_PROPERTY_OPTIONS: Record<string, string[]> = {
   'chat-restriction': ['None', 'Dropped', 'Disabled'],
   'content-log-level': ['verbose', 'info', 'warn', 'error'],
   'script-debugger-auto-attach': ['disabled', 'connect', 'listen'],
-  'transport': ['raknet', 'nethernet'],
+  'transport': ['nethernet'],
+  'server-authoritative-entity-attack-request-validation': ['disabled', 'observe', 'enforce'],
+  'server-authoritative-entity-attack-range-validation': ['disabled', 'observe', 'enforce'],
 };
 
 // Known boolean properties in Bedrock Dedicated Server (accepting true/false)
@@ -101,10 +103,14 @@ const KNOWN_DEFAULT_PROPERTIES: Record<string, string> = {
   'white-list': 'false',
   'server-port': '19132',
   'server-portv6': '19133',
-  'transport': 'raknet',
+  'server-udp-ports': '19132',
+  'transport': 'nethernet',
   'enable-lan-visibility': 'true',
   'view-distance': '32',
   'tick-distance': '4',
+  'persistent-ticking-area-max-count': '10',
+  'persistent-ticking-area-max-chunks': '100',
+  'transient-ticking-area-max-chunks': '300',
   'player-idle-timeout': '30',
   'max-threads': '8',
   'level-name': 'Bedrock level',
@@ -120,6 +126,9 @@ const KNOWN_DEFAULT_PROPERTIES: Record<string, string> = {
   'server-authoritative-movement-strict': 'false',
   'server-authoritative-dismount-strict': 'false',
   'server-authoritative-entity-interactions-strict': 'false',
+  'server-authoritative-entity-attack-request-validation': 'disabled',
+  'server-authoritative-entity-attack-range-validation': 'disabled',
+  'server-authoritative-entity-attack-range-tolerance': '0.5',
   'player-position-acceptance-threshold': '0.5',
   'player-movement-action-direction-threshold': '0.85',
   'server-authoritative-block-breaking-pick-range-scalar': '1.5',
@@ -800,7 +809,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       await api.startServer(id);
       await fetchServer();
     } catch (err: any) {
-      alert(err.message || 'Failed to start server');
+      const msg = err.message || 'Failed to start server';
+      setLogs((prev) => [...prev, `[ERROR] ${msg}`]);
+      alert(msg);
     } finally {
       setActionLoading(false);
     }
@@ -813,7 +824,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       await api.stopServer(id);
       await fetchServer();
     } catch (err: any) {
-      alert(err.message || 'Failed to stop server');
+      const msg = err.message || 'Failed to stop server';
+      setLogs((prev) => [...prev, `[ERROR] ${msg}`]);
+      alert(msg);
     } finally {
       setActionLoading(false);
     }
@@ -826,7 +839,9 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
       await api.restartServer(id);
       await fetchServer();
     } catch (err: any) {
-      alert(err.message || 'Failed to restart server');
+      const msg = err.message || 'Failed to restart server';
+      setLogs((prev) => [...prev, `[ERROR] ${msg}`]);
+      alert(msg);
     } finally {
       setActionLoading(false);
     }
@@ -1632,7 +1647,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
             <div className="text-xs text-slate-400 font-mono mt-0.5 flex flex-wrap items-center gap-x-2">
               <span>ID: {server.id}</span>
               <span>•</span>
-              <span>UDP: {server.port}</span>
+              <span>TCP/UDP: {server.port}</span>
               <span>•</span>
               <span className="text-cyan-400 font-medium">net: {server.network_mode || 'host'}</span>
               <span>•</span>
@@ -1684,14 +1699,26 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
               </button>
             </>
           ) : (
-            <button
-              onClick={handleStart}
-              disabled={actionLoading}
-              className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
-            >
-              {actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
-              <span>Start Server</span>
-            </button>
+            <>
+              {server.status === 'crashed' && (
+                <button
+                  onClick={handleRestart}
+                  disabled={actionLoading}
+                  className="px-3 py-2 rounded-lg bg-obsidian-850 hover:bg-obsidian-800 border border-obsidian-700 text-slate-200 font-mono text-xs flex items-center space-x-1.5"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 text-cyber-cyan ${actionLoading ? 'animate-spin' : ''}`} />
+                  <span>Restart</span>
+                </button>
+              )}
+              <button
+                onClick={handleStart}
+                disabled={actionLoading}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-mono text-xs font-bold flex items-center space-x-1.5 shadow-[0_0_15px_rgba(16,185,129,0.3)]"
+              >
+                {actionLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                <span>Start Server</span>
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -2363,7 +2390,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                   <span>Dynamic Firewall Port Gate</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1 font-mono">
-                  Port {server.port}/udp is dynamically granted to verified players (Default lease:{' '}
+                  Port {server.port} (TCP/UDP) is dynamically granted to verified players (Default lease:{' '}
                   <span className="text-emerald-400 font-semibold">
                     {formatDurationSeconds(server.port_gate_timeout || 7200)}
                   </span>
@@ -2998,7 +3025,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                           <Shield className="w-3.5 h-3.5" />
                           <span>This Instance</span>
                         </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">UDP {server.port} only</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">TCP/UDP {server.port} only</div>
                       </button>
 
                       <button
@@ -4234,7 +4261,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-slate-400 mb-1 font-bold">UDP Port (IPv4)</label>
+                  <label className="block text-slate-400 mb-1 font-bold">Server Port (TCP/UDP)</label>
                   <input
                     type="number"
                     required
@@ -4247,7 +4274,7 @@ export const ServerHub: React.FC<ServerHubProps> = ({ user }) => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 mb-1 font-bold">UDP Port (IPv6)</label>
+                  <label className="block text-slate-400 mb-1 font-bold">IPv6 Port (TCP/UDP)</label>
                   <input
                     type="number"
                     required

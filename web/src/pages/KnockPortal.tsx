@@ -533,7 +533,7 @@ export const KnockPortal: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex items-center justify-between text-slate-400">
-                  <span>UDP Port:</span>
+                  <span>Server Port (TCP/UDP):</span>
                   <div className="flex items-center space-x-1.5">
                     <span className="text-emerald-400 font-semibold">{gameServerPort}</span>
                     <button
@@ -683,7 +683,7 @@ export const KnockPortal: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex items-center justify-between text-slate-400">
-                  <span>UDP Port:</span>
+                  <span>Server Port (TCP/UDP):</span>
                   <div className="flex items-center space-x-1.5">
                     <span className="text-emerald-400 font-semibold">{gameServerPort}</span>
                     <button

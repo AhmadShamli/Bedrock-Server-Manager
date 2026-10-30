@@ -44,12 +44,21 @@ func TestPortAllocatorValidatePortAssignment(t *testing.T) {
 	// If 19132 is free on host, ValidatePortAssignment should not fail on database collision for itself
 	_ = pa.ValidatePortAssignment(19132, 19133, "s1", existing)
 
-	// In-use port on host
+	// In-use port on host (UDP)
 	pc, err := net.ListenPacket("udp", ":29132")
 	if err == nil {
 		defer pc.Close()
 		if err := pa.ValidatePortAssignment(29132, 29133, "new-srv", existing); err == nil {
-			t.Errorf("expected error when port is already bound on host")
+			t.Errorf("expected error when UDP port is already bound on host")
+		}
+	}
+
+	// In-use port on host (TCP / NetherNet signaling listener)
+	ln, err := net.Listen("tcp", ":29134")
+	if err == nil {
+		defer ln.Close()
+		if err := pa.ValidatePortAssignment(29134, 29135, "new-srv", existing); err == nil {
+			t.Errorf("expected error when TCP port is already bound on host")
 		}
 	}
 }

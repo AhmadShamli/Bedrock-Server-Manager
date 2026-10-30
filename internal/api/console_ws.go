@@ -82,6 +82,9 @@ func (h *ServerHandler) ConsoleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Ensure log capture is running if server is active
+	if status, err := h.engine.GetServerStatus(r.Context(), server); err == nil && status == models.ServerStatusRunning {
+		server.Status = status
+	}
 	if server.Status == models.ServerStatusRunning {
 		h.engine.AttachLogCapture(server.ID, server.ContainerID)
 	}
@@ -129,6 +132,12 @@ func (h *ServerHandler) ConsoleWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if wsMsg.Type == "command" && wsMsg.Payload != "" {
+			if freshSrv, err := h.db.GetServer(ctx, serverID); err == nil && freshSrv != nil {
+				server = freshSrv
+			}
+			if status, err := h.engine.GetServerStatus(ctx, server); err == nil && status != "" {
+				server.Status = status
+			}
 			if server.Status != models.ServerStatusRunning {
 				_ = safeWriteJSON(WSMessage{Type: "error", Payload: "Server is offline. Start the server before sending console commands."})
 				continue

@@ -84,17 +84,21 @@ func (a *IPTablesDriver) AllowPort(ctx context.Context, ip string, port int, com
 		comment = fmt.Sprintf("bsm_%d", port)
 	}
 
-	args := []string{
-		"-A", ChainName,
-		"-s", ip,
-		"-p", "udp",
-		"--dport", strconv.Itoa(port),
-		"-m", "comment", "--comment", comment,
-		"-j", "ACCEPT",
+	portStr := strconv.Itoa(port)
+	for _, proto := range []string{"udp", "tcp"} {
+		args := []string{
+			"-A", ChainName,
+			"-s", ip,
+			"-p", proto,
+			"--dport", portStr,
+			"-m", "comment", "--comment", comment,
+			"-j", "ACCEPT",
+		}
+		if _, err := a.detector.RunCommand(ctx, bin, args...); err != nil {
+			return err
+		}
 	}
-
-	_, err := a.detector.RunCommand(ctx, bin, args...)
-	return err
+	return nil
 }
 
 func (a *IPTablesDriver) RevokePort(ctx context.Context, ip string, port int, comment string) error {
@@ -102,32 +106,38 @@ func (a *IPTablesDriver) RevokePort(ctx context.Context, ip string, port int, co
 	defer a.mu.Unlock()
 
 	bin := a.getBin(ip)
+	portStr := strconv.Itoa(port)
 
-	// Attempt deletion with comment first
-	if comment != "" {
-		argsWithComment := []string{
-			"-D", ChainName,
-			"-s", ip,
-			"-p", "udp",
-			"--dport", strconv.Itoa(port),
-			"-m", "comment", "--comment", comment,
-			"-j", "ACCEPT",
+	var lastErr error
+	for _, proto := range []string{"udp", "tcp"} {
+		deleted := false
+		if comment != "" {
+			argsWithComment := []string{
+				"-D", ChainName,
+				"-s", ip,
+				"-p", proto,
+				"--dport", portStr,
+				"-m", "comment", "--comment", comment,
+				"-j", "ACCEPT",
+			}
+			if _, err := a.detector.RunCommand(ctx, bin, argsWithComment...); err == nil {
+				deleted = true
+			}
 		}
-		if _, err := a.detector.RunCommand(ctx, bin, argsWithComment...); err == nil {
-			return nil
+		if !deleted {
+			argsPlain := []string{
+				"-D", ChainName,
+				"-s", ip,
+				"-p", proto,
+				"--dport", portStr,
+				"-j", "ACCEPT",
+			}
+			if _, err := a.detector.RunCommand(ctx, bin, argsPlain...); err != nil && proto == "udp" {
+				lastErr = err
+			}
 		}
 	}
-
-	// Fallback to deletion without comment
-	argsPlain := []string{
-		"-D", ChainName,
-		"-s", ip,
-		"-p", "udp",
-		"--dport", strconv.Itoa(port),
-		"-j", "ACCEPT",
-	}
-	_, err := a.detector.RunCommand(ctx, bin, argsPlain...)
-	return err
+	return lastErr
 }
 
 func (a *IPTablesDriver) FlushRules(ctx context.Context) error {
@@ -147,6 +157,7 @@ func (a *IPTablesDriver) ListActiveRules(ctx context.Context) ([]ActiveRule, err
 	defer a.mu.Unlock()
 
 	var rules []ActiveRule
+	seen := make(map[string]bool)
 	for _, bin := range []string{"iptables", "ip6tables"} {
 		if _, err := exec.LookPath(bin); err != nil {
 			continue
@@ -176,7 +187,11 @@ func (a *IPTablesDriver) ListActiveRules(ctx context.Context) ([]ActiveRule, err
 				}
 			}
 			if r.IP != "" && r.Port > 0 {
-				rules = append(rules, r)
+				dedupKey := fmt.Sprintf("%s|%s|%d|%s", r.Backend, r.IP, r.Port, r.Comment)
+				if !seen[dedupKey] {
+					seen[dedupKey] = true
+					rules = append(rules, r)
+				}
 			}
 		}
 	}

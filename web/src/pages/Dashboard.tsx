@@ -622,7 +622,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                 <tr className="border-b border-obsidian-800 text-slate-400 font-mono uppercase tracking-wider">
                   <th className="pb-2.5 font-medium">Status</th>
                   <th className="pb-2.5 font-medium">Instance Name</th>
-                  <th className="pb-2.5 font-medium">Port (UDP)</th>
+                  <th className="pb-2.5 font-medium">Port (TCP/UDP)</th>
                   <th className="pb-2.5 font-medium">Mode / Diff</th>
                   <th className="pb-2.5 font-medium">Online</th>
                   <th className="pb-2.5 font-medium">CPU & Memory</th>
